@@ -19,7 +19,6 @@ logger = logging.getLogger("finance_dashboard")
 
 OPTIONS_PATH = "/data/options.json"
 ACCESS_URL_KEY = "simplefin_access_url"
-LEGACY_ACCESS_KEY = "simplefin_access_token"
 
 
 def _record_sync_state(status: str, message: str):
@@ -34,8 +33,7 @@ def _looks_like_access_url(value: str) -> bool:
 
 def _decode_base64(text: str):
     try:
-        decoded = base64.b64decode(text).decode("utf-8")
-        return decoded.strip()
+        return base64.b64decode(text).decode("utf-8").strip()
     except Exception:
         return None
 
@@ -44,42 +42,6 @@ def _store_access_url(access_url: str):
     if not access_url:
         raise ValueError("Empty SimpleFIN access URL.")
     set_setting(ACCESS_URL_KEY, access_url.strip())
-    # Keep the legacy key in sync for backward compatibility.
-    set_setting(LEGACY_ACCESS_KEY, access_url.strip())
-
-
-def _resolve_access_url_from_candidate(candidate: str, allow_claim: bool = False):
-    """Resolve a stored candidate to a raw access URL.
-
-    Accepts either:
-    - raw access URL (preferred, matches the SimpleFIN guide)
-    - legacy base64-encoded access URL
-    - setup token (base64-encoded claim URL), when allow_claim=True
-    """
-    if not candidate:
-        return None
-
-    candidate = candidate.strip()
-    if not candidate:
-        return None
-
-    if _looks_like_access_url(candidate):
-        return candidate
-
-    decoded = _decode_base64(candidate)
-    if not decoded:
-        return None
-
-    if _looks_like_access_url(decoded):
-        # Either a legacy base64 access URL or a setup-token claim URL that was already claimed.
-        parsed = urlsplit(decoded)
-        if parsed.path.endswith("/claim") or "/claim/" in parsed.path:
-            if not allow_claim:
-                return None
-            return _claim_setup_url(decoded)
-        return decoded
-
-    return None
 
 
 def _claim_setup_url(claim_url: str):
@@ -96,24 +58,11 @@ def get_simplefin_token():
     """Return the raw SimpleFIN access URL."""
     try:
         stored = get_setting(ACCESS_URL_KEY)
-        resolved = _resolve_access_url_from_candidate(stored or "", allow_claim=False)
-        if resolved:
+        if stored and _looks_like_access_url(stored):
             logger.info("SimpleFIN access URL retrieved from DB.")
-            if resolved != stored:
-                _store_access_url(resolved)
-            return resolved
+            return stored
     except Exception as e:
         logger.warning(f"Could not retrieve SimpleFIN access URL from DB: {e}")
-
-    try:
-        legacy = get_setting(LEGACY_ACCESS_KEY)
-        resolved = _resolve_access_url_from_candidate(legacy or "", allow_claim=False)
-        if resolved:
-            logger.info("Legacy SimpleFIN access value retrieved from DB.")
-            _store_access_url(resolved)
-            return resolved
-    except Exception as e:
-        logger.warning(f"Could not retrieve legacy SimpleFIN access value from DB: {e}")
 
     try:
         with open(OPTIONS_PATH) as f:
@@ -121,7 +70,7 @@ def get_simplefin_token():
             candidate = (options.get("simplefin_token") or "").strip()
             if candidate:
                 logger.info("SimpleFIN candidate retrieved from options.json.")
-                resolved = _resolve_access_url_from_candidate(candidate, allow_claim=True)
+                resolved = _resolve_candidate(candidate)
                 if resolved:
                     _store_access_url(resolved)
                     return resolved
@@ -129,6 +78,38 @@ def get_simplefin_token():
         logger.warning(f"Could not retrieve SimpleFIN token from options.json: {e}")
 
     logger.info("SimpleFIN access URL not found in DB or options.json.")
+    return None
+
+
+def _resolve_candidate(candidate: str):
+    """Resolve a candidate from options.json into an access URL.
+
+    Accepts either:
+    - raw access URL (preferred)
+    - base64-encoded setup token (claim URL)
+    """
+    if not candidate:
+        return None
+
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+
+    if _looks_like_access_url(candidate):
+        return candidate
+
+    decoded = _decode_base64(candidate)
+    if not decoded or not decoded.startswith(("http://", "https://")):
+        return None
+
+    # If it's a claim URL, claim it once and store the resulting access URL.
+    if "/claim/" in decoded or decoded.rstrip("/").endswith("/claim"):
+        return _claim_setup_url(decoded)
+
+    # If it already looks like an access URL after decoding, accept it.
+    if _looks_like_access_url(decoded):
+        return decoded
+
     return None
 
 
