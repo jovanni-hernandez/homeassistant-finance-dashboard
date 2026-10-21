@@ -20,4 +20,5 @@ Use this loop for any UI/dashboard/frontend/visual change.
 
 ## Notes
 - The helper scripts are intentionally repo-local so they can be reused outside OpenCode.
+- For this add-on, deployment verification should use `backup: false` unless backup is explicitly requested.
 - If the browser validation fails, inspect the console errors first.
