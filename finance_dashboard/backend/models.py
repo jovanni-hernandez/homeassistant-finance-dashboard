@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from security import encrypt_value, decrypt_value
 
 DB_PATH = os.environ.get("FINANCE_DB_PATH", "/data/finance.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
@@ -15,13 +16,37 @@ class Account(Base):
     __tablename__ = "accounts"
 
     id = Column(String, primary_key=True, index=True)
-    org = Column(String, default="Unknown")
-    name = Column(String, default="Account")
-    balance = Column(String, default="0.00")
+    _org = Column("org", String, default="Unknown")
+    _name = Column("name", String, default="Account")
+    _balance = Column("balance", String, default="0.00")
     currency = Column(String, default="USD")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     transactions = relationship("Transaction", back_populates="account", cascade="all, delete-orphan")
+
+    @property
+    def org(self):
+        return decrypt_value(self._org)
+
+    @org.setter
+    def org(self, value):
+        self._org = encrypt_value(value)
+
+    @property
+    def name(self):
+        return decrypt_value(self._name)
+
+    @name.setter
+    def name(self, value):
+        self._name = encrypt_value(value)
+
+    @property
+    def balance(self):
+        return decrypt_value(self._balance)
+
+    @balance.setter
+    def balance(self, value):
+        self._balance = encrypt_value(value)
 
     def to_dict(self):
         return {
@@ -39,12 +64,36 @@ class Transaction(Base):
     id = Column(String, primary_key=True, index=True)
     account_id = Column(String, ForeignKey("accounts.id"), index=True)
     date = Column(Integer)  # Unix timestamp
-    amount = Column(String, default="0.00")
-    payee = Column(String, default="")
-    description = Column(String, default="")
+    _amount = Column("amount", String, default="0.00")
+    _payee = Column("payee", String, default="")
+    _description = Column("description", String, default="")
     pending = Column(Boolean, default=False)
 
     account = relationship("Account", back_populates="transactions")
+
+    @property
+    def amount(self):
+        return decrypt_value(self._amount)
+
+    @amount.setter
+    def amount(self, value):
+        self._amount = encrypt_value(value)
+
+    @property
+    def payee(self):
+        return decrypt_value(self._payee)
+
+    @payee.setter
+    def payee(self, value):
+        self._payee = encrypt_value(value)
+
+    @property
+    def description(self):
+        return decrypt_value(self._description)
+
+    @description.setter
+    def description(self, value):
+        self._description = encrypt_value(value)
 
     def to_dict(self):
         return {

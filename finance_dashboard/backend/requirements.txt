@@ -4,3 +4,4 @@ requests
 pydantic
 sqlalchemy>=2.0.0
 alembic>=1.13.0
+cryptography>=41.0.0
