@@ -16,6 +16,7 @@ What it does:
 5. retries transient browser failures with exponential backoff
 6. runs a Selenium-backed browser validation pass against the critical dashboard sections and recurring-payments view
 7. rejects blank/near-blank screenshots with a visual-content check
+8. fails if the boot/fallback screen never disappears
 
 ## Manual HA refresh
 

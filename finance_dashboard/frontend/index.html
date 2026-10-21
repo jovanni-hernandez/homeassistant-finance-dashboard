@@ -10,6 +10,12 @@
     <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
 </head>
 <body class="bg-slate-100 text-slate-900">
+    <div id="boot-screen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 px-4 text-slate-100">
+        <div class="max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 text-center shadow-2xl">
+            <div class="text-lg font-semibold">Loading Finance Dashboard…</div>
+            <div class="mt-2 text-sm text-slate-400">If this stays here, the app failed to mount.</div>
+        </div>
+    </div>
     <div id="app" class="min-h-screen">
         <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
             <div class="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:px-6 lg:px-8">
@@ -2187,6 +2193,8 @@
                 };
             }
         }).mount('#app');
+        const bootScreen = document.getElementById('boot-screen');
+        if (bootScreen) bootScreen.remove();
     </script>
 </body>
 </html>

@@ -185,6 +185,10 @@ def main():
         else:
             recurring_text = dashboard_text
 
+        boot_screen_visible = driver.execute_script(
+            "const el = document.getElementById('boot-screen'); return !!el && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden' && el.offsetParent !== null;"
+        )
+
         driver.save_screenshot(str(screenshot))
         image = Image.open(screenshot).convert("RGB")
         width, height = image.size
@@ -213,6 +217,7 @@ def main():
             and content_ratio >= 0.003
             and not severe_logs
             and not warnings
+            and not boot_screen_visible
         )
 
         result = {
@@ -226,6 +231,7 @@ def main():
             "locked": locked,
             "severe_logs": len(severe_logs),
             "vue_warnings": len(warnings),
+            "boot_screen_visible": boot_screen_visible,
             "critical_dashboard_sections": critical_dashboard_sections,
             "critical_recurring_sections": critical_recurring_sections,
         }
