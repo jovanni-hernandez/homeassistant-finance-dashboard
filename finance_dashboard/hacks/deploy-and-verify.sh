@@ -162,6 +162,42 @@ PY
 )" >/dev/null
 }
 
+install_update() {
+  local attempt=1
+
+  while [ "$attempt" -le "$HA_MAX_ATTEMPTS" ]; do
+    echo "Triggering Home Assistant add-on update (attempt $attempt/$HA_MAX_ATTEMPTS)..."
+
+    if output="$(ha_call POST "/api/services/update/install" "$(python3 - <<'PY' "$UPDATE_ENTITY_ID"
+import json
+import sys
+print(json.dumps({"entity_id": sys.argv[1], "backup": False}))
+PY
+)" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 0
+    fi
+
+    status=$?
+    printf '%s\n' "$output"
+
+    if printf '%s' "$output" | grep -qiE 'auth|unauthenticated|not authenticated'; then
+      echo "Auth failure detected while triggering update; not retrying."
+      exit "$status"
+    fi
+
+    if [ "$attempt" -ge "$HA_MAX_ATTEMPTS" ]; then
+      echo "Home Assistant update trigger failed after $HA_MAX_ATTEMPTS attempts."
+      return "$status"
+    fi
+
+    delay=$((HA_BASE_DELAY_SECONDS * (2 ** (attempt - 1))))
+    echo "Transient failure; retrying in ${delay}s..."
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
 get_update_state() {
   ha_call GET "/api/states/$UPDATE_ENTITY_ID" '__EMPTY__'
 }
@@ -223,12 +259,7 @@ current_latest_version="$(printf '%s' "$current_state_json" | parse_state_field 
 
 if [ "$current_installed_version" != "$EXPECTED_VERSION" ] || [ "$current_latest_version" != "$EXPECTED_VERSION" ]; then
   echo "Triggering Home Assistant add-on update with backup disabled..."
-  ha_call POST "/api/services/update/install" "$(python3 - <<'PY' "$UPDATE_ENTITY_ID" "$EXPECTED_VERSION"
-import json
-import sys
-print(json.dumps({"entity_id": sys.argv[1], "version": sys.argv[2], "backup": False}))
-PY
-)" >/dev/null
+  install_update
   wait_for_update_entity "$EXPECTED_VERSION" "post-install"
 else
   echo "Home Assistant already reports the expected version; skipping update call."

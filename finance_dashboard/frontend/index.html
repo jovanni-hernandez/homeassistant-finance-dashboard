@@ -41,17 +41,26 @@
                     </div>
                 </div>
 
-                <button
-                    @click="syncData"
-                    :disabled="syncing"
-                    class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-                >
-                    <svg v-if="syncing" class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a10 10 0 00-10 10h4z"></path>
-                    </svg>
-                    <span>{{ syncing ? 'Syncing…' : 'Sync now' }}</span>
-                </button>
+                <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                    <button
+                        v-if="pinStatus.pin_required && pinStatus.session_active"
+                        @click="lockFinance"
+                        class="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 sm:w-auto"
+                    >
+                        Lock now
+                    </button>
+                    <button
+                        @click="syncData"
+                        :disabled="syncing || (pinStatus.pin_required && !pinStatus.session_active)"
+                        class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                    >
+                        <svg v-if="syncing" class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a10 10 0 00-10 10h4z"></path>
+                        </svg>
+                        <span>{{ syncing ? 'Syncing…' : 'Sync now' }}</span>
+                    </button>
+                </div>
             </div>
 
             <div class="mx-auto max-w-7xl px-4 pb-2 sm:px-6 lg:px-8">
@@ -189,7 +198,44 @@
 
                     <section>
                         <h2 class="mb-3 text-xl font-semibold text-slate-800">Recent transactions</h2>
-                        <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <div class="space-y-3 md:hidden">
+                            <article
+                                v-for="tx in filteredTransactions"
+                                :key="tx.id"
+                                class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                            >
+                                <div class="flex items-start justify-between gap-3">
+                                    <div class="min-w-0">
+                                        <div class="text-[11px] uppercase tracking-wide text-slate-500">{{ formatDate(tx.date) }}</div>
+                                        <div class="mt-1 truncate text-sm font-semibold text-slate-900">{{ tx.payee || 'Unknown payee' }}</div>
+                                        <div class="mt-1 text-sm leading-5 text-slate-500">{{ tx.description || 'No description' }}</div>
+                                    </div>
+                                    <div class="shrink-0 text-right">
+                                        <div class="text-sm font-semibold" :class="parseFloat(tx.amount) >= 0 ? 'text-emerald-700' : 'text-slate-900'">
+                                            {{ formatCurrency(tx.amount) }}
+                                        </div>
+                                        <div class="mt-1 text-[11px] uppercase tracking-wide text-slate-500">{{ tx.account_name }}</div>
+                                    </div>
+                                </div>
+
+                                <div class="mt-3 grid gap-2">
+                                    <label class="text-xs font-medium uppercase tracking-wide text-slate-500">Category</label>
+                                    <select
+                                        :value="tx.category || 'Uncategorized'"
+                                        @change="updateTransactionCategory(tx.id, $event.target.value)"
+                                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
+                                    >
+                                        <option v-for="option in categoryOptions" :key="option" :value="option">{{ option }}</option>
+                                    </select>
+                                </div>
+                            </article>
+
+                            <div v-if="filteredTransactions.length === 0" class="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500 shadow-sm">
+                                No transactions recorded for this period.
+                            </div>
+                        </div>
+
+                        <div class="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm md:block">
                             <div class="overflow-x-auto">
                                 <table class="min-w-full divide-y divide-slate-200">
                                     <thead class="bg-slate-50">
@@ -221,7 +267,7 @@
                                                 {{ formatCurrency(tx.amount) }}
                                             </td>
                                         </tr>
-                                        <tr v-if="transactions.length === 0">
+                                        <tr v-if="filteredTransactions.length === 0">
                                             <td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500">No transactions recorded for this period.</td>
                                         </tr>
                                     </tbody>
@@ -340,9 +386,123 @@
                             {{ categoryRulesMessage }}
                         </div>
                     </div>
+
+                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <h3 class="text-lg font-semibold text-slate-800">PIN security</h3>
+                                <p class="mt-1 text-sm text-slate-500">Require a PIN to open the dashboard, with automatic relock timers.</p>
+                            </div>
+                            <button
+                                v-if="pinStatus.session_active"
+                                @click="lockFinance"
+                                class="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                            >
+                                Lock now
+                            </button>
+                        </div>
+
+                        <div class="mt-4 grid gap-4 md:grid-cols-2">
+                            <label class="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
+                                <input v-model="pinSettingsEnabled" type="checkbox" class="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                                <span>
+                                    <span class="block font-medium text-slate-800">Require PIN to access</span>
+                                    <span class="mt-1 block text-slate-500">If disabled, the dashboard opens without a PIN.</span>
+                                </span>
+                            </label>
+
+                            <div class="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                <label class="block">
+                                    <span class="block text-xs font-medium uppercase tracking-wide text-slate-500">Idle relock (min)</span>
+                                    <input v-model="pinSettingsIdleTimeout" type="number" min="1" max="1440" class="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
+                                </label>
+                                <label class="block">
+                                    <span class="block text-xs font-medium uppercase tracking-wide text-slate-500">Session timeout (min)</span>
+                                    <input v-model="pinSettingsSessionTimeout" type="number" min="5" max="20160" class="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 grid gap-4 md:grid-cols-2">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700">New PIN</label>
+                                <input v-model="pinSettingsNewPin" type="password" autocomplete="new-password" placeholder="Enter new PIN" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700">Confirm PIN</label>
+                                <input v-model="pinSettingsConfirmPin" type="password" autocomplete="new-password" placeholder="Confirm new PIN" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
+                            </div>
+                        </div>
+
+                        <div class="mt-3 text-sm text-slate-500">
+                            Current state: <span class="font-medium text-slate-800">{{ pinStatus.pin_required ? 'PIN required' : 'PIN optional' }}</span>
+                            · Idle timeout: <span class="font-medium text-slate-800">{{ pinStatus.idle_timeout_minutes || pinSettingsIdleTimeout }} min</span>
+                            · Session timeout: <span class="font-medium text-slate-800">{{ pinStatus.session_timeout_minutes || pinSettingsSessionTimeout }} min</span>
+                        </div>
+
+                        <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                            <button
+                                @click="savePinSettings"
+                                :disabled="savingPinSettings"
+                                class="inline-flex items-center justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60"
+                            >
+                                {{ savingPinSettings ? 'Saving…' : 'Save PIN settings' }}
+                            </button>
+                            <div v-if="pinSettingsMessage" class="rounded-lg border px-4 py-3 text-sm" :class="pinSettingsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">
+                                {{ pinSettingsMessage }}
+                            </div>
+                        </div>
+                    </div>
                 </section>
             </template>
         </main>
+
+        <div v-if="pinStatus.locked" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 backdrop-blur-sm">
+            <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-11 w-11 items-center justify-center rounded-full bg-sky-100 text-sky-700">
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 11V7a4 4 0 10-8 0v4" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 11h14v10H5z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-semibold text-slate-900">PIN required</h2>
+                        <p class="text-sm text-slate-500">Enter your finance PIN to unlock the dashboard.</p>
+                    </div>
+                </div>
+
+                <label class="mt-5 block text-sm font-medium text-slate-700">PIN</label>
+                <input
+                    v-model="pinUnlockValue"
+                    type="password"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    placeholder="Enter PIN"
+                    class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                />
+
+                <div v-if="pinLockMessage" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="pinLockError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">
+                    {{ pinLockMessage }}
+                </div>
+
+                <div class="mt-5 flex flex-col gap-3 sm:flex-row">
+                    <button
+                        @click="unlockWithPin"
+                        :disabled="unlockingPin || !pinUnlockValue.trim()"
+                        class="inline-flex flex-1 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60"
+                    >
+                        {{ unlockingPin ? 'Unlocking…' : 'Unlock' }}
+                    </button>
+                    <button
+                        @click="lockFinance(true)"
+                        class="inline-flex flex-1 items-center justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                        Clear saved PIN
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -350,17 +510,43 @@
 
         createApp({
             setup() {
+                const PIN_SESSION_KEY = 'finance-dashboard-session-token';
                 const view = ref('dashboard');
                 const drawerOpen = ref(false);
                 const accounts = ref([]);
                 const transactions = ref([]);
                 const loading = ref(true);
+                const pinLoading = ref(true);
                 const syncing = ref(false);
                 const claiming = ref(false);
                 const syncMessage = ref('');
                 const syncError = ref(false);
                 const error = ref(null);
                 const setupTokenInput = ref('');
+                const pinStatus = ref({
+                    enabled: false,
+                    configured: false,
+                    pin_required: false,
+                    session_active: false,
+                    locked: false,
+                    idle_timeout_minutes: 10,
+                    session_timeout_minutes: 480,
+                });
+                const pinSessionToken = ref(sessionStorage.getItem(PIN_SESSION_KEY) || '');
+                const pinUnlockValue = ref('');
+                const pinLockMessage = ref('');
+                const pinLockError = ref(false);
+                const unlockingPin = ref(false);
+                const pinSettingsEnabled = ref(false);
+                const pinSettingsIdleTimeout = ref(10);
+                const pinSettingsSessionTimeout = ref(480);
+                const pinSettingsNewPin = ref('');
+                const pinSettingsConfirmPin = ref('');
+                const pinSettingsMessage = ref('');
+                const pinSettingsError = ref(false);
+                const savingPinSettings = ref(false);
+                const lastActivityAt = ref(Date.now());
+                let idleMonitor = null;
                 const categoryRulesText = ref('');
                 const categoryRulesMessage = ref('');
                 const categoryRulesError = ref(false);
@@ -391,6 +577,219 @@
                     last_sync_at: null,
                 });
                 const sankeyEl = ref(null);
+
+                const setSessionToken = (token) => {
+                    pinSessionToken.value = token || '';
+                    try {
+                        if (token) {
+                            sessionStorage.setItem(PIN_SESSION_KEY, token);
+                        } else {
+                            sessionStorage.removeItem(PIN_SESSION_KEY);
+                        }
+                    } catch (err) {
+                        console.warn(err);
+                    }
+                };
+
+                const clearLoadedData = () => {
+                    accounts.value = [];
+                    transactions.value = [];
+                    status.value = {
+                        connected: false,
+                        account_count: 0,
+                        transaction_count: 0,
+                        last_sync_status: 'never',
+                        last_sync_message: '',
+                        last_sync_at: null,
+                    };
+                };
+
+                const lockFinance = async (remote = false) => {
+                    try {
+                        if (pinSessionToken.value) {
+                            await fetch(getApiUrl('/api/pin/lock'), {
+                                method: 'POST',
+                                headers: {
+                                    'Accept': 'application/json',
+                                    'Content-Type': 'application/json',
+                                    'X-Finance-Session': pinSessionToken.value,
+                                },
+                            });
+                        }
+                    } catch (err) {
+                        if (!remote) console.warn(err);
+                    } finally {
+                        if (idleMonitor) {
+                            clearInterval(idleMonitor);
+                            idleMonitor = null;
+                        }
+                        setSessionToken('');
+                        pinStatus.value.session_active = false;
+                        pinStatus.value.locked = pinStatus.value.pin_required;
+                        pinUnlockValue.value = '';
+                        clearLoadedData();
+                        loading.value = false;
+                    }
+                };
+
+                const recordActivity = () => {
+                    lastActivityAt.value = Date.now();
+                };
+
+                const updatePinSettingsForm = (payload) => {
+                    pinSettingsEnabled.value = !!payload.enabled;
+                    pinSettingsIdleTimeout.value = Number(payload.idle_timeout_minutes || 10);
+                    pinSettingsSessionTimeout.value = Number(payload.session_timeout_minutes || 480);
+                };
+
+                const apiFetch = async (endpoint, options = {}, { auth = true } = {}) => {
+                    const headers = new Headers(options.headers || {});
+                    headers.set('Accept', 'application/json');
+                    if (auth && pinSessionToken.value) {
+                        headers.set('X-Finance-Session', pinSessionToken.value);
+                    }
+
+                    const res = await fetch(getApiUrl(endpoint), { ...options, headers });
+                    if ((res.status === 401 || res.status === 403) && auth) {
+                        await lockFinance(true);
+                    }
+                    return res;
+                };
+
+                const refreshPinStatus = async () => {
+                    try {
+                        const headers = { 'Accept': 'application/json' };
+                        if (pinSessionToken.value) {
+                            headers['X-Finance-Session'] = pinSessionToken.value;
+                        }
+                        const res = await fetch(getApiUrl('/api/pin/status'), { headers });
+                        if (!res.ok) throw new Error('Failed to load PIN status');
+                        const data = await res.json();
+                        pinStatus.value = data;
+                        if (data.locked) {
+                            await lockFinance(true);
+                        } else {
+                            if (data.session_active && pinSessionToken.value) {
+                                startIdleMonitor();
+                            }
+                            if (!data.pin_required) {
+                                setSessionToken('');
+                            }
+                        }
+                        return data;
+                    } catch (err) {
+                        console.warn(err);
+                        pinStatus.value.locked = true;
+                        return pinStatus.value;
+                    } finally {
+                        pinLoading.value = false;
+                    }
+                };
+
+                const fetchPinSettings = async () => {
+                    if (!pinStatus.value.session_active) return;
+                    try {
+                        const res = await apiFetch('/api/pin/settings');
+                        if (!res.ok) throw new Error('Failed to load PIN settings');
+                        const data = await res.json();
+                        updatePinSettingsForm(data);
+                    } catch (err) {
+                        console.warn(err);
+                    }
+                };
+
+                const fetchProtectedState = async () => {
+                    await Promise.all([fetchStatus(), fetchData(), fetchCategoryRules(), fetchPinSettings()]);
+                    await nextTick();
+                    renderSankey();
+                };
+
+                const startIdleMonitor = () => {
+                    if (idleMonitor) {
+                        clearInterval(idleMonitor);
+                        idleMonitor = null;
+                    }
+                    idleMonitor = window.setInterval(() => {
+                        if (!pinStatus.value.pin_required || !pinStatus.value.session_active) return;
+                        const limitMs = Math.max(1, Number(pinStatus.value.idle_timeout_minutes || 10)) * 60 * 1000;
+                        if (Date.now() - lastActivityAt.value > limitMs) {
+                            lockFinance();
+                        }
+                    }, 15000);
+                };
+
+                const unlockWithPin = async () => {
+                    if (!pinUnlockValue.value.trim()) return;
+                    unlockingPin.value = true;
+                    pinLockMessage.value = '';
+                    pinLockError.value = false;
+                    try {
+                        const res = await apiFetch('/api/pin/unlock', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ pin: pinUnlockValue.value.trim() }),
+                        }, { auth: false });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to unlock PIN (${res.status})`);
+                        setSessionToken(data.access_token || '');
+                        pinStatus.value.session_active = true;
+                        pinStatus.value.locked = false;
+                        pinUnlockValue.value = '';
+                        pinLockMessage.value = 'Unlocked.';
+                        pinLockError.value = false;
+                        lastActivityAt.value = Date.now();
+                        startIdleMonitor();
+                        await refreshPinStatus();
+                        await fetchProtectedState();
+                    } catch (err) {
+                        pinLockError.value = true;
+                        pinLockMessage.value = err.message;
+                    } finally {
+                        unlockingPin.value = false;
+                    }
+                };
+
+                const savePinSettings = async () => {
+                    savingPinSettings.value = true;
+                    pinSettingsMessage.value = '';
+                    pinSettingsError.value = false;
+                    try {
+                        const payload = {
+                            enabled: pinSettingsEnabled.value,
+                            idle_timeout_minutes: Number(pinSettingsIdleTimeout.value || 10),
+                            session_timeout_minutes: Number(pinSettingsSessionTimeout.value || 480),
+                            new_pin: pinSettingsNewPin.value.trim() || null,
+                            confirm_pin: pinSettingsConfirmPin.value.trim() || null,
+                        };
+                        if (payload.new_pin && payload.confirm_pin && payload.new_pin !== payload.confirm_pin) {
+                            throw new Error('PIN confirmation does not match.');
+                        }
+                        const res = await apiFetch('/api/pin/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to save PIN settings (${res.status})`);
+                        pinSettingsMessage.value = data.message || 'PIN settings saved.';
+                        pinSettingsError.value = false;
+                        pinSettingsNewPin.value = '';
+                        pinSettingsConfirmPin.value = '';
+                        pinStatus.value = data;
+                        updatePinSettingsForm(data);
+                        if (!data.session_active) {
+                            await lockFinance(true);
+                        } else {
+                            await refreshPinStatus();
+                            await fetchPinSettings();
+                        }
+                    } catch (err) {
+                        pinSettingsError.value = true;
+                        pinSettingsMessage.value = err.message;
+                    } finally {
+                        savingPinSettings.value = false;
+                    }
+                };
 
                 const monthKeyFromTimestamp = (timestamp) => {
                     if (!timestamp) return '';
@@ -457,7 +856,7 @@
 
                 const fetchStatus = async () => {
                     try {
-                        const res = await fetch(getApiUrl('/api/status'), { headers: { 'Accept': 'application/json' } });
+                        const res = await apiFetch('/api/status');
                         if (!res.ok) throw new Error('Failed to load connection status');
                         status.value = await res.json();
                     } catch (err) {
@@ -468,8 +867,8 @@
                 const fetchData = async () => {
                     try {
                         const [accRes, txRes] = await Promise.all([
-                            fetch(getApiUrl('/api/accounts'), { headers: { 'Accept': 'application/json' } }),
-                            fetch(getApiUrl('/api/transactions'), { headers: { 'Accept': 'application/json' } }),
+                            apiFetch('/api/accounts'),
+                            apiFetch('/api/transactions'),
                         ]);
 
                         if (!accRes.ok || !txRes.ok) {
@@ -490,7 +889,7 @@
 
                 const fetchCategoryRules = async () => {
                     try {
-                        const res = await fetch(getApiUrl('/api/category-rules'), { headers: { 'Accept': 'application/json' } });
+                        const res = await apiFetch('/api/category-rules');
                         if (!res.ok) throw new Error('Failed to load category rules');
                         const data = await res.json();
                         const rulesJson = data.rules_json || '';
@@ -512,7 +911,7 @@
                     categoryRulesMessage.value = '';
                     categoryRulesError.value = false;
                     try {
-                        const res = await fetch(getApiUrl('/api/category-rules'), {
+                        const res = await apiFetch('/api/category-rules', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                             body: JSON.stringify({ rules_json: categoryRulesText.value }),
@@ -532,7 +931,7 @@
 
                 const updateTransactionCategory = async (transactionId, category) => {
                     try {
-                        const res = await fetch(getApiUrl(`/api/transactions/${encodeURIComponent(transactionId)}/category`), {
+                        const res = await apiFetch(`/api/transactions/${encodeURIComponent(transactionId)}/category`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                             body: JSON.stringify({ category }),
@@ -553,14 +952,12 @@
                     syncMessage.value = 'Sync started…';
                     syncError.value = false;
                     try {
-                        const res = await fetch(getApiUrl('/api/sync'), { method: 'POST' });
+                        const res = await apiFetch('/api/sync', { method: 'POST' });
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok) throw new Error(data.detail || data.message || `Sync failed (${res.status})`);
                         syncMessage.value = data.message || 'Sync completed successfully.';
                         syncError.value = false;
-                        await Promise.all([fetchStatus(), fetchData()]);
-                        await nextTick();
-                        renderSankey();
+                        await fetchProtectedState();
                     } catch (err) {
                         syncError.value = true;
                         syncMessage.value = err.message;
@@ -576,7 +973,7 @@
                     syncMessage.value = '';
                     syncError.value = false;
                     try {
-                        const res = await fetch(getApiUrl('/api/simplefin/claim-token'), {
+                        const res = await apiFetch('/api/simplefin/claim-token', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                             body: JSON.stringify({ setup_token: setupTokenInput.value.trim() }),
@@ -586,9 +983,7 @@
                         syncMessage.value = data.message || 'SimpleFIN connected successfully.';
                         syncError.value = false;
                         setupTokenInput.value = '';
-                        await Promise.all([fetchStatus(), fetchData()]);
-                        await nextTick();
-                        renderSankey();
+                        await fetchProtectedState();
                         view.value = 'dashboard';
                     } catch (err) {
                         syncError.value = true;
@@ -835,9 +1230,16 @@
                 });
 
                 onMounted(async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchCategoryRules()]);
-                    await nextTick();
-                    renderSankey();
+                    window.addEventListener('pointerdown', recordActivity, { passive: true });
+                    window.addEventListener('keydown', recordActivity, { passive: true });
+                    window.addEventListener('touchstart', recordActivity, { passive: true });
+
+                    await refreshPinStatus();
+                    if (!pinStatus.value.locked) {
+                        await fetchProtectedState();
+                    } else {
+                        loading.value = false;
+                    }
                     window.addEventListener('resize', () => renderSankey(), { passive: true });
                 });
 

@@ -35,7 +35,7 @@ This mirrors the Home Assistant marketplace refresh button and retries transient
 ```
 
 This runs the full release flow: certify, commit/push, refresh marketplace metadata, and wait for the version sync.
-If `HA_URL` and `HA_TOKEN` are set, it also triggers the Home Assistant add-on update and polls it to completion with `backup: false`.
+It requires `HA_URL` and `HA_TOKEN`; with those set, it also triggers the Home Assistant add-on update and polls it to completion with `backup: false`.
 
 If you only want the repository refresh + sync wait step:
 
@@ -43,8 +43,17 @@ If you only want the repository refresh + sync wait step:
 ./hacks/deploy-and-verify.sh
 ```
 
-This runs the repo refresh helper using the version from `config.yaml`, then waits for the marketplace metadata to report that version before you move on to the Home Assistant update step.
-If you set `HA_URL` and `HA_TOKEN`, it will also drive the add-on update end-to-end, auto-detect the update entity, and wait for Home Assistant to report the new installed version.
+This runs the repo refresh helper using the version from `config.yaml`, then waits for the marketplace metadata to report that version before it triggers the Home Assistant update step.
+If you set `HA_URL` and `HA_TOKEN`, it will also drive the add-on update end-to-end, auto-detect the update entity, retry transient update-trigger failures, and wait for Home Assistant to report the new installed version.
+
+## Categorization rule proposals
+
+```bash
+./hacks/propose-category-rules.sh --format markdown
+```
+
+Reads the encrypted finance database through the app models and prints merchant/category proposals plus uncategorized items to review.
+Use `--format json` if you want machine-readable output.
 
 You can also store those values in `hacks/.release.env` (copy from `hacks/release.env.example`) so the release command works without exporting env vars every time.
 The helpers also read `finance_dashboard/.env` if you prefer one repo-root env file for all release settings.

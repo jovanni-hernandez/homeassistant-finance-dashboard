@@ -16,6 +16,12 @@ if [ -f "$ENV_FILE" ]; then
   source "$ENV_FILE"
 fi
 
+if [ -z "${HA_URL:-}" ] || [ -z "${HA_TOKEN:-}" ]; then
+  echo "HA_URL and HA_TOKEN are required for the full release flow."
+  echo "Set them in finance_dashboard/.env or finance_dashboard/hacks/.release.env, then rerun."
+  exit 1
+fi
+
 "$ROOT_DIR/hacks/certify.sh"
 
 VERSION="$(python3 - "$ROOT_DIR/config.yaml" <<'PY'

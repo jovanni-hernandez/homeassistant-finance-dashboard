@@ -12,6 +12,7 @@ from database import (
     set_category_rules_value,
     set_transaction_category,
 )
+import pin_auth
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("finance_dashboard")
@@ -39,6 +40,18 @@ class TransactionCategoryRequest(BaseModel):
     category: str
 
 
+class PinUnlockRequest(BaseModel):
+    pin: str
+
+
+class PinSettingsRequest(BaseModel):
+    enabled: bool
+    idle_timeout_minutes: int = pin_auth.DEFAULT_IDLE_TIMEOUT_MINUTES
+    session_timeout_minutes: int = pin_auth.DEFAULT_SESSION_TIMEOUT_MINUTES
+    new_pin: str | None = None
+    confirm_pin: str | None = None
+
+
 @app.on_event("startup")
 def startup_event():
     logger.info("Initializing database...")
@@ -50,14 +63,69 @@ def startup_event():
         logger.error(f"Startup sync failed: {e}")
 
 
-def verify_ha_auth(authorization: str = Header(None)):
-    """Placeholder for Home Assistant auth token verification."""
-    pass
+def verify_ha_auth(finance_session: str | None = Header(None, alias="X-Finance-Session")):
+    """Require a valid finance session token when PIN protection is enabled."""
+    if not pin_auth.pin_is_required():
+        return
+
+    if not pin_auth.validate_session_token(finance_session):
+        raise HTTPException(status_code=401, detail="PIN required")
 
 
 @app.get("/api/status", dependencies=[Depends(verify_ha_auth)])
 def api_status():
     return simplefin.get_dashboard_status()
+
+
+@app.get("/api/pin/status")
+def api_pin_status(finance_session: str | None = Header(None, alias="X-Finance-Session")):
+    return pin_auth.get_pin_status(finance_session)
+
+
+@app.post("/api/pin/unlock")
+def api_pin_unlock(payload: PinUnlockRequest):
+    try:
+        result = pin_auth.unlock_pin(payload.pin)
+        if not result:
+            raise HTTPException(status_code=401, detail="Invalid PIN")
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to unlock PIN: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/pin/lock", dependencies=[Depends(verify_ha_auth)])
+def api_pin_lock():
+    pin_auth.clear_session()
+    return {"status": "success", "message": "PIN session cleared."}
+
+
+@app.get("/api/pin/settings", dependencies=[Depends(verify_ha_auth)])
+def api_get_pin_settings():
+    return pin_auth.get_pin_settings()
+
+
+@app.post("/api/pin/settings", dependencies=[Depends(verify_ha_auth)])
+def api_set_pin_settings(payload: PinSettingsRequest, finance_session: str | None = Header(None, alias="X-Finance-Session")):
+    try:
+        if payload.new_pin is not None and payload.confirm_pin is not None and payload.new_pin != payload.confirm_pin:
+            raise HTTPException(status_code=400, detail="PIN confirmation does not match.")
+
+        settings = pin_auth.update_pin_settings(
+            enabled=payload.enabled,
+            idle_timeout_minutes=payload.idle_timeout_minutes,
+            session_timeout_minutes=payload.session_timeout_minutes,
+            new_pin=payload.new_pin,
+        )
+        current_status = pin_auth.get_pin_status(finance_session)
+        return {"status": "success", "message": "PIN settings saved.", **settings, **current_status}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to save PIN settings: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/accounts", dependencies=[Depends(verify_ha_auth)])
