@@ -35,6 +35,7 @@ This mirrors the Home Assistant marketplace refresh button and retries transient
 ```
 
 This runs the full release flow: certify, commit/push, refresh marketplace metadata, and wait for the version sync.
+If `HA_URL` and `HA_TOKEN` are set, it also triggers the Home Assistant add-on update and polls it to completion with `backup: false`.
 
 If you only want the repository refresh + sync wait step:
 
@@ -43,3 +44,4 @@ If you only want the repository refresh + sync wait step:
 ```
 
 This runs the repo refresh helper using the version from `config.yaml`, then waits for the marketplace metadata to report that version before you move on to the Home Assistant update step.
+If you set `HA_URL` and `HA_TOKEN`, it will also drive the add-on update end-to-end and wait for Home Assistant to report the new installed version.

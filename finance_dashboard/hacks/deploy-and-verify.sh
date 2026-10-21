@@ -17,8 +17,155 @@ print(match.group(1))
 PY
 )"
 
+HA_URL="${HA_URL:-}"
+HA_TOKEN="${HA_TOKEN:-}"
+UPDATE_ENTITY_ID="${UPDATE_ENTITY_ID:-update.personal_finance_dashboard_update}"
+HA_MAX_ATTEMPTS="${HA_MAX_ATTEMPTS:-10}"
+HA_BASE_DELAY_SECONDS="${HA_BASE_DELAY_SECONDS:-2}"
+
 "$ROOT_DIR/hacks/refresh-marketplace.sh" "$REPO" "$EXPECTED_VERSION"
 
 echo "Repo release prep complete."
 echo "Marketplace metadata now reports $EXPECTED_VERSION."
-echo "Next step in Home Assistant: update the add-on with backup disabled, then validate the running UI."
+
+if [ -z "$HA_URL" ] || [ -z "$HA_TOKEN" ]; then
+  echo "HA_URL / HA_TOKEN not set; skipping live Home Assistant update step."
+  echo "Next step in Home Assistant: update the add-on with backup disabled, then validate the running UI."
+  exit 0
+fi
+
+ha_call() {
+  local method="$1"
+  local path="$2"
+  local payload="${3:-}"
+
+  HA_URL="$HA_URL" HA_TOKEN="$HA_TOKEN" python3 - "$method" "$path" "$payload" <<'PY'
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+method, path, payload = sys.argv[1:4]
+base = os.environ['HA_URL'].rstrip('/')
+token = os.environ['HA_TOKEN']
+
+data = None
+headers = {
+    'Authorization': f'Bearer {token}',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+}
+
+if payload and payload != '__EMPTY__':
+    data = payload.encode('utf-8')
+
+req = urllib.request.Request(f'{base}{path}', data=data, headers=headers, method=method)
+
+try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        sys.stdout.write(resp.read().decode('utf-8'))
+except urllib.error.HTTPError as exc:
+    body = exc.read().decode('utf-8', errors='replace') if exc.fp else ''
+    sys.stderr.write(body or str(exc))
+    raise SystemExit(exc.code)
+PY
+}
+
+parse_state_field() {
+  local field="$1"
+  python3 - "$field" <<'PY'
+import json
+import sys
+
+field = sys.argv[1]
+text = sys.stdin.read().strip()
+if not text:
+    raise SystemExit(1)
+payload = json.loads(text)
+value = payload.get('attributes', {}).get(field)
+if value is None and field in payload:
+    value = payload[field]
+if value is None:
+    raise SystemExit(2)
+print(str(value).lower())
+PY
+}
+
+refresh_update_entity() {
+  ha_call POST "/api/services/homeassistant/update_entity" "$(python3 - <<'PY' "$UPDATE_ENTITY_ID"
+import json
+import sys
+print(json.dumps({"entity_id": sys.argv[1]}))
+PY
+)" >/dev/null
+}
+
+get_update_state() {
+  ha_call GET "/api/states/$UPDATE_ENTITY_ID" '__EMPTY__'
+}
+
+wait_for_update_entity() {
+  local target_version="$1"
+  local phase="$2"
+  local attempt=1
+
+  while [ "$attempt" -le "$HA_MAX_ATTEMPTS" ]; do
+    echo "Refreshing Home Assistant update entity ($phase, attempt $attempt/$HA_MAX_ATTEMPTS)..."
+    if ! refresh_update_entity; then
+      echo "Home Assistant refresh call failed; retrying."
+      delay=$((HA_BASE_DELAY_SECONDS * (2 ** (attempt - 1))))
+      sleep "$delay"
+      attempt=$((attempt + 1))
+      continue
+    fi
+
+    if ! state_json="$(get_update_state)"; then
+      echo "Home Assistant update entity state was unavailable; retrying."
+      delay=$((HA_BASE_DELAY_SECONDS * (2 ** (attempt - 1))))
+      sleep "$delay"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    installed_version="$(printf '%s' "$state_json" | parse_state_field installed_version || true)"
+    latest_version="$(printf '%s' "$state_json" | parse_state_field latest_version || true)"
+    in_progress="$(printf '%s' "$state_json" | parse_state_field in_progress || true)"
+
+    if [ "$installed_version" = "$target_version" ] && [ "$in_progress" = "false" ]; then
+      if [ -z "$latest_version" ] || [ "$latest_version" = "$target_version" ]; then
+        echo "Home Assistant reports $target_version installed."
+        return 0
+      fi
+    fi
+
+    if [ "$attempt" -ge "$HA_MAX_ATTEMPTS" ]; then
+      echo "Home Assistant update step did not settle after $HA_MAX_ATTEMPTS attempts."
+      echo "Latest observed state: installed=$installed_version latest=$latest_version in_progress=$in_progress"
+      return 1
+    fi
+
+    delay=$((HA_BASE_DELAY_SECONDS * (2 ** (attempt - 1))))
+    echo "Waiting ${delay}s for Home Assistant to finish update step..."
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
+current_state_json="$(get_update_state || true)"
+current_installed_version="$(printf '%s' "$current_state_json" | parse_state_field installed_version || true)"
+current_latest_version="$(printf '%s' "$current_state_json" | parse_state_field latest_version || true)"
+
+if [ "$current_installed_version" != "$EXPECTED_VERSION" ] || [ "$current_latest_version" != "$EXPECTED_VERSION" ]; then
+  echo "Triggering Home Assistant add-on update with backup disabled..."
+  ha_call POST "/api/services/update/install" "$(python3 - <<'PY' "$UPDATE_ENTITY_ID" "$EXPECTED_VERSION"
+import json
+import sys
+print(json.dumps({"entity_id": sys.argv[1], "version": sys.argv[2], "backup": False}))
+PY
+)" >/dev/null
+  wait_for_update_entity "$EXPECTED_VERSION" "post-install"
+else
+  echo "Home Assistant already reports the expected version; skipping update call."
+fi
+
+echo "Live Home Assistant verification complete."
