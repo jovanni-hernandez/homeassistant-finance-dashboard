@@ -30,4 +30,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   attempt=$((attempt + 1))
 done
 
+echo "Running Selenium UI validation..."
+"$ROOT_DIR/hacks/validate-ui-selenium.sh" --file "$FRONTEND" --screenshot "${SCREENSHOT%.png}-selenium.png"
+
 git -C "$ROOT_DIR" status --short

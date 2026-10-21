@@ -14,6 +14,7 @@ What it does:
 3. opens the frontend in headless Chromium
 4. captures a screenshot and checks for runtime exceptions
 5. retries transient browser failures with exponential backoff
+6. runs a Selenium-backed browser validation pass against the recurring-payments view
 
 ## Manual HA refresh
 
@@ -36,6 +37,10 @@ This mirrors the Home Assistant marketplace refresh button and retries transient
 
 This runs the full release flow: certify, commit/push, refresh marketplace metadata, and wait for the version sync.
 It requires `HA_URL` and `HA_TOKEN`; with those set, it also triggers the Home Assistant add-on update and polls it to completion with `backup: false`.
+
+## Dev launcher add-on
+
+The repo also includes a separate dev-launcher add-on under `finance_dashboard_dev/`. It clones the finance dashboard repo into `/data`, installs the runtime plus Selenium/browser tooling, and boots the app from that workspace.
 
 If you only want the repository refresh + sync wait step:
 

@@ -15,6 +15,7 @@ Use this loop for any UI/dashboard/frontend/visual change.
 ## Available helpers
 - `hacks/bump-version.py`
 - `hacks/validate-ui.mjs`
+- `hacks/validate-ui-selenium.sh`
 - `hacks/certify.sh`
 - `hacks/refresh-marketplace.sh`
 - `hacks/deploy-and-verify.sh`

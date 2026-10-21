@@ -1,0 +1,17 @@
+name: Personal Finance Dashboard Dev
+description: Developer launcher for the finance dashboard with browser tooling and a cloned workspace
+version: 0.1.0
+slug: custom_finance_dev
+init: false
+ingress: true
+ingress_port: 8000
+panel_icon: mdi:code-tags
+panel_title: Finance Dev
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+ports:
+  8000/tcp: 8000
