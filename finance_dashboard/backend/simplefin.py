@@ -9,6 +9,7 @@ import requests
 
 from database import (
     get_account_count,
+    get_category_rules_value,
     get_setting,
     get_transaction_count,
     save_simplefin_data,
@@ -21,6 +22,20 @@ OPTIONS_PATH = "/data/options.json"
 ACCESS_URL_KEY = "simplefin_access_url"
 SYNC_HISTORY_DAYS = 30
 SYNC_OVERLAP_DAYS = 5
+
+DEFAULT_CATEGORY_RULES = [
+    {"category": "Income", "patterns": ["payroll", "salary", "deposit", "direct deposit", "paycheck", "ach credit"]},
+    {"category": "Groceries", "patterns": ["grocery", "supermarket", "food lion", "whole foods", "trader joe", "costco", "aldi", "kroger", "walmart", "sprouts"]},
+    {"category": "Dining", "patterns": ["restaurant", "coffee", "cafe", "mcdonald", "chipotle", "starbucks", "doordash", "ubereats", "grubhub", "pizza"]},
+    {"category": "Housing", "patterns": ["rent", "mortgage", "property", "hoa", "landlord", "apartment"]},
+    {"category": "Utilities", "patterns": ["electric", "water", "gas", "internet", "phone", "utility", "spectrum", "verizon", "xfinity", "att"]},
+    {"category": "Transport", "patterns": ["gas", "fuel", "uber", "lyft", "parking", "toll", "metro", "transit", "shell", "chevron", "exxon"]},
+    {"category": "Shopping", "patterns": ["amazon", "target", "costco", "shopping", "store", "walmart", "best buy", "ebay"]},
+    {"category": "Travel", "patterns": ["hotel", "airlines", "flight", "travel", "rental car", "airbnb"]},
+    {"category": "Subscriptions", "patterns": ["netflix", "spotify", "subscription", "prime", "hulu", "apple", "youtube", "google"]},
+    {"category": "Transfers", "patterns": ["transfer", "zelle", "venmo", "cash app", "cashapp", "payment to self"]},
+    {"category": "Fees", "patterns": ["fee", "interest", "late", "overdraft", "atm", "service charge"]},
+]
 
 
 def _record_sync_state(status: str, message: str):
@@ -162,6 +177,45 @@ def get_dashboard_status():
     }
 
 
+def _load_category_rules():
+    raw = get_category_rules_value()
+    if not raw:
+        return DEFAULT_CATEGORY_RULES
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list) and parsed:
+            normalized = []
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                category = str(item.get("category", "")).strip()
+                patterns = item.get("patterns", [])
+                if category and isinstance(patterns, list):
+                    normalized.append(
+                        {
+                            "category": category,
+                            "patterns": [str(pattern).strip().lower() for pattern in patterns if str(pattern).strip()],
+                        }
+                    )
+            if normalized:
+                return normalized
+    except Exception as exc:
+        logger.warning(f"Could not parse category rules JSON, using defaults: {exc}")
+
+    return DEFAULT_CATEGORY_RULES
+
+
+def categorize_transaction(tx: dict, rules=None):
+    haystack = f"{tx.get('payee', '')} {tx.get('description', '')}".lower()
+    for rule in rules or DEFAULT_CATEGORY_RULES:
+        category = rule.get("category")
+        patterns = rule.get("patterns", [])
+        if category and any(pattern in haystack for pattern in patterns):
+            return category
+    return "Uncategorized"
+
+
 def _decode_access_url_to_request(access_url: str):
     parsed = urlsplit(access_url)
 
@@ -179,7 +233,7 @@ def _decode_access_url_to_request(access_url: str):
     return base_url, (username, password)
 
 
-def _normalize_simplefin_payload(data: dict):
+def _normalize_simplefin_payload(data: dict, rules=None):
     accounts = []
     for account in data.get("accounts", []):
         account_id = str(
@@ -213,6 +267,7 @@ def _normalize_simplefin_payload(data: dict):
                     "amount": str(amount),
                     "payee": payee,
                     "description": description,
+                    "category": categorize_transaction({"payee": payee, "description": description}, rules),
                     "pending": bool(tx.get("pending", False)),
                 }
             )
@@ -270,7 +325,8 @@ def fetch_and_sync_simplefin():
                 if payload.get(key):
                     simplefin_errors.extend(payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)])
 
-            normalized = _normalize_simplefin_payload(payload)
+            rules = _load_category_rules()
+            normalized = _normalize_simplefin_payload(payload, rules)
             save_simplefin_data(normalized)
 
             message = f"Synced successfully from SimpleFIN ({SYNC_HISTORY_DAYS}-day window)"

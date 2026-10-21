@@ -80,6 +80,7 @@ class Transaction(Base):
     _amount = Column("amount", String, default="0.00")
     _payee = Column("payee", String, default="")
     _description = Column("description", String, default="")
+    category = Column(String, default="Uncategorized")
     pending = Column(Boolean, default=False)
 
     account = relationship("Account", back_populates="transactions")
@@ -127,5 +128,6 @@ class Transaction(Base):
             "amount": self.amount,
             "payee": self.payee,
             "description": self.description,
+            "category": self.category or "Uncategorized",
             "pending": 1 if self.pending else 0
         }

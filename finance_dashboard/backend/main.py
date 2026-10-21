@@ -4,7 +4,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import simplefin
-from database import init_db, get_stored_accounts, get_stored_transactions
+from database import (
+    init_db,
+    get_stored_accounts,
+    get_stored_transactions,
+    get_category_rules_value,
+    set_category_rules_value,
+    set_transaction_category,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("finance_dashboard")
@@ -22,6 +29,14 @@ app.add_middleware(
 
 class ClaimTokenRequest(BaseModel):
     setup_token: str
+
+
+class CategoryRulesRequest(BaseModel):
+    rules_json: str
+
+
+class TransactionCategoryRequest(BaseModel):
+    category: str
 
 
 @app.on_event("startup")
@@ -89,6 +104,35 @@ def api_sync():
     """Trigger an out-of-band sync from SimpleFIN upstream."""
     result = simplefin.fetch_and_sync_simplefin()
     return result
+
+
+@app.get("/api/category-rules", dependencies=[Depends(verify_ha_auth)])
+def api_get_category_rules():
+    return {"rules_json": get_category_rules_value() or ""}
+
+
+@app.post("/api/category-rules", dependencies=[Depends(verify_ha_auth)])
+def api_set_category_rules(payload: CategoryRulesRequest):
+    try:
+        set_category_rules_value(payload.rules_json)
+        return {"status": "success", "message": "Category rules saved."}
+    except Exception as e:
+        logger.error(f"Failed to save category rules: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/transactions/{transaction_id}/category", dependencies=[Depends(verify_ha_auth)])
+def api_set_transaction_category(transaction_id: str, payload: TransactionCategoryRequest):
+    try:
+        ok = set_transaction_category(transaction_id, payload.category)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return {"status": "success", "message": "Transaction category updated."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update transaction category: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # Mount frontend static files.

@@ -1,4 +1,6 @@
 import logging
+import json
+from sqlalchemy import inspect, text
 from models import engine, SessionLocal, Base, Account, Transaction, Setting
 
 logger = logging.getLogger("finance_dashboard")
@@ -7,16 +9,23 @@ logger = logging.getLogger("finance_dashboard")
 def init_db():
     logger.info("Initializing database tables via SQLAlchemy...")
     Base.metadata.create_all(bind=engine)
+    _ensure_transaction_category_column()
     logger.info("Database initialized successfully.")
+
+
+def _ensure_transaction_category_column():
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("transactions")}
+    if "category" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN category TEXT DEFAULT 'Uncategorized'"))
+        logger.info("Added missing transactions.category column.")
 
 
 def save_simplefin_data(data):
     """Save normalized SimpleFIN accounts and transactions into SQLite via SQLAlchemy."""
     db = SessionLocal()
     try:
-        db.query(Transaction).delete(synchronize_session=False)
-        db.query(Account).delete(synchronize_session=False)
-
         accounts = data.get("accounts", [])
         for acc in accounts:
             acc_id = str(acc.get("id"))
@@ -45,6 +54,7 @@ def save_simplefin_data(data):
                 amount = str(tx.get("amount", "0.00"))
                 payee = tx.get("payee", "")
                 description = tx.get("description", "")
+                category = tx.get("category", "Uncategorized")
                 pending = bool(tx.get("pending"))
 
                 db_tx = db.query(Transaction).filter(Transaction.id == tx_id).first()
@@ -56,6 +66,7 @@ def save_simplefin_data(data):
                         amount=amount,
                         payee=payee,
                         description=description,
+                        category=category,
                         pending=pending,
                     )
                     db.add(db_tx)
@@ -65,6 +76,8 @@ def save_simplefin_data(data):
                     db_tx.amount = amount
                     db_tx.payee = payee
                     db_tx.description = description
+                    if not db_tx.category or db_tx.category == "Uncategorized":
+                        db_tx.category = category
                     db_tx.pending = pending
 
         db.commit()
@@ -135,3 +148,28 @@ def get_transaction_count():
         return db.query(Transaction).count()
     finally:
         db.close()
+
+
+def set_transaction_category(transaction_id: str, category: str):
+    db = SessionLocal()
+    try:
+        tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+        if not tx:
+            return False
+        tx.category = category or "Uncategorized"
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error setting category for transaction {transaction_id}: {e}")
+        raise e
+    finally:
+        db.close()
+
+
+def get_category_rules_value():
+    return get_setting("category_rules_json")
+
+
+def set_category_rules_value(value: str):
+    set_setting("category_rules_json", value)
