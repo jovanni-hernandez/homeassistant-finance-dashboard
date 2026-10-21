@@ -463,74 +463,83 @@
                     if (!sankeyEl.value) return;
                     sankeyEl.value.innerHTML = '';
 
-                    const data = calculateSankey();
-                    if (!data) {
-                        sankeyEl.value.innerHTML = '<div class="flex h-full items-center justify-center text-sm text-slate-500">No sankey data yet.</div>';
-                        return;
+                    try {
+                        if (!window.d3 || !d3.sankey || !d3.sankeyLinkHorizontal) {
+                            throw new Error('Sankey library not available');
+                        }
+
+                        const data = calculateSankey();
+                        if (!data) {
+                            sankeyEl.value.innerHTML = '<div class="flex h-full items-center justify-center text-sm text-slate-500">No sankey data yet.</div>';
+                            return;
+                        }
+
+                        const container = sankeyEl.value;
+                        const width = Math.max(container.clientWidth || 0, 700);
+                        const height = 380;
+                        const marginTop = 10;
+                        const marginRight = 10;
+                        const marginBottom = 10;
+                        const marginLeft = 10;
+
+                        const svg = d3.select(container)
+                            .append('svg')
+                            .attr('viewBox', [0, 0, width, height])
+                            .attr('width', '100%')
+                            .attr('height', height)
+                            .style('max-width', '100%')
+                            .style('overflow', 'visible');
+
+                        const sankey = d3.sankey()
+                            .nodeWidth(18)
+                            .nodePadding(18)
+                            .extent([[marginLeft, marginTop], [width - marginRight, height - marginBottom]]);
+
+                        const graph = sankey({
+                            nodes: data.nodes.map((d) => ({ ...d })),
+                            links: data.links.map((d) => ({ ...d })),
+                        });
+
+                        svg.append('g')
+                            .selectAll('path')
+                            .data(graph.links)
+                            .join('path')
+                            .attr('d', d3.sankeyLinkHorizontal())
+                            .attr('fill', 'none')
+                            .attr('stroke', '#38bdf8')
+                            .attr('stroke-opacity', 0.28)
+                            .attr('stroke-width', (d) => Math.max(1, d.width))
+                            .append('title')
+                            .text((d) => `${d.source.name} → ${d.target.name}: ${formatCurrency(d.value)}`);
+
+                        const node = svg.append('g')
+                            .selectAll('g')
+                            .data(graph.nodes)
+                            .join('g');
+
+                        node.append('rect')
+                            .attr('x', (d) => d.x0)
+                            .attr('y', (d) => d.y0)
+                            .attr('height', (d) => Math.max(1, d.y1 - d.y0))
+                            .attr('width', (d) => d.x1 - d.x0)
+                            .attr('rx', 6)
+                            .attr('fill', (d) => d.name === 'Paycheck deposits' ? '#0f766e' : '#2563eb')
+                            .attr('fill-opacity', 0.9)
+                            .append('title')
+                            .text((d) => `${d.name}: ${formatCurrency(d.value)}`);
+
+                        node.append('text')
+                            .attr('x', (d) => d.x0 < width / 2 ? d.x1 + 8 : d.x0 - 8)
+                            .attr('y', (d) => (d.y0 + d.y1) / 2)
+                            .attr('dy', '0.35em')
+                            .attr('text-anchor', (d) => d.x0 < width / 2 ? 'start' : 'end')
+                            .attr('class', 'fill-slate-700 text-[12px]')
+                            .style('font-family', 'system-ui, sans-serif')
+                            .text((d) => `${d.name} (${formatCurrency(d.value)})`);
+                    } catch (err) {
+                        console.error('Sankey render failed:', err);
+                        sankeyEl.value.innerHTML = '<div class="flex h-full items-center justify-center rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Sankey chart unavailable right now. Your data is still loaded above.</div>';
                     }
-
-                    const container = sankeyEl.value;
-                    const width = Math.max(container.clientWidth || 0, 700);
-                    const height = 380;
-                    const marginTop = 10;
-                    const marginRight = 10;
-                    const marginBottom = 10;
-                    const marginLeft = 10;
-
-                    const svg = d3.select(container)
-                        .append('svg')
-                        .attr('viewBox', [0, 0, width, height])
-                        .attr('width', '100%')
-                        .attr('height', height)
-                        .style('max-width', '100%')
-                        .style('overflow', 'visible');
-
-                    const sankey = d3.sankey()
-                        .nodeWidth(18)
-                        .nodePadding(18)
-                        .extent([[marginLeft, marginTop], [width - marginRight, height - marginBottom]]);
-
-                    const graph = sankey({
-                        nodes: data.nodes.map((d) => ({ ...d })),
-                        links: data.links.map((d) => ({ ...d })),
-                    });
-
-                    svg.append('g')
-                        .selectAll('path')
-                        .data(graph.links)
-                        .join('path')
-                        .attr('d', d3.sankeyLinkHorizontal())
-                        .attr('fill', 'none')
-                        .attr('stroke', '#38bdf8')
-                        .attr('stroke-opacity', 0.28)
-                        .attr('stroke-width', (d) => Math.max(1, d.width))
-                        .append('title')
-                        .text((d) => `${d.source.name} → ${d.target.name}: ${formatCurrency(d.value)}`);
-
-                    const node = svg.append('g')
-                        .selectAll('g')
-                        .data(graph.nodes)
-                        .join('g');
-
-                    node.append('rect')
-                        .attr('x', (d) => d.x0)
-                        .attr('y', (d) => d.y0)
-                        .attr('height', (d) => Math.max(1, d.y1 - d.y0))
-                        .attr('width', (d) => d.x1 - d.x0)
-                        .attr('rx', 6)
-                        .attr('fill', (d) => d.name === 'Paycheck deposits' ? '#0f766e' : '#2563eb')
-                        .attr('fill-opacity', 0.9)
-                        .append('title')
-                        .text((d) => `${d.name}: ${formatCurrency(d.value)}`);
-
-                    node.append('text')
-                        .attr('x', (d) => d.x0 < width / 2 ? d.x1 + 8 : d.x0 - 8)
-                        .attr('y', (d) => (d.y0 + d.y1) / 2)
-                        .attr('dy', '0.35em')
-                        .attr('text-anchor', (d) => d.x0 < width / 2 ? 'start' : 'end')
-                        .attr('class', 'fill-slate-700 text-[12px]')
-                        .style('font-family', 'system-ui, sans-serif')
-                        .text((d) => `${d.name} (${formatCurrency(d.value)})`);
                 };
 
                 const formatCurrency = (value, currency = 'USD') => new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(parseFloat(value || 0));
