@@ -42,6 +42,9 @@
                 </div>
 
                 <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                    <div v-if="pinStatus.pin_required && pinStatus.session_active" class="inline-flex w-full items-center justify-center rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-xs font-medium text-sky-700 sm:w-auto">
+                        Auto relock in {{ relockCountdownText }}
+                    </div>
                     <button
                         v-if="pinStatus.pin_required && pinStatus.session_active"
                         @click="lockFinance"
@@ -506,13 +509,14 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted, nextTick, computed, watch } = Vue;
+        const { createApp, ref, onMounted, onUnmounted, nextTick, computed, watch } = Vue;
 
         createApp({
             setup() {
                 const PIN_SESSION_KEY = 'finance-dashboard-session-token';
                 const view = ref('dashboard');
                 const drawerOpen = ref(false);
+                const nowTick = ref(Date.now());
                 const accounts = ref([]);
                 const transactions = ref([]);
                 const loading = ref(true);
@@ -547,6 +551,7 @@
                 const savingPinSettings = ref(false);
                 const lastActivityAt = ref(Date.now());
                 let idleMonitor = null;
+                let clockInterval = null;
                 const categoryRulesText = ref('');
                 const categoryRulesMessage = ref('');
                 const categoryRulesError = ref(false);
@@ -577,6 +582,20 @@
                     last_sync_at: null,
                 });
                 const sankeyEl = ref(null);
+
+                const relockRemainingSeconds = computed(() => {
+                    if (!pinStatus.value.pin_required || !pinStatus.value.session_active) return 0;
+                    const idleLimitMs = Math.max(1, Number(pinStatus.value.idle_timeout_minutes || pinSettingsIdleTimeout.value || 10)) * 60 * 1000;
+                    const remaining = Math.ceil((lastActivityAt.value + idleLimitMs - nowTick.value) / 1000);
+                    return Math.max(0, remaining);
+                });
+
+                const relockCountdownText = computed(() => {
+                    const total = relockRemainingSeconds.value;
+                    const minutes = Math.floor(total / 60);
+                    const seconds = total % 60;
+                    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                });
 
                 const setSessionToken = (token) => {
                     pinSessionToken.value = token || '';
@@ -648,6 +667,8 @@
                     if (auth && pinSessionToken.value) {
                         headers.set('X-Finance-Session', pinSessionToken.value);
                     }
+
+                    if (auth) recordActivity();
 
                     const res = await fetch(getApiUrl(endpoint), { ...options, headers });
                     if ((res.status === 401 || res.status === 403) && auth) {
@@ -1233,6 +1254,9 @@
                     window.addEventListener('pointerdown', recordActivity, { passive: true });
                     window.addEventListener('keydown', recordActivity, { passive: true });
                     window.addEventListener('touchstart', recordActivity, { passive: true });
+                    clockInterval = window.setInterval(() => {
+                        nowTick.value = Date.now();
+                    }, 1000);
 
                     await refreshPinStatus();
                     if (!pinStatus.value.locked) {
@@ -1241,6 +1265,11 @@
                         loading.value = false;
                     }
                     window.addEventListener('resize', () => renderSankey(), { passive: true });
+                });
+
+                onUnmounted(() => {
+                    if (idleMonitor) clearInterval(idleMonitor);
+                    if (clockInterval) clearInterval(clockInterval);
                 });
 
                 return {
@@ -1264,6 +1293,7 @@
                     categoryRulesError,
                     savingCategoryRules,
                     categoryOptions,
+                    relockCountdownText,
                     status,
                     sankeyEl,
                     hasSankeyData,
