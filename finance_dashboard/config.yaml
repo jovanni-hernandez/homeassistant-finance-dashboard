@@ -1,6 +1,6 @@
 name: Personal Finance Dashboard
 description: Custom Vue/FastAPI dashboard utilizing SimpleFIN with SQLite & SQLAlchemy ORM
-version: 1.6.0
+version: 1.7.0
 slug: custom_finance
 init: false
 ingress: true
