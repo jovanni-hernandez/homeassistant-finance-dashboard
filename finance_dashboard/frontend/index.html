@@ -407,30 +407,64 @@
                                 :key="index"
                                 class="rounded-2xl border border-slate-200 bg-slate-50 p-4"
                             >
-                                <div class="flex flex-col gap-3 lg:flex-row lg:items-end">
-                                    <label class="block flex-1">
+                                <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                    <div class="flex items-center gap-3">
+                                        <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                                            <input
+                                                :checked="rule.enabled !== false"
+                                                @change="toggleRuleEnabled(index)"
+                                                type="checkbox"
+                                                class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                                            />
+                                            Enabled
+                                        </label>
+                                    </div>
+
+                                    <button
+                                        @click="removeRuleRow(index)"
+                                        class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100"
+                                    >
+                                        Remove
+                                    </button>
+                                </div>
+
+                                <div class="mt-3 grid gap-3 lg:grid-cols-3">
+                                    <label class="block">
                                         <span class="block text-sm font-medium text-slate-700">Category</span>
-                                        <select v-model="categoryRuleRows[index].category" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+                                        <select v-model="categoryRuleRows[index].category" @change="applyRuleRowChange(index, { category: $event.target.value })" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
                                             <option v-for="option in categoryDropdownOptions" :key="option" :value="option">{{ option }}</option>
                                         </select>
                                     </label>
 
-                                    <label class="block flex-[2]">
-                                        <span class="block text-sm font-medium text-slate-700">Patterns</span>
-                                        <input
-                                            v-model="categoryRuleRows[index].patterns"
-                                            type="text"
-                                            placeholder="amazon, prime, whole foods"
-                                            class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-                                        />
+                                    <label class="block lg:col-span-2">
+                                        <span class="block text-sm font-medium text-slate-700">Add pattern</span>
+                                        <div class="mt-2 flex gap-2">
+                                            <input
+                                                v-model="categoryRuleRows[index].patternDraft"
+                                                @keydown.enter.prevent="addPatternToRule(index)"
+                                                type="text"
+                                                placeholder="amazon, prime, whole foods"
+                                                class="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                                            />
+                                            <button
+                                                @click="addPatternToRule(index)"
+                                                class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                                            >
+                                                Add
+                                            </button>
+                                        </div>
                                     </label>
+                                </div>
 
-                                    <button
-                                        @click="removeRuleRow(index)"
-                                        class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700 hover:bg-rose-100"
+                                <div class="mt-3 flex flex-wrap gap-2">
+                                    <span
+                                        v-for="(pattern, patternIndex) in rule.patterns"
+                                        :key="`${index}-${patternIndex}-${pattern}`"
+                                        class="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white px-3 py-1 text-sm text-slate-700"
                                     >
-                                        Remove
-                                    </button>
+                                        {{ pattern }}
+                                        <button @click="removePatternFromRule(index, patternIndex)" class="text-sky-600 hover:text-sky-800" aria-label="Remove pattern">×</button>
+                                    </span>
                                 </div>
                             </div>
 
@@ -439,6 +473,25 @@
                                     Add rule
                                 </button>
                                 <div class="text-sm text-slate-500">Patterns can be comma or newline separated.</div>
+                            </div>
+
+                            <div class="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                        <h4 class="text-sm font-semibold text-slate-800">Preview</h4>
+                                        <p class="text-xs text-slate-500">Matches are based on the current transactions loaded in the app.</p>
+                                    </div>
+                                    <div class="text-xs text-slate-500">Unmatched: {{ rulePreviewRows.unmatchedCount }}</div>
+                                </div>
+                                <div class="mt-3 space-y-2">
+                                    <div v-for="(item, index) in rulePreviewRows.items" :key="`${item.category}-${index}`" class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                                        <div class="flex items-center justify-between gap-3">
+                                            <div class="font-medium text-slate-800">{{ item.category }}</div>
+                                            <div class="text-slate-500">{{ item.count }} match{{ item.count === 1 ? '' : 'es' }}</div>
+                                        </div>
+                                        <div v-if="item.examples.length" class="mt-2 text-xs text-slate-600">Examples: {{ item.examples.join(' · ') }}</div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -726,7 +779,7 @@
                 });
                 const sankeyEl = ref(null);
 
-                const defaultRuleRow = () => ({ category: 'Groceries', patterns: '' });
+                const defaultRuleRow = () => ({ enabled: true, category: 'Groceries', patterns: [], patternDraft: '' });
 
                 const splitPatternText = (value) => (value || '')
                     .split(/[\n,]/)
@@ -736,8 +789,11 @@
                 const serializeRuleRows = (rows) => {
                     const normalized = [];
                     (rows || []).forEach((row) => {
+                        if (row?.enabled === false) return;
                         const category = String(row?.category || '').trim();
-                        const patterns = splitPatternText(row?.patterns);
+                        const patterns = Array.isArray(row?.patterns)
+                            ? row.patterns.map((item) => String(item || '').trim()).filter(Boolean)
+                            : splitPatternText(row?.patterns);
                         if (!category || !patterns.length) return;
                         normalized.push({
                             category,
@@ -753,8 +809,12 @@
                         if (!Array.isArray(parsed) || !parsed.length) return [defaultRuleRow()];
                         const rows = parsed
                             .map((item) => ({
+                                enabled: item?.enabled !== false,
                                 category: String(item?.category || 'Groceries').trim() || 'Groceries',
-                                patterns: Array.isArray(item?.patterns) ? item.patterns.join(', ') : '',
+                                patterns: Array.isArray(item?.patterns)
+                                    ? Array.from(new Set(item.patterns.map((pattern) => String(pattern || '').trim()).filter(Boolean)))
+                                    : splitPatternText(item?.patterns),
+                                patternDraft: '',
                             }))
                             .filter((row) => row.category || row.patterns);
                         return rows.length ? rows : [defaultRuleRow()];
@@ -775,6 +835,43 @@
                     categoryRuleRows.value = [...categoryRuleRows.value, defaultRuleRow()];
                 };
 
+                const toggleRuleEnabled = (index) => {
+                    const next = [...categoryRuleRows.value];
+                    next[index] = { ...next[index], enabled: !next[index]?.enabled };
+                    categoryRuleRows.value = next;
+                    syncRulesJsonFromBuilder();
+                };
+
+                const addPatternToRule = (index) => {
+                    const next = [...categoryRuleRows.value];
+                    const row = { ...next[index] };
+                    const incoming = splitPatternText(row.patternDraft);
+                    row.patterns = Array.isArray(row.patterns) ? [...row.patterns] : splitPatternText(row.patterns);
+                    incoming.forEach((pattern) => {
+                        if (!row.patterns.includes(pattern)) row.patterns.push(pattern);
+                    });
+                    row.patternDraft = '';
+                    next[index] = row;
+                    categoryRuleRows.value = next;
+                    syncRulesJsonFromBuilder();
+                };
+
+                const removePatternFromRule = (rowIndex, patternIndex) => {
+                    const next = [...categoryRuleRows.value];
+                    const row = { ...next[rowIndex] };
+                    row.patterns = (Array.isArray(row.patterns) ? row.patterns : splitPatternText(row.patterns)).filter((_, idx) => idx !== patternIndex);
+                    next[rowIndex] = row;
+                    categoryRuleRows.value = next;
+                    syncRulesJsonFromBuilder();
+                };
+
+                const applyRuleRowChange = (index, partial) => {
+                    const next = [...categoryRuleRows.value];
+                    next[index] = { ...next[index], ...partial };
+                    categoryRuleRows.value = next;
+                    syncRulesJsonFromBuilder();
+                };
+
                 const removeRuleRow = (index) => {
                     const next = categoryRuleRows.value.filter((_, idx) => idx !== index);
                     categoryRuleRows.value = next.length ? next : [defaultRuleRow()];
@@ -789,6 +886,44 @@
                     }
                     categoryRulesAdvanced.value = !categoryRulesAdvanced.value;
                 };
+
+                const currentRuleRows = computed(() => {
+                    if (categoryRulesAdvanced.value) {
+                        return rulesJsonToRows(categoryRulesText.value);
+                    }
+                    return serializeRuleRows(categoryRuleRows.value).map((rule) => ({
+                        enabled: true,
+                        category: rule.category,
+                        patterns: rule.patterns,
+                    }));
+                });
+
+                const rulePreviewRows = computed(() => {
+                    const rules = currentRuleRows.value.filter((rule) => rule.enabled !== false);
+                    const txs = transactions.value || [];
+                    const matchedIds = new Set();
+
+                    const matchesRule = (tx, rule) => {
+                        const haystack = `${tx.payee || ''} ${tx.description || ''}`.toLowerCase();
+                        return (rule.patterns || []).some((pattern) => haystack.includes(String(pattern || '').toLowerCase()));
+                    };
+
+                    const items = rules.map((rule) => {
+                        const matched = txs.filter((tx) => matchesRule(tx, rule));
+                        matched.forEach((tx) => matchedIds.add(tx.id));
+                        return {
+                            category: rule.category,
+                            count: matched.length,
+                            examples: matched.slice(0, 3).map((tx) => tx.payee || tx.description || tx.account_name || tx.id),
+                            patterns: rule.patterns || [],
+                        };
+                    });
+
+                    return {
+                        items,
+                        unmatchedCount: txs.filter((tx) => !matchedIds.has(tx.id)).length,
+                    };
+                });
 
                 const relockRemainingSeconds = computed(() => {
                     if (!pinStatus.value.pin_required || !pinStatus.value.session_active) return 0;
@@ -1605,6 +1740,7 @@
                     categoryRulesAdvanced,
                     categoryRuleRows,
                     categoryDropdownOptions,
+                    rulePreviewRows,
                     categoryDefaultsMessage,
                     categoryDefaultsError,
                     generatingCategoryDefaults,
@@ -1629,6 +1765,10 @@
                     toggleCategoryRulesMode,
                     addRuleRow,
                     removeRuleRow,
+                    toggleRuleEnabled,
+                    addPatternToRule,
+                    removePatternFromRule,
+                    applyRuleRowChange,
                     saveCategoryRules,
                     saveAiSettings,
                     buildCategoryDefaults,
