@@ -1,14 +1,18 @@
 import base64
-import requests
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
+from urllib.parse import urlsplit, urlunsplit
+
+import requests
+
 from database import (
-    save_simplefin_data,
-    get_setting,
-    set_setting,
     get_account_count,
+    get_setting,
     get_transaction_count,
+    save_simplefin_data,
+    set_setting,
 )
 
 logger = logging.getLogger("finance_dashboard")
@@ -56,8 +60,8 @@ def set_simplefin_token(token: str):
 def claim_simplefin_setup_token(setup_token: str):
     """
     Claim a SimpleFIN setup token.
-    A SimpleFIN setup token is a base64 encoded claim URL.
-    Making a POST request to that claim URL exchanges it for the actual Access Token (also base64 encoded URL).
+    The setup token is a base64 encoded claim URL.
+    A POST to that URL returns the persistent access URL.
     """
     try:
         setup_token = setup_token.strip()
@@ -67,15 +71,18 @@ def claim_simplefin_setup_token(setup_token: str):
         claim_url = base64.b64decode(setup_token).decode("utf-8")
         logger.info(f"Attempting to claim SimpleFIN token from: {claim_url}")
 
-        response = requests.post(claim_url, timeout=30)
+        response = requests.post(claim_url, headers={"Content-Length": "0"}, timeout=30)
         response.raise_for_status()
 
         access_url = response.text.strip()
-        logger.info("Successfully received SimpleFIN access URL.")
+        if not access_url:
+            raise ValueError("SimpleFIN did not return an access URL.")
 
+        logger.info("Successfully received SimpleFIN access URL.")
         access_token = base64.b64encode(access_url.encode("utf-8")).decode("utf-8")
         set_simplefin_token(access_token)
         logger.info("SimpleFIN access token saved.")
+        _record_sync_state("success", "SimpleFIN token claimed successfully")
         return {"status": "success", "message": "Successfully claimed SimpleFIN token"}
     except Exception as e:
         logger.error(f"Failed to claim SimpleFIN setup token: {e}")
@@ -96,19 +103,96 @@ def get_dashboard_status():
     }
 
 
+def _decode_access_token_to_request(token: str):
+    access_url = base64.b64decode(token).decode("utf-8")
+    parsed = urlsplit(access_url)
+
+    if not parsed.scheme or not parsed.hostname:
+        raise ValueError("Invalid SimpleFIN access URL.")
+
+    username = parsed.username or ""
+    password = parsed.password or ""
+    netloc = parsed.hostname
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+
+    base_url = urlunsplit((parsed.scheme, netloc, "", "", ""))
+    return base_url, (username, password)
+
+
+def _normalize_simplefin_payload(data: dict):
+    accounts = []
+    for account in data.get("accounts", []):
+        account_id = str(account.get("id") or account.get("account") or account.get("name") or hashlib.sha256(repr(account).encode()).hexdigest()[:16])
+        org_raw = account.get("org", {})
+        if isinstance(org_raw, dict):
+            org = org_raw.get("name") or org_raw.get("id") or "Unknown"
+        else:
+            org = str(org_raw or "Unknown")
+
+        normalized_transactions = []
+        for tx in account.get("transactions", []):
+            posted = tx.get("posted") or tx.get("date")
+            description = tx.get("description") or tx.get("memo") or tx.get("name") or ""
+            amount = tx.get("amount", "0.00")
+            payee = tx.get("payee") or tx.get("merchant") or tx.get("name") or description
+            tx_id = str(
+                tx.get("id")
+                or tx.get("transaction_id")
+                or hashlib.sha256(f"{account_id}:{posted}:{amount}:{description}".encode()).hexdigest()[:24]
+            )
+
+            normalized_transactions.append(
+                {
+                    "id": tx_id,
+                    "date": posted,
+                    "amount": str(amount),
+                    "payee": payee,
+                    "description": description,
+                    "pending": bool(tx.get("pending", False)),
+                }
+            )
+
+        accounts.append(
+            {
+                "id": account_id,
+                "org": {"name": org},
+                "name": account.get("name") or account.get("title") or "Account",
+                "balance": str(account.get("balance", "0.00")),
+                "currency": account.get("currency", "USD"),
+                "transactions": normalized_transactions,
+            }
+        )
+
+    return {"accounts": accounts}
+
+
 def fetch_and_sync_simplefin():
     """Fetch normalized financial data from SimpleFIN and persist to DB."""
     token = get_simplefin_token()
 
     if token and token != "":
         try:
-            decoded_url = base64.b64decode(token).decode("utf-8")
-            logger.info(f"Fetching accounts from SimpleFIN API: {decoded_url}/accounts")
-            response = requests.get(f"{decoded_url}/accounts", timeout=30)
+            base_url, auth = _decode_access_token_to_request(token)
+            accounts_url = f"{base_url}/accounts"
+            logger.info(f"Fetching accounts from SimpleFIN API: {accounts_url}?version=2")
+
+            response = requests.get(accounts_url, auth=auth, params={"version": "2"}, timeout=30)
             response.raise_for_status()
-            data = response.json()
-            save_simplefin_data(data)
+            payload = response.json()
+
+            warnings = []
+            for key in ("errlist", "errors"):
+                if payload.get(key):
+                    warnings.extend(payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)])
+
+            normalized = _normalize_simplefin_payload(payload)
+            save_simplefin_data(normalized)
+
             message = "Synced successfully from SimpleFIN"
+            if warnings:
+                message = f"Synced with warnings: {warnings[0]}"
+
             _record_sync_state("success", message)
             logger.info("SimpleFIN data synced and saved to DB.")
             return {
@@ -116,6 +200,7 @@ def fetch_and_sync_simplefin():
                 "message": message,
                 "account_count": get_account_count(),
                 "transaction_count": get_transaction_count(),
+                "warnings": warnings,
             }
         except Exception as e:
             logger.error(f"Error fetching SimpleFIN data: {e}")
