@@ -372,6 +372,12 @@
                             </div>
                             <div class="flex flex-wrap gap-2">
                                 <button
+                                    @click="toggleCategoryRulesMode"
+                                    class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                                >
+                                    {{ categoryRulesAdvanced ? 'Use builder' : 'Use JSON' }}
+                                </button>
+                                <button
                                     @click="buildCategoryDefaults"
                                     :disabled="generatingCategoryDefaults"
                                     class="inline-flex items-center justify-center rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 shadow-sm hover:bg-sky-100 disabled:opacity-60"
@@ -395,7 +401,49 @@
                             </div>
                         </div>
 
+                        <div v-if="!categoryRulesAdvanced" class="mt-4 space-y-3">
+                            <div
+                                v-for="(rule, index) in categoryRuleRows"
+                                :key="index"
+                                class="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                            >
+                                <div class="flex flex-col gap-3 lg:flex-row lg:items-end">
+                                    <label class="block flex-1">
+                                        <span class="block text-sm font-medium text-slate-700">Category</span>
+                                        <select v-model="categoryRuleRows[index].category" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+                                            <option v-for="option in categoryDropdownOptions" :key="option" :value="option">{{ option }}</option>
+                                        </select>
+                                    </label>
+
+                                    <label class="block flex-[2]">
+                                        <span class="block text-sm font-medium text-slate-700">Patterns</span>
+                                        <input
+                                            v-model="categoryRuleRows[index].patterns"
+                                            type="text"
+                                            placeholder="amazon, prime, whole foods"
+                                            class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                                        />
+                                    </label>
+
+                                    <button
+                                        @click="removeRuleRow(index)"
+                                        class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700 hover:bg-rose-100"
+                                    >
+                                        Remove
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-wrap gap-3">
+                                <button @click="addRuleRow" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+                                    Add rule
+                                </button>
+                                <div class="text-sm text-slate-500">Patterns can be comma or newline separated.</div>
+                            </div>
+                        </div>
+
                         <textarea
+                            v-else
                             v-model="categoryRulesText"
                             rows="12"
                             class="mt-4 w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 font-mono text-xs outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
@@ -635,6 +683,8 @@
                 const categoryRulesMessage = ref('');
                 const categoryRulesError = ref(false);
                 const savingCategoryRules = ref(false);
+                const categoryRulesAdvanced = ref(false);
+                const categoryRuleRows = ref([]);
                 const categoryDefaultsMessage = ref('');
                 const categoryDefaultsError = ref(false);
                 const generatingCategoryDefaults = ref(false);
@@ -665,6 +715,7 @@
                     'Fees',
                     'Other',
                 ];
+                const categoryDropdownOptions = categoryOptions.filter((option) => option !== 'Uncategorized');
                 const status = ref({
                     connected: false,
                     account_count: 0,
@@ -674,6 +725,70 @@
                     last_sync_at: null,
                 });
                 const sankeyEl = ref(null);
+
+                const defaultRuleRow = () => ({ category: 'Groceries', patterns: '' });
+
+                const splitPatternText = (value) => (value || '')
+                    .split(/[\n,]/)
+                    .map((item) => item.trim())
+                    .filter(Boolean);
+
+                const serializeRuleRows = (rows) => {
+                    const normalized = [];
+                    (rows || []).forEach((row) => {
+                        const category = String(row?.category || '').trim();
+                        const patterns = splitPatternText(row?.patterns);
+                        if (!category || !patterns.length) return;
+                        normalized.push({
+                            category,
+                            patterns: Array.from(new Set(patterns)),
+                        });
+                    });
+                    return normalized;
+                };
+
+                const rulesJsonToRows = (rulesJson) => {
+                    try {
+                        const parsed = JSON.parse(rulesJson || '[]');
+                        if (!Array.isArray(parsed) || !parsed.length) return [defaultRuleRow()];
+                        const rows = parsed
+                            .map((item) => ({
+                                category: String(item?.category || 'Groceries').trim() || 'Groceries',
+                                patterns: Array.isArray(item?.patterns) ? item.patterns.join(', ') : '',
+                            }))
+                            .filter((row) => row.category || row.patterns);
+                        return rows.length ? rows : [defaultRuleRow()];
+                    } catch (err) {
+                        return [defaultRuleRow()];
+                    }
+                };
+
+                const syncRulesBuilderFromJson = (rulesJson) => {
+                    categoryRuleRows.value = rulesJsonToRows(rulesJson);
+                };
+
+                const syncRulesJsonFromBuilder = () => {
+                    categoryRulesText.value = JSON.stringify(serializeRuleRows(categoryRuleRows.value), null, 2);
+                };
+
+                const addRuleRow = () => {
+                    categoryRuleRows.value = [...categoryRuleRows.value, defaultRuleRow()];
+                };
+
+                const removeRuleRow = (index) => {
+                    const next = categoryRuleRows.value.filter((_, idx) => idx !== index);
+                    categoryRuleRows.value = next.length ? next : [defaultRuleRow()];
+                    syncRulesJsonFromBuilder();
+                };
+
+                const toggleCategoryRulesMode = () => {
+                    if (categoryRulesAdvanced.value) {
+                        categoryRuleRows.value = rulesJsonToRows(categoryRulesText.value);
+                    } else {
+                        syncRulesJsonFromBuilder();
+                    }
+                    categoryRulesAdvanced.value = !categoryRulesAdvanced.value;
+                };
 
                 const relockRemainingSeconds = computed(() => {
                     if (!pinStatus.value.pin_required || !pinStatus.value.session_active) return 0;
@@ -971,6 +1086,7 @@
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok) throw new Error(data.detail || data.message || `Failed to build AI defaults (${res.status})`);
                         categoryRulesText.value = data.rules_json || '[]';
+                        syncRulesBuilderFromJson(categoryRulesText.value);
                         categoryDefaultsMessage.value = `Built ${data.proposals?.length || 0} AI rule suggestions from ${data.transaction_count || 0} transactions.`;
                         categoryDefaultsError.value = false;
                     } catch (err) {
@@ -1087,12 +1203,14 @@
                             { category: 'Groceries', patterns: ['grocery', 'supermarket'] },
                             { category: 'Dining', patterns: ['coffee', 'restaurant'] },
                         ], null, 2);
+                        syncRulesBuilderFromJson(categoryRulesText.value);
                     } catch (err) {
                         console.warn(err);
                         categoryRulesText.value = JSON.stringify([
                             { category: 'Groceries', patterns: ['grocery', 'supermarket'] },
                             { category: 'Dining', patterns: ['coffee', 'restaurant'] },
                         ], null, 2);
+                        syncRulesBuilderFromJson(categoryRulesText.value);
                     }
                 };
 
@@ -1101,6 +1219,9 @@
                     categoryRulesMessage.value = '';
                     categoryRulesError.value = false;
                     try {
+                        if (!categoryRulesAdvanced.value) {
+                            syncRulesJsonFromBuilder();
+                        }
                         const res = await apiFetch('/api/category-rules', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -1110,6 +1231,7 @@
                         if (!res.ok) throw new Error(data.detail || data.message || `Failed to save rules (${res.status})`);
                         categoryRulesMessage.value = data.message || 'Category rules saved.';
                         categoryRulesError.value = false;
+                        syncRulesBuilderFromJson(categoryRulesText.value);
                         await Promise.all([fetchStatus(), fetchData()]);
                     } catch (err) {
                         categoryRulesError.value = true;
@@ -1480,6 +1602,9 @@
                     categoryRulesMessage,
                     categoryRulesError,
                     savingCategoryRules,
+                    categoryRulesAdvanced,
+                    categoryRuleRows,
+                    categoryDropdownOptions,
                     categoryDefaultsMessage,
                     categoryDefaultsError,
                     generatingCategoryDefaults,
@@ -1501,6 +1626,9 @@
                     setView,
                     syncData,
                     claimToken,
+                    toggleCategoryRulesMode,
+                    addRuleRow,
+                    removeRuleRow,
                     saveCategoryRules,
                     saveAiSettings,
                     buildCategoryDefaults,
