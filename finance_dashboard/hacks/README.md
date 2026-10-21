@@ -25,4 +25,4 @@ Home Assistant's add-on store refresh is the equivalent of a repo metadata check
 ./hacks/refresh-marketplace.sh
 ```
 
-This mirrors the Home Assistant marketplace refresh button by targeting the add-on repository metadata refresh step.
+This mirrors the Home Assistant marketplace refresh button and retries transient failures with exponential backoff. If the shell is not authenticated, it will stop immediately and tell you to log in.
