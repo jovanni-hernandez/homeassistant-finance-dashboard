@@ -1,7 +1,10 @@
 import base64
 import requests
 import json
-from database import save_simplefin_data, get_stored_accounts, get_stored_transactions
+import logging
+from database import save_simplefin_data
+
+logger = logging.getLogger("finance_dashboard")
 
 OPTIONS_PATH = "/data/options.json"
 
@@ -18,18 +21,18 @@ def fetch_and_sync_simplefin():
     token = get_simplefin_token()
     
     if token and token != "":
-        decoded_url = base64.b64decode(token).decode('utf-8')
         try:
-            response = requests.get(f"{decoded_url}/accounts")
+            decoded_url = base64.b64decode(token).decode('utf-8')
+            response = requests.get(f"{decoded_url}/accounts", timeout=30)
             response.raise_for_status()
             data = response.json()
             save_simplefin_data(data)
             return {"status": "success", "message": "Synced successfully from SimpleFIN"}
-        except requests.RequestException as e:
-            print(f"Error fetching SimpleFIN data: {e}")
+        except Exception as e:
+            logger.error(f"Error fetching SimpleFIN data: {e}")
             return {"status": "error", "message": str(e)}
     
-    # If no token, seed/return mock data for development
+    # If no token, seed mock data for development
     mock_data = {
         "accounts": [
             {

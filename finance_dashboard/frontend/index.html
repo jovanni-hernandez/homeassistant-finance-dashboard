@@ -10,15 +10,21 @@
 <body class="bg-gray-100 p-6">
     <div id="app" class="max-w-6xl mx-auto">
         <div class="flex justify-between items-center mb-6">
-            <h1 class="text-3xl font-bold text-gray-800">Financial Dashboard</h1>
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Financial Dashboard</h1>
+                <p class="text-sm text-gray-500 mt-1">Primary Source: SQLite / SQLAlchemy Database</p>
+            </div>
             <button @click="syncData" :disabled="syncing" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow font-medium transition flex items-center">
                 <span v-if="syncing">Syncing...</span>
                 <span v-else>Sync Upstream</span>
             </button>
         </div>
         
-        <div v-if="loading" class="text-gray-500">Loading financial data...</div>
-        <div v-else-if="error" class="text-red-500 mb-6">{{ error }}</div>
+        <div v-if="loading" class="text-gray-500 py-8">Loading financial data from database...</div>
+        <div v-else-if="error" class="bg-red-50 border-l-4 border-red-500 p-4 mb-6 text-red-700">
+            <p class="font-bold">Error</p>
+            <p>{{ error }}</p>
+        </div>
         
         <div v-else>
             <!-- Net Worth & Accounts -->
@@ -78,20 +84,27 @@
                 const syncing = ref(false);
                 const error = ref(null);
 
+                const getApiUrl = (endpoint) => {
+                    return window.location.pathname.replace(/\/$/, '') + endpoint;
+                };
+
                 const fetchData = async () => {
                     try {
                         const [accRes, txRes] = await Promise.all([
-                            fetch('/api/accounts', { headers: { 'Accept': 'application/json' } }),
-                            fetch('/api/transactions', { headers: { 'Accept': 'application/json' } })
+                            fetch(getApiUrl('/api/accounts'), { headers: { 'Accept': 'application/json' } }),
+                            fetch(getApiUrl('/api/transactions'), { headers: { 'Accept': 'application/json' } })
                         ]);
                         
-                        if (!accRes.ok || !txRes.ok) throw new Error('Failed to fetch data from database');
+                        if (!accRes.ok || !txRes.ok) {
+                            throw new Error(`Failed to fetch from DB: Accounts status ${accRes.status}, Transactions status ${txRes.status}`);
+                        }
                         
                         const accData = await accRes.json();
                         const txData = await txRes.json();
                         
                         accounts.value = accData.accounts || [];
                         transactions.value = txData.transactions || [];
+                        error.value = null;
                     } catch (err) {
                         error.value = err.message;
                     } finally {
@@ -102,8 +115,8 @@
                 const syncData = async () => {
                     syncing.value = true;
                     try {
-                        const res = await fetch('/api/sync', { method: 'POST' });
-                        if (!res.ok) throw new Error('Sync failed');
+                        const res = await fetch(getApiUrl('/api/sync'), { method: 'POST' });
+                        if (!res.ok) throw new Error('Sync failed with status ' + res.status);
                         await fetchData();
                     } catch (err) {
                         error.value = err.message;
@@ -116,7 +129,7 @@
                     return new Intl.NumberFormat('en-US', {
                         style: 'currency',
                         currency: currency
-                    }).format(parseFloat(value));
+                    }).format(parseFloat(value || 0));
                 };
 
                 const formatDate = (timestamp) => {
