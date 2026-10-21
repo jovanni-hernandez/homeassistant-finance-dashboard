@@ -4,15 +4,27 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || command -v python || true)}"
+if [ -z "$PYTHON_BIN" ]; then
+  echo "Python interpreter not found" >&2
+  exit 1
+fi
+
+NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+if [ -z "$NODE_BIN" ]; then
+  echo "Node interpreter not found" >&2
+  exit 1
+fi
+
 echo "== Finance Dashboard bootstrap =="
-echo "Python: $(python --version)"
-echo "Node: $(node --version)"
+echo "Python: $($PYTHON_BIN --version)"
+echo "Node: $($NODE_BIN --version)"
 
 echo "-- Checking backend Python syntax --"
-python -m py_compile backend/*.py
+$PYTHON_BIN -m py_compile backend/*.py
 
 echo "-- Checking frontend JavaScript syntax --"
-python3 - <<'PY'
+$PYTHON_BIN - <<'PY'
 from pathlib import Path
 import re
 

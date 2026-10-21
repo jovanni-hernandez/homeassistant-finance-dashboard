@@ -6,7 +6,7 @@
       "version": "20"
     }
   },
-  "postCreateCommand": "python -m pip install --upgrade pip && pip install -r backend/requirements.txt",
+  "postCreateCommand": "python3 -m pip install --upgrade pip && python3 -m pip install -r backend/requirements.txt",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -14,7 +14,7 @@
         "esbenp.prettier-vscode"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.defaultInterpreterPath": "/usr/local/bin/python3",
         "python.analysis.typeCheckingMode": "basic"
       }
     }

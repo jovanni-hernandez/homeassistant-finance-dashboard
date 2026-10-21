@@ -13,7 +13,7 @@
     {
       "label": "Finance: Run backend",
       "type": "shell",
-      "command": "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload",
+      "command": "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -23,7 +23,7 @@
     {
       "label": "Finance: Check backend Python",
       "type": "shell",
-      "command": "python -m py_compile backend/*.py",
+      "command": "python3 -m py_compile backend/*.py",
       "options": {
         "cwd": "${workspaceFolder}"
       },
