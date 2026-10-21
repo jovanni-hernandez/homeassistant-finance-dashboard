@@ -394,6 +394,34 @@
                     }
                 };
 
+                const claimToken = async () => {
+                    if (!setupTokenInput.value.trim()) return;
+                    claiming.value = true;
+                    syncMessage.value = '';
+                    syncError.value = false;
+                    try {
+                        const res = await fetch(getApiUrl('/api/simplefin/claim-token'), {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify({ setup_token: setupTokenInput.value.trim() }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to claim token (${res.status})`);
+                        syncMessage.value = data.message || 'SimpleFIN connected successfully.';
+                        syncError.value = false;
+                        setupTokenInput.value = '';
+                        await Promise.all([fetchStatus(), fetchData()]);
+                        await nextTick();
+                        renderSankey();
+                        view.value = 'dashboard';
+                    } catch (err) {
+                        syncError.value = true;
+                        syncMessage.value = err.message;
+                    } finally {
+                        claiming.value = false;
+                    }
+                };
+
                 const normalizeLabel = (text) => (text || '').toLowerCase();
 
                 const categorizeExpense = (tx) => {
