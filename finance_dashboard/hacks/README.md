@@ -14,9 +14,12 @@ What it does:
 3. opens the frontend in headless Chromium
 4. captures a screenshot and checks for runtime exceptions
 5. retries transient browser failures with exponential backoff
-6. runs a Selenium-backed browser validation pass against the critical dashboard sections and recurring-payments view
-7. rejects blank/near-blank screenshots with a visual-content check
-8. fails if the boot/fallback screen never disappears
+6. runs Selenium against the real FastAPI app with an isolated SQLite database (or `FINANCE_DASHBOARD_URL` when set)
+7. checks the critical dashboard sections and recurring-payments view
+8. rejects blank/near-blank screenshots with a visual-content check
+9. fails if the boot/fallback screen never disappears, Vue emits render warnings, or browser requests fail
+
+The Selenium helper defaults to the deployed app at `http://homeassistant:8000/` over Home Assistant's internal network. Set `FINANCE_DASHBOARD_URL` to another directly reachable app URL to override it. `FINANCE_DASHBOARD_URL=local` runs the real FastAPI app with a disposable SQLite database as a pre-publish check; it is not the deployed-app acceptance test.
 
 ## Manual HA refresh
 
@@ -37,7 +40,7 @@ This mirrors the Home Assistant marketplace refresh button and retries transient
 ./hacks/release.sh
 ```
 
-This runs the full release flow: certify, commit/push, refresh marketplace metadata, and wait for the version sync.
+This runs the full release flow: local real-backend preflight, commit/push, refresh marketplace metadata, update with `backup: false`, then Selenium against the deployed add-on over the HA internal network.
 It requires `HA_URL` and `HA_TOKEN`; with those set, it also triggers the Home Assistant add-on update and polls it to completion with `backup: false`.
 
 ## Dev launcher add-on

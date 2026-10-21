@@ -4,10 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Finance Dashboard</title>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
+    <link rel="icon" href="data:,">
+    <base id="finance-app-base" href="./">
+    <script>
+        const financeBasePath = window.location.pathname.endsWith('/')
+            ? window.location.pathname
+            : `${window.location.pathname}/`;
+        document.getElementById('finance-app-base').href = financeBasePath;
+    </script>
+    <script src="./vendor/vue.global.prod.js?v=2.2.35"></script>
+    <script src="./vendor/tailwindcss.browser.js?v=2.2.35"></script>
+    <script src="./vendor/d3.min.js?v=2.2.35"></script>
+    <script src="./vendor/d3-sankey.min.js?v=2.2.35"></script>
 </head>
 <body class="bg-slate-100 text-slate-900">
     <div id="boot-screen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 px-4 text-slate-100">
@@ -354,7 +362,7 @@
                     </div>
 
                     <div class="grid gap-6 lg:grid-cols-2">
-                        <div v-if="recurringShowSubscriptions" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div v-if="recurringShowSubscriptions" data-testid="recurring-subscriptions-panel" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                             <h3 class="text-lg font-semibold text-slate-800">Subscriptions</h3>
                             <div v-if="recurringSubscriptionItems.length" class="mt-4 space-y-3">
                                 <article v-for="item in recurringSubscriptionItems" :key="item.merchant_key" class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -395,7 +403,7 @@
                             <div v-else class="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">No recurring subscriptions detected yet.</div>
                         </div>
 
-                        <div v-if="recurringShowOther" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div v-if="recurringShowOther" data-testid="recurring-other-panel" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                             <h3 class="text-lg font-semibold text-slate-800">Other recurring payments</h3>
                             <div v-if="recurringBillItems.length || recurringOtherItems.length" class="mt-4 space-y-3">
                                 <article v-for="item in [...recurringBillItems, ...recurringOtherItems]" :key="item.merchant_key" class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -2110,7 +2118,13 @@
                     recurringEditLabel,
                     recurringEditKind,
                     recurringEditSaving,
+                    recurringSubscriptionItems,
+                    recurringBillItems,
+                    recurringOtherItems,
                     recurringFilteredItems,
+                    recurringHiddenLowConfidenceCount,
+                    recurringShowSubscriptions,
+                    recurringShowOther,
                     filteredTransactions,
                     monthOptions,
                     selectedMonth,

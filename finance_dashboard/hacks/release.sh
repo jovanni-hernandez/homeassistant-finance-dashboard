@@ -22,7 +22,9 @@ if [ -z "${HA_URL:-}" ] || [ -z "${HA_TOKEN:-}" ]; then
   exit 1
 fi
 
-"$ROOT_DIR/hacks/certify.sh"
+# Run the local real-backend preflight before publishing; the live deployed-page
+# Selenium check runs after deploy-and-verify updates the add-on.
+FINANCE_DASHBOARD_URL=local "$ROOT_DIR/hacks/certify.sh"
 
 VERSION="$(python3 - "$ROOT_DIR/config.yaml" <<'PY'
 from pathlib import Path
@@ -47,3 +49,6 @@ else
 fi
 
 "$ROOT_DIR/hacks/deploy-and-verify.sh" "$REPO"
+
+echo "Running Selenium against the deployed finance add-on over the HA internal network..."
+"$ROOT_DIR/hacks/validate-ui-selenium.sh"

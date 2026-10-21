@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 logger = logging.getLogger("finance_dashboard")
 
-KEY_PATH = "/data/.encryption_key"
+KEY_PATH = os.environ.get("FINANCE_KEY_PATH", "/data/.encryption_key")
 
 def get_or_create_key():
     """Generate or load a secure Fernet encryption key based on Supervisor/Add-on environment."""

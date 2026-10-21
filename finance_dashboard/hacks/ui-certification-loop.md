@@ -14,8 +14,8 @@ Use this loop for any UI/dashboard/frontend/visual change.
 
 ## Available helpers
 - `hacks/bump-version.py`
-- `hacks/validate-ui.mjs`
 - `hacks/validate-ui-selenium.sh`
+- `hacks/validate-ui-real.py`
 - `hacks/certify.sh`
 - `hacks/refresh-marketplace.sh`
 - `hacks/deploy-and-verify.sh`
@@ -23,6 +23,7 @@ Use this loop for any UI/dashboard/frontend/visual change.
 
 ## Notes
 - The helper scripts are intentionally repo-local so they can be reused outside OpenCode.
+- `validate-ui-selenium.sh` defaults to the deployed add-on at `http://homeassistant:8000/` on HA's internal network. Override with `FINANCE_DASHBOARD_URL` for another reachable URL. Use `FINANCE_DASHBOARD_URL=local` only for a pre-publish real-backend check; it does not satisfy deployed acceptance.
 - For this add-on, deployment verification should use `backup: false` unless backup is explicitly requested.
 - The refresh helper retries until marketplace metadata reports the expected version, because HA often lags for a few seconds after a push.
 - If the browser validation fails, inspect the console errors first.

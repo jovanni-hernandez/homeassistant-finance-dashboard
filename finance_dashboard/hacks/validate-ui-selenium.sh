@@ -9,6 +9,11 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
 fi
 
 "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-"$VENV_DIR/bin/pip" install selenium pillow >/dev/null
+"$VENV_DIR/bin/pip" install selenium pillow fastapi uvicorn requests sqlalchemy cryptography >/dev/null
 
-exec "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/validate-ui-selenium.py" "$@"
+if [ "${FINANCE_DASHBOARD_URL:-}" = "local" ]; then
+  exec "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/validate-ui-real.py" --file "$ROOT_DIR/frontend/index.html" "$@"
+fi
+
+LIVE_URL="${FINANCE_DASHBOARD_URL:-http://homeassistant:8000/}"
+exec "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/validate-ui-real.py" --file "$ROOT_DIR/frontend/index.html" --url "$LIVE_URL" "$@"
