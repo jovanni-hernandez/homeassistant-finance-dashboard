@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import simplefin
+from ai_assistant import build_ai_category_defaults, get_ai_settings, update_ai_settings
 from category_analysis import generate_category_analysis
 from database import (
     init_db,
@@ -56,6 +57,15 @@ class PinSettingsRequest(BaseModel):
 class CategoryDefaultsRequest(BaseModel):
     top: int = 25
     min_count: int = 2
+
+
+class AiSettingsRequest(BaseModel):
+    enabled: bool
+    provider: str
+    model: str
+    openai_api_key: str | None = None
+    claude_api_key: str | None = None
+    gemini_api_key: str | None = None
 
 
 @app.on_event("startup")
@@ -202,6 +212,38 @@ def api_get_category_defaults(top: int = 25, min_count: int = 2):
         return {"status": "success", **analysis}
     except Exception as e:
         logger.error(f"Failed to generate category defaults: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/ai/settings", dependencies=[Depends(verify_ha_auth)])
+def api_get_ai_settings():
+    return get_ai_settings()
+
+
+@app.post("/api/ai/settings", dependencies=[Depends(verify_ha_auth)])
+def api_set_ai_settings(payload: AiSettingsRequest):
+    try:
+        settings = update_ai_settings(
+            enabled=payload.enabled,
+            provider=payload.provider,
+            model=payload.model,
+            openai_api_key=payload.openai_api_key,
+            claude_api_key=payload.claude_api_key,
+            gemini_api_key=payload.gemini_api_key,
+        )
+        return {"status": "success", "message": "AI settings saved.", **settings}
+    except Exception as e:
+        logger.error(f"Failed to save AI settings: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/category-defaults/ai", dependencies=[Depends(verify_ha_auth)])
+def api_get_category_defaults_ai(top: int = 25, min_count: int = 2):
+    try:
+        analysis = build_ai_category_defaults(top_n=top, min_count=min_count)
+        return {"status": "success", **analysis}
+    except Exception as e:
+        logger.error(f"Failed to generate AI category defaults: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

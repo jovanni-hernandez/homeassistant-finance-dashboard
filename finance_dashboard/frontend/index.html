@@ -379,6 +379,13 @@
                                     {{ generatingCategoryDefaults ? 'Building…' : 'Build defaults' }}
                                 </button>
                                 <button
+                                    @click="buildAiCategoryDefaults"
+                                    :disabled="generatingAiCategoryDefaults || !aiSettingsEnabled"
+                                    class="inline-flex items-center justify-center rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-medium text-violet-700 shadow-sm hover:bg-violet-100 disabled:opacity-60"
+                                >
+                                    {{ generatingAiCategoryDefaults ? 'Building AI…' : 'Build with AI' }}
+                                </button>
+                                <button
                                     @click="saveCategoryRules"
                                     :disabled="savingCategoryRules"
                                     class="inline-flex items-center justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60"
@@ -400,6 +407,65 @@
 
                         <div v-if="categoryDefaultsMessage" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="categoryDefaultsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-sky-200 bg-sky-50 text-sky-700'">
                             {{ categoryDefaultsMessage }}
+                        </div>
+                    </div>
+
+                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <h3 class="text-lg font-semibold text-slate-800">AI assistance</h3>
+                                <p class="mt-1 text-sm text-slate-500">Configure the provider and keys used for AI-generated category rules.</p>
+                            </div>
+                            <button
+                                @click="saveAiSettings"
+                                :disabled="savingAiSettings"
+                                class="inline-flex items-center justify-center rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-60"
+                            >
+                                {{ savingAiSettings ? 'Saving…' : 'Save AI settings' }}
+                            </button>
+                        </div>
+
+                        <div class="mt-4 grid gap-4 md:grid-cols-2">
+                            <label class="block">
+                                <span class="block text-sm font-medium text-slate-700">Provider</span>
+                                <select v-model="aiSettingsProvider" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-violet-500 focus:ring-2 focus:ring-violet-100">
+                                    <option value="openai">OpenAI</option>
+                                    <option value="claude">Claude</option>
+                                    <option value="gemini">Gemini</option>
+                                </select>
+                            </label>
+
+                            <label class="block">
+                                <span class="block text-sm font-medium text-slate-700">Model</span>
+                                <input v-model="aiSettingsModel" type="text" placeholder="gpt-4o-mini" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                            </label>
+                        </div>
+
+                        <div class="mt-4 grid gap-4 md:grid-cols-3">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700">OpenAI API key</label>
+                                <input v-model="aiOpenaiApiKey" type="password" autocomplete="off" placeholder="sk-..." class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700">Claude API key</label>
+                                <input v-model="aiClaudeApiKey" type="password" autocomplete="off" placeholder="sk-ant-..." class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700">Gemini API key</label>
+                                <input v-model="aiGeminiApiKey" type="password" autocomplete="off" placeholder="AIza..." class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                            </div>
+                        </div>
+
+                        <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
+                            <label class="inline-flex items-center gap-2">
+                                <input v-model="aiSettingsEnabled" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />
+                                Enable AI assistance
+                            </label>
+                            <span>Saved keys stay encrypted in the app database.</span>
+                        </div>
+
+                        <div v-if="aiSettingsMessage" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="aiSettingsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-violet-200 bg-violet-50 text-violet-700'">
+                            {{ aiSettingsMessage }}
                         </div>
                     </div>
 
@@ -572,6 +638,16 @@
                 const categoryDefaultsMessage = ref('');
                 const categoryDefaultsError = ref(false);
                 const generatingCategoryDefaults = ref(false);
+                const generatingAiCategoryDefaults = ref(false);
+                const aiSettingsEnabled = ref(false);
+                const aiSettingsProvider = ref('openai');
+                const aiSettingsModel = ref('gpt-4o-mini');
+                const aiOpenaiApiKey = ref('');
+                const aiClaudeApiKey = ref('');
+                const aiGeminiApiKey = ref('');
+                const aiSettingsMessage = ref('');
+                const aiSettingsError = ref(false);
+                const savingAiSettings = ref(false);
                 const selectedMonth = ref('');
                 const monthSelectionTouched = ref(false);
                 const categoryOptions = [
@@ -735,8 +811,31 @@
                     }
                 };
 
+                const providerDefaultModel = (provider) => {
+                    const map = {
+                        openai: 'gpt-4o-mini',
+                        claude: 'claude-3-5-sonnet-latest',
+                        gemini: 'gemini/gemini-2.0-flash',
+                    };
+                    return map[provider] || map.openai;
+                };
+
+                const fetchAiSettings = async () => {
+                    if (!pinStatus.value.session_active) return;
+                    try {
+                        const res = await apiFetch('/api/ai/settings');
+                        if (!res.ok) throw new Error('Failed to load AI settings');
+                        const data = await res.json();
+                        aiSettingsEnabled.value = !!data.enabled;
+                        aiSettingsProvider.value = data.provider || 'openai';
+                        aiSettingsModel.value = data.model || providerDefaultModel(aiSettingsProvider.value);
+                    } catch (err) {
+                        console.warn(err);
+                    }
+                };
+
                 const fetchProtectedState = async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchCategoryRules(), fetchPinSettings()]);
+                    await Promise.all([fetchStatus(), fetchData(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings()]);
                     await nextTick();
                     renderSankey();
                 };
@@ -825,6 +924,60 @@
                         pinSettingsMessage.value = err.message;
                     } finally {
                         savingPinSettings.value = false;
+                    }
+                };
+
+                const saveAiSettings = async () => {
+                    savingAiSettings.value = true;
+                    aiSettingsMessage.value = '';
+                    aiSettingsError.value = false;
+                    try {
+                        const res = await apiFetch('/api/ai/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                enabled: aiSettingsEnabled.value,
+                                provider: aiSettingsProvider.value,
+                                model: aiSettingsModel.value || providerDefaultModel(aiSettingsProvider.value),
+                                openai_api_key: aiOpenaiApiKey.value.trim() || null,
+                                claude_api_key: aiClaudeApiKey.value.trim() || null,
+                                gemini_api_key: aiGeminiApiKey.value.trim() || null,
+                            }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to save AI settings (${res.status})`);
+                        aiSettingsMessage.value = data.message || 'AI settings saved.';
+                        aiSettingsError.value = false;
+                        aiSettingsEnabled.value = !!data.enabled;
+                        aiSettingsProvider.value = data.provider || aiSettingsProvider.value;
+                        aiSettingsModel.value = data.model || aiSettingsModel.value;
+                        aiOpenaiApiKey.value = '';
+                        aiClaudeApiKey.value = '';
+                        aiGeminiApiKey.value = '';
+                    } catch (err) {
+                        aiSettingsError.value = true;
+                        aiSettingsMessage.value = err.message;
+                    } finally {
+                        savingAiSettings.value = false;
+                    }
+                };
+
+                const buildAiCategoryDefaults = async () => {
+                    generatingAiCategoryDefaults.value = true;
+                    categoryDefaultsMessage.value = '';
+                    categoryDefaultsError.value = false;
+                    try {
+                        const res = await apiFetch('/api/category-defaults/ai?top=25&min_count=2');
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to build AI defaults (${res.status})`);
+                        categoryRulesText.value = data.rules_json || '[]';
+                        categoryDefaultsMessage.value = `Built ${data.proposals?.length || 0} AI rule suggestions from ${data.transaction_count || 0} transactions.`;
+                        categoryDefaultsError.value = false;
+                    } catch (err) {
+                        categoryDefaultsError.value = true;
+                        categoryDefaultsMessage.value = err.message;
+                    } finally {
+                        generatingAiCategoryDefaults.value = false;
                     }
                 };
 
@@ -1330,6 +1483,16 @@
                     categoryDefaultsMessage,
                     categoryDefaultsError,
                     generatingCategoryDefaults,
+                    generatingAiCategoryDefaults,
+                    aiSettingsEnabled,
+                    aiSettingsProvider,
+                    aiSettingsModel,
+                    aiOpenaiApiKey,
+                    aiClaudeApiKey,
+                    aiGeminiApiKey,
+                    aiSettingsMessage,
+                    aiSettingsError,
+                    savingAiSettings,
                     categoryOptions,
                     relockCountdownText,
                     status,
@@ -1339,7 +1502,9 @@
                     syncData,
                     claimToken,
                     saveCategoryRules,
+                    saveAiSettings,
                     buildCategoryDefaults,
+                    buildAiCategoryDefaults,
                     updateTransactionCategory,
                     renderSankey,
                     formatCurrency,
