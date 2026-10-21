@@ -370,13 +370,22 @@
                                 <h3 class="text-lg font-semibold text-slate-800">Category rules</h3>
                                 <p class="mt-1 text-sm text-slate-500">Edit the JSON rules that auto-assign categories during sync. Manual edits still win.</p>
                             </div>
-                            <button
-                                @click="saveCategoryRules"
-                                :disabled="savingCategoryRules"
-                                class="inline-flex items-center justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60"
-                            >
-                                {{ savingCategoryRules ? 'Saving…' : 'Save rules' }}
-                            </button>
+                            <div class="flex flex-wrap gap-2">
+                                <button
+                                    @click="buildCategoryDefaults"
+                                    :disabled="generatingCategoryDefaults"
+                                    class="inline-flex items-center justify-center rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 shadow-sm hover:bg-sky-100 disabled:opacity-60"
+                                >
+                                    {{ generatingCategoryDefaults ? 'Building…' : 'Build defaults' }}
+                                </button>
+                                <button
+                                    @click="saveCategoryRules"
+                                    :disabled="savingCategoryRules"
+                                    class="inline-flex items-center justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60"
+                                >
+                                    {{ savingCategoryRules ? 'Saving…' : 'Save rules' }}
+                                </button>
+                            </div>
                         </div>
 
                         <textarea
@@ -387,6 +396,10 @@
 
                         <div v-if="categoryRulesMessage" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="categoryRulesError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">
                             {{ categoryRulesMessage }}
+                        </div>
+
+                        <div v-if="categoryDefaultsMessage" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="categoryDefaultsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-sky-200 bg-sky-50 text-sky-700'">
+                            {{ categoryDefaultsMessage }}
                         </div>
                     </div>
 
@@ -556,6 +569,9 @@
                 const categoryRulesMessage = ref('');
                 const categoryRulesError = ref(false);
                 const savingCategoryRules = ref(false);
+                const categoryDefaultsMessage = ref('');
+                const categoryDefaultsError = ref(false);
+                const generatingCategoryDefaults = ref(false);
                 const selectedMonth = ref('');
                 const monthSelectionTouched = ref(false);
                 const categoryOptions = [
@@ -950,6 +966,25 @@
                     }
                 };
 
+                const buildCategoryDefaults = async () => {
+                    generatingCategoryDefaults.value = true;
+                    categoryDefaultsMessage.value = '';
+                    categoryDefaultsError.value = false;
+                    try {
+                        const res = await apiFetch('/api/category-defaults?top=25&min_count=2');
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to build defaults (${res.status})`);
+                        categoryRulesText.value = data.rules_json || '[]';
+                        categoryDefaultsMessage.value = `Built ${data.proposals?.length || 0} rule suggestions from ${data.transaction_count || 0} transactions.`;
+                        categoryDefaultsError.value = false;
+                    } catch (err) {
+                        categoryDefaultsError.value = true;
+                        categoryDefaultsMessage.value = err.message;
+                    } finally {
+                        generatingCategoryDefaults.value = false;
+                    }
+                };
+
                 const updateTransactionCategory = async (transactionId, category) => {
                     try {
                         const res = await apiFetch(`/api/transactions/${encodeURIComponent(transactionId)}/category`, {
@@ -1292,6 +1327,9 @@
                     categoryRulesMessage,
                     categoryRulesError,
                     savingCategoryRules,
+                    categoryDefaultsMessage,
+                    categoryDefaultsError,
+                    generatingCategoryDefaults,
                     categoryOptions,
                     relockCountdownText,
                     status,
@@ -1301,6 +1339,7 @@
                     syncData,
                     claimToken,
                     saveCategoryRules,
+                    buildCategoryDefaults,
                     updateTransactionCategory,
                     renderSankey,
                     formatCurrency,

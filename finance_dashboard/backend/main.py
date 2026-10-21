@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import simplefin
+from category_analysis import generate_category_analysis
 from database import (
     init_db,
     get_stored_accounts,
@@ -50,6 +51,11 @@ class PinSettingsRequest(BaseModel):
     session_timeout_minutes: int = pin_auth.DEFAULT_SESSION_TIMEOUT_MINUTES
     new_pin: str | None = None
     confirm_pin: str | None = None
+
+
+class CategoryDefaultsRequest(BaseModel):
+    top: int = 25
+    min_count: int = 2
 
 
 @app.on_event("startup")
@@ -186,6 +192,16 @@ def api_set_category_rules(payload: CategoryRulesRequest):
         return {"status": "success", "message": "Category rules saved."}
     except Exception as e:
         logger.error(f"Failed to save category rules: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/category-defaults", dependencies=[Depends(verify_ha_auth)])
+def api_get_category_defaults(top: int = 25, min_count: int = 2):
+    try:
+        analysis = generate_category_analysis(top_n=top, min_count=min_count)
+        return {"status": "success", **analysis}
+    except Exception as e:
+        logger.error(f"Failed to generate category defaults: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

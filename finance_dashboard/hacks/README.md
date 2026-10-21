@@ -55,5 +55,7 @@ If you set `HA_URL` and `HA_TOKEN`, it will also drive the add-on update end-to-
 Reads the encrypted finance database through the app models and prints merchant/category proposals plus uncategorized items to review.
 Use `--format json` if you want machine-readable output.
 
+You can also build the same defaults from the dashboard Settings panel with the "Build defaults" button.
+
 You can also store those values in `hacks/.release.env` (copy from `hacks/release.env.example`) so the release command works without exporting env vars every time.
 The helpers also read `finance_dashboard/.env` if you prefer one repo-root env file for all release settings.
