@@ -2,6 +2,15 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Finance: Bootstrap",
+      "type": "shell",
+      "command": ".devcontainer/bootstrap.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Finance: Run backend",
       "type": "shell",
       "command": "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload",
