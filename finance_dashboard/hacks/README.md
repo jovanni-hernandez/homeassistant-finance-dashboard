@@ -13,6 +13,7 @@ What it does:
 2. syntax-checks backend Python
 3. opens the frontend in headless Chromium
 4. captures a screenshot and checks for runtime exceptions
+5. retries transient browser failures with exponential backoff
 
 ## Manual HA refresh
 
