@@ -1,6 +1,6 @@
 name: Personal Finance Dashboard Dev
 description: Developer launcher for the finance dashboard with browser tooling and a cloned workspace
-version: 0.1.0
+version: 0.1.1
 slug: custom_finance_dev
 init: false
 ingress: true
