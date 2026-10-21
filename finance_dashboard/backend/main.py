@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import simplefin
 from ai_assistant import build_ai_category_defaults, get_ai_settings, update_ai_settings
 from category_analysis import generate_category_analysis
+from recurring_analysis import generate_recurring_analysis
 from database import (
     init_db,
     get_stored_accounts,
@@ -56,6 +57,11 @@ class PinSettingsRequest(BaseModel):
 
 class CategoryDefaultsRequest(BaseModel):
     top: int = 25
+    min_count: int = 2
+
+
+class RecurringRequest(BaseModel):
+    top: int = 40
     min_count: int = 2
 
 
@@ -244,6 +250,16 @@ def api_get_category_defaults_ai(top: int = 25, min_count: int = 2):
         return {"status": "success", **analysis}
     except Exception as e:
         logger.error(f"Failed to generate AI category defaults: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/recurring-payments", dependencies=[Depends(verify_ha_auth)])
+def api_get_recurring_payments(top: int = 40, min_count: int = 2):
+    try:
+        analysis = generate_recurring_analysis(top_n=top, min_count=min_count)
+        return {"status": "success", **analysis}
+    except Exception as e:
+        logger.error(f"Failed to generate recurring analysis: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
