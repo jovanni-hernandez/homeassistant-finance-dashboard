@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -27,6 +28,15 @@ COMMANDS = {
     "certify": ["bash", "hacks/certify.sh"],
     "status": ["git", "status", "--short"],
     "pull": ["git", "pull", "--ff-only", "origin", BRANCH],
+}
+
+ARTIFACTS = {
+    "ui": ["/data/v2/cache/opencode/finance-dashboard-dev-ui.png"],
+    "selenium": ["/data/v2/cache/opencode/finance-dashboard-dev-selenium.png"],
+    "certify": [
+        "/data/v2/cache/opencode/finance-dashboard-certify.png",
+        "/data/v2/cache/opencode/finance-dashboard-certify-selenium.png",
+    ],
 }
 
 JOBS: dict[str, dict] = {}
@@ -59,6 +69,7 @@ def spawn_job(label: str, command: list[str] | str, shell: bool = False) -> dict
         command=command if isinstance(command, str) else " ".join(command),
         status="queued",
         log=str(log_path),
+        artifacts=ARTIFACTS.get(label, []),
         created_at=time.time(),
     )
 
@@ -109,6 +120,16 @@ def read_log(job_id: str) -> str:
     if not path.exists():
         return ""
     return path.read_text(errors="replace")[-20000:]
+
+
+def read_artifact(job_id: str, name: str) -> tuple[bytes, str]:
+    job = JOBS.get(job_id, {})
+    for artifact in job.get("artifacts", []):
+        path = Path(artifact)
+        if path.name == name and path.exists():
+            mime, _ = mimetypes.guess_type(path.name)
+            return path.read_bytes(), mime or "application/octet-stream"
+    raise FileNotFoundError(name)
 
 
 def html_page() -> str:
@@ -181,6 +202,8 @@ def html_page() -> str:
   </main>
 
   <script>
+    window.__jobs = [];
+
     async function api(path, options) {{
       const res = await fetch(path, Object.assign({{ headers: {{ 'Content-Type': 'application/json' }} }}, options || {{}}));
       const text = await res.text();
@@ -202,6 +225,7 @@ def html_page() -> str:
 
     async function refreshJobs() {{
       const jobs = await api('/api/jobs');
+      window.__jobs = jobs;
       const root = document.getElementById('jobs');
       root.innerHTML = '';
       jobs.forEach((job) => {{
@@ -216,8 +240,10 @@ def html_page() -> str:
           <div class="muted">Started: ${{fmtTime(job.started_at)}} · Finished: ${{fmtTime(job.finished_at)}} · Exit: ${{job.exit_code ?? '—'}}</div>
           <div class="row" style="margin-top:8px;">
             <button class="secondary" onclick="loadLog('${{job.id}}')">Show log</button>
+            <button class="secondary" onclick="toggleArtifacts('${{job.id}}')">Screenshots</button>
           </div>
           <pre id="log-${{job.id}}" class="log" style="display:none;"></pre>
+          <div id="artifacts-${{job.id}}" class="log" style="display:none; margin-top:8px;"></div>
         `;
         root.appendChild(el);
       }});
@@ -230,6 +256,32 @@ def html_page() -> str:
       pre.textContent = 'Loading…';
       pre.style.display = 'block';
       pre.textContent = await api(`/api/jobs/${{jobId}}/log`);
+    }}
+
+    async function toggleArtifacts(jobId) {{
+      const panel = document.getElementById(`artifacts-${{jobId}}`);
+      const shown = panel.style.display !== 'none';
+      if (shown) {{
+        panel.style.display = 'none';
+        return;
+      }}
+      panel.style.display = 'block';
+      if (panel.dataset.loaded) return;
+      panel.dataset.loaded = '1';
+
+      const job = window.__jobs.find((item) => item.id === jobId);
+      const artifacts = job?.artifacts || [];
+      if (!artifacts.length) {{
+        panel.innerHTML = '<div class="muted">No screenshots recorded for this job.</div>';
+        return;
+      }}
+
+      panel.innerHTML = artifacts.map((artifact) => `
+        <div style="margin-bottom:12px;">
+          <div class="muted" style="margin-bottom:6px;">${{artifact.split('/').pop()}}</div>
+          <img src="/api/jobs/${{jobId}}/artifact/${{encodeURIComponent(artifact.split('/').pop())}}" alt="${{artifact}}" style="width:100%; border-radius:12px; border:1px solid #334155; background:#020617;" />
+        </div>
+      `).join('');
     }}
 
     async function runPreset(name) {{
@@ -284,6 +336,20 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/log"):
             job_id = parsed.path.split("/")[3]
             return self._send(200, read_log(job_id), "text/plain; charset=utf-8")
+        if parsed.path.startswith("/api/jobs/") and "/artifact/" in parsed.path:
+            parts = parsed.path.split("/")
+            job_id = parts[3]
+            name = parts[-1]
+            try:
+                data, mime = read_artifact(job_id, name)
+            except FileNotFoundError:
+                return self._send(404, "Not found", "text/plain; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", mime)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         return self._send(404, "Not found", "text/plain; charset=utf-8")
 
     def do_POST(self):

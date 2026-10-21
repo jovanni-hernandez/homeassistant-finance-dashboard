@@ -7,6 +7,7 @@ What it does:
 - serves a browser-based launcher on port 8000
 - lets you run repo test commands from the UI or a shell box
 - shows per-job logs in the browser
+- can embed screenshots from UI/Selenium/certify runs inline in each job card
 
 You can override the defaults with environment variables:
 - `FINANCE_DEV_REPO_URL`
