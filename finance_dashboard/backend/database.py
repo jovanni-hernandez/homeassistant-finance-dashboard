@@ -14,6 +14,9 @@ def save_simplefin_data(data):
     """Save normalized SimpleFIN accounts and transactions into SQLite via SQLAlchemy."""
     db = SessionLocal()
     try:
+        db.query(Transaction).delete(synchronize_session=False)
+        db.query(Account).delete(synchronize_session=False)
+
         accounts = data.get("accounts", [])
         for acc in accounts:
             acc_id = str(acc.get("id"))

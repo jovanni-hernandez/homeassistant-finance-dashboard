@@ -158,12 +158,20 @@
                     </div>
 
                     <section>
-                        <div class="mb-3 flex items-center justify-between gap-3">
-                            <h2 class="text-xl font-semibold text-slate-800">Cash flow</h2>
-                            <div class="text-sm text-slate-500">Paycheck deposits to spending categories</div>
+                        <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <h2 class="text-xl font-semibold text-slate-800">Cash flow</h2>
+                                <div class="text-sm text-slate-500">Paycheck deposits to spending categories</div>
+                            </div>
+                            <label class="flex items-center gap-2 text-sm text-slate-600">
+                                <span class="whitespace-nowrap font-medium">Period</span>
+                                <select v-model="selectedMonth" @change="monthSelectionTouched = true" class="min-w-[180px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100">
+                                    <option v-for="option in monthOptions" :key="option.key" :value="option.key">{{ option.label }}</option>
+                                </select>
+                            </label>
                         </div>
                         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                            <div ref="sankeyEl" class="h-[420px] w-full overflow-x-auto"></div>
+                            <div ref="sankeyEl" class="h-[320px] w-full overflow-x-auto sm:h-[380px] md:h-[420px]"></div>
                             <p v-if="!hasSankeyData" class="mt-3 text-sm text-slate-500">
                                 Not enough paycheck and expense data yet to draw the flow chart.
                             </p>
@@ -199,7 +207,7 @@
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-slate-200 bg-white">
-                                        <tr v-for="tx in transactions" :key="tx.id">
+                                        <tr v-for="tx in filteredTransactions" :key="tx.id">
                                             <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500">{{ formatDate(tx.date) }}</td>
                                             <td class="whitespace-nowrap px-6 py-4 text-sm font-medium text-slate-900">{{ tx.account_name }}</td>
                                             <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-900">{{ tx.payee }}</td>
@@ -209,7 +217,7 @@
                                             </td>
                                         </tr>
                                         <tr v-if="transactions.length === 0">
-                                            <td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500">No transactions recorded.</td>
+                                            <td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500">No transactions recorded for this period.</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -307,7 +315,7 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted, nextTick, computed } = Vue;
+        const { createApp, ref, onMounted, nextTick, computed, watch } = Vue;
 
         createApp({
             setup() {
@@ -322,6 +330,8 @@
                 const syncError = ref(false);
                 const error = ref(null);
                 const setupTokenInput = ref('');
+                const selectedMonth = ref('');
+                const monthSelectionTouched = ref(false);
                 const status = ref({
                     connected: false,
                     account_count: 0,
@@ -331,6 +341,62 @@
                     last_sync_at: null,
                 });
                 const sankeyEl = ref(null);
+
+                const monthKeyFromTimestamp = (timestamp) => {
+                    if (!timestamp) return '';
+                    const date = new Date(Number(timestamp) * 1000);
+                    if (Number.isNaN(date.getTime())) return '';
+                    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+                };
+
+                const formatMonthLabel = (key) => {
+                    if (!key || key === 'all') return 'All time';
+                    const [year, month] = key.split('-').map(Number);
+                    if (!year || !month) return key;
+                    return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
+                        month: 'long',
+                        year: 'numeric',
+                        timeZone: 'UTC',
+                    });
+                };
+
+                const monthOptions = computed(() => {
+                    const months = new Map();
+                    transactions.value.forEach((tx) => {
+                        const key = monthKeyFromTimestamp(tx.date);
+                        if (key && !months.has(key)) {
+                            months.set(key, { key, label: formatMonthLabel(key) });
+                        }
+                    });
+
+                    return [
+                        { key: 'all', label: 'All time' },
+                        ...Array.from(months.values()).sort((a, b) => b.key.localeCompare(a.key)),
+                    ];
+                });
+
+                const filteredTransactions = computed(() => {
+                    if (!selectedMonth.value || selectedMonth.value === 'all') {
+                        return transactions.value;
+                    }
+
+                    return transactions.value.filter((tx) => monthKeyFromTimestamp(tx.date) === selectedMonth.value);
+                });
+
+                const syncSelectedMonth = () => {
+                    const options = monthOptions.value.map((option) => option.key);
+                    if (!options.length) {
+                        selectedMonth.value = 'all';
+                        return;
+                    }
+
+                    const currentMonth = monthKeyFromTimestamp(Math.floor(Date.now() / 1000));
+                    const preferred = options.includes(currentMonth) ? currentMonth : options.find((key) => key !== 'all') || 'all';
+
+                    if (!monthSelectionTouched.value || !options.includes(selectedMonth.value)) {
+                        selectedMonth.value = preferred;
+                    }
+                };
 
                 const getApiUrl = (endpoint) => window.location.pathname.replace(/\/$/, '') + endpoint;
 
@@ -446,8 +512,8 @@
                 };
 
                 const calculateSankey = () => {
-                    const incomeTx = transactions.value.filter((tx) => parseFloat(tx.amount || 0) > 0);
-                    const expenseTx = transactions.value.filter((tx) => parseFloat(tx.amount || 0) < 0);
+                    const incomeTx = filteredTransactions.value.filter((tx) => parseFloat(tx.amount || 0) > 0);
+                    const expenseTx = filteredTransactions.value.filter((tx) => parseFloat(tx.amount || 0) < 0);
 
                     if (!incomeTx.length || !expenseTx.length) return null;
 
@@ -503,8 +569,11 @@
                         }
 
                         const container = sankeyEl.value;
-                        const width = Math.max(container.clientWidth || 0, 700);
-                        const height = 380;
+                        const width = Math.max(container.clientWidth || 0, 320);
+                        const height = width < 640 ? 300 : 420;
+                        const fontSize = width < 640 ? 10 : 12;
+                        const nodeWidth = width < 640 ? 12 : 18;
+                        const nodePadding = width < 640 ? 10 : 18;
                         const marginTop = 10;
                         const marginRight = 10;
                         const marginBottom = 10;
@@ -515,12 +584,13 @@
                             .attr('viewBox', [0, 0, width, height])
                             .attr('width', '100%')
                             .attr('height', height)
+                            .attr('preserveAspectRatio', 'xMidYMid meet')
                             .style('max-width', '100%')
                             .style('overflow', 'visible');
 
                         const sankey = d3.sankey()
-                            .nodeWidth(18)
-                            .nodePadding(18)
+                            .nodeWidth(nodeWidth)
+                            .nodePadding(nodePadding)
                             .extent([[marginLeft, marginTop], [width - marginRight, height - marginBottom]]);
 
                         const graph = sankey({
@@ -561,9 +631,14 @@
                             .attr('y', (d) => (d.y0 + d.y1) / 2)
                             .attr('dy', '0.35em')
                             .attr('text-anchor', (d) => d.x0 < width / 2 ? 'start' : 'end')
-                            .attr('class', 'fill-slate-700 text-[12px]')
+                            .attr('class', 'fill-slate-700')
+                            .attr('font-size', `${fontSize}px`)
                             .style('font-family', 'system-ui, sans-serif')
-                            .text((d) => `${d.name} (${formatCurrency(d.value)})`);
+                            .text((d) => {
+                                const maxLabel = width < 640 ? 16 : 24;
+                                const label = d.name.length > maxLabel ? `${d.name.slice(0, maxLabel - 1)}…` : d.name;
+                                return `${label} (${formatCurrency(d.value)})`;
+                            });
                     } catch (err) {
                         console.error('Sankey render failed:', err);
                         sankeyEl.value.innerHTML = '<div class="flex h-full items-center justify-center rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Sankey chart unavailable right now. Your data is still loaded above.</div>';
@@ -578,6 +653,15 @@
                     return Number.isNaN(date.getTime()) ? 'Not yet' : date.toLocaleString();
                 };
 
+                watch(transactions, () => {
+                    syncSelectedMonth();
+                }, { immediate: true });
+
+                watch([transactions, selectedMonth], async () => {
+                    await nextTick();
+                    renderSankey();
+                });
+
                 onMounted(async () => {
                     await Promise.all([fetchStatus(), fetchData()]);
                     await nextTick();
@@ -590,6 +674,10 @@
                     drawerOpen,
                     accounts,
                     transactions,
+                    filteredTransactions,
+                    monthOptions,
+                    selectedMonth,
+                    monthSelectionTouched,
                     loading,
                     syncing,
                     claiming,

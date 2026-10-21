@@ -17,8 +17,11 @@ Use this loop for any UI/dashboard/frontend/visual change.
 - `hacks/validate-ui.mjs`
 - `hacks/certify.sh`
 - `hacks/refresh-marketplace.sh`
+- `hacks/deploy-and-verify.sh`
+- `hacks/release.sh`
 
 ## Notes
 - The helper scripts are intentionally repo-local so they can be reused outside OpenCode.
 - For this add-on, deployment verification should use `backup: false` unless backup is explicitly requested.
+- The refresh helper retries until marketplace metadata reports the expected version, because HA often lags for a few seconds after a push.
 - If the browser validation fails, inspect the console errors first.
