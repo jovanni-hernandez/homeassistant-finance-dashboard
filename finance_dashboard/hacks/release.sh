@@ -3,7 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="${REPO:-https://github.com/jovanni-hernandez/homeassistant-finance-dashboard}"
+ROOT_ENV_FILE="$ROOT_DIR/.env"
 ENV_FILE="$ROOT_DIR/hacks/.release.env"
+
+if [ -f "$ROOT_ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$ROOT_ENV_FILE"
+fi
 
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
