@@ -2,6 +2,7 @@ import logging
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import simplefin
 from database import init_db, get_stored_accounts, get_stored_transactions
 
@@ -17,6 +18,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class ClaimTokenRequest(BaseModel):
+    setup_token: str
 
 @app.on_event("startup")
 def startup_event():
@@ -49,6 +53,21 @@ def api_get_transactions(limit: int = 100):
     except Exception as e:
         logger.error(f"Failed to query transactions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/simplefin/claim-token", dependencies=[Depends(verify_ha_auth)])
+def api_claim_token(payload: ClaimTokenRequest):
+    """Claim a SimpleFIN setup token and exchange it for a persistent access token."""
+    try:
+        result = simplefin.claim_simplefin_setup_token(payload.setup_token)
+        if result.get("status") == "error":
+            raise HTTPException(status_code=400, detail=result.get("message"))
+        
+        # Trigger an immediate sync after claiming
+        sync_result = simplefin.fetch_and_sync_simplefin()
+        return {"status": "success", "message": "Token claimed and initial sync performed", "sync_result": sync_result}
+    except Exception as e:
+        logger.error(f"Failed to claim token API error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/sync", dependencies=[Depends(verify_ha_auth)])
 def api_sync():

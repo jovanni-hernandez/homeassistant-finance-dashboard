@@ -1,5 +1,5 @@
 import logging
-from models import engine, SessionLocal, Base, Account, Transaction
+from models import engine, SessionLocal, Base, Account, Transaction, Setting
 
 logger = logging.getLogger("finance_dashboard")
 
@@ -71,6 +71,32 @@ def save_simplefin_data(data):
     except Exception as e:
         db.rollback()
         logger.error(f"Error saving data to DB: {e}")
+        raise e
+    finally:
+        db.close()
+
+
+def get_setting(key: str):
+    db = SessionLocal()
+    try:
+        setting = db.query(Setting).filter(Setting.key == key).first()
+        return setting.value if setting else None
+    finally:
+        db.close()
+
+def set_setting(key: str, value: str):
+    db = SessionLocal()
+    try:
+        setting = db.query(Setting).filter(Setting.key == key).first()
+        if not setting:
+            setting = Setting(key=key, value=value)
+            db.add(setting)
+        else:
+            setting.value = value
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error setting value for {key}: {e}")
         raise e
     finally:
         db.close()

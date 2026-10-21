@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Boolean
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from security import encrypt_value, decrypt_value
 
@@ -11,6 +11,19 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
+class Setting(Base):
+    __tablename__ = "settings"
+    key = Column(String, primary_key=True, index=True)
+    _value = Column("value", Text, default="")
+
+    @property
+    def value(self):
+        return decrypt_value(self._value)
+
+    @value.setter
+    def value(self, val):
+        self._value = encrypt_value(val)
 
 class Account(Base):
     __tablename__ = "accounts"

@@ -12,12 +12,34 @@
         <div class="flex justify-between items-center mb-6">
             <div>
                 <h1 class="text-3xl font-bold text-gray-800">Financial Dashboard</h1>
-                <p class="text-sm text-gray-500 mt-1">Primary Source: SQLite / SQLAlchemy Database</p>
+                <p class="text-sm text-gray-500 mt-1">Primary Source: SQLite / SQLAlchemy Database (Encrypted at Rest)</p>
             </div>
-            <button @click="syncData" :disabled="syncing" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow font-medium transition flex items-center">
-                <span v-if="syncing">Syncing...</span>
-                <span v-else>Sync Upstream</span>
-            </button>
+            <div class="flex space-x-3">
+                <button @click="showTokenModal = true" class="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg shadow font-medium transition">
+                    Link SimpleFIN Account
+                </button>
+                <button @click="syncData" :disabled="syncing" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow font-medium transition flex items-center">
+                    <span v-if="syncing">Syncing...</span>
+                    <span v-else>Sync Upstream</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Token Modal / Banner -->
+        <div v-if="showTokenModal" class="bg-white rounded-lg shadow p-6 mb-6 border border-gray-200">
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">Connect SimpleFIN Account</h2>
+            <p class="text-sm text-gray-600 mb-4">Paste your SimpleFIN Setup Token below to link your financial institutions securely. This token will be exchanged for a secure access token and encrypted at rest.</p>
+            <div class="flex space-x-3">
+                <input v-model="setupTokenInput" type="text" placeholder="Paste Setup Token here..." class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <button @click="claimToken" :disabled="claiming" class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg shadow font-medium transition">
+                    <span v-if="claiming">Connecting...</span>
+                    <span v-else>Connect & Sync</span>
+                </button>
+                <button @click="showTokenModal = false" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition">
+                    Cancel
+                </button>
+            </div>
+            <p v-if="tokenMessage" class="text-sm mt-3" :class="tokenError ? 'text-red-600' : 'text-green-600'">{{ tokenMessage }}</p>
         </div>
         
         <div v-if="loading" class="text-gray-500 py-8">Loading financial data from database...</div>
@@ -82,6 +104,11 @@
                 const transactions = ref([]);
                 const loading = ref(true);
                 const syncing = ref(false);
+                const claiming = ref(false);
+                const showTokenModal = ref(false);
+                const setupTokenInput = ref('');
+                const tokenMessage = ref('');
+                const tokenError = ref(false);
                 const error = ref(null);
 
                 const getApiUrl = (endpoint) => {
@@ -125,6 +152,32 @@
                     }
                 };
 
+                const claimToken = async () => {
+                    if (!setupTokenInput.value.trim()) return;
+                    claiming.value = true;
+                    tokenMessage.value = '';
+                    tokenError.value = false;
+                    try {
+                        const res = await fetch(getApiUrl('/api/simplefin/claim-token'), {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify({ setup_token: setupTokenInput.value.trim() })
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || 'Failed to claim setup token');
+                        
+                        tokenMessage.value = 'Successfully linked SimpleFIN and synced accounts!';
+                        setupTokenInput.value = '';
+                        await fetchData();
+                        setTimeout(() => { showTokenModal.value = false; }, 2000);
+                    } catch (err) {
+                        tokenError.value = true;
+                        tokenMessage.value = err.message;
+                    } finally {
+                        claiming.value = false;
+                    }
+                };
+
                 const formatCurrency = (value, currency = 'USD') => {
                     return new Intl.NumberFormat('en-US', {
                         style: 'currency',
@@ -140,7 +193,11 @@
 
                 onMounted(() => fetchData());
 
-                return { accounts, transactions, loading, syncing, error, formatCurrency, formatDate, syncData };
+                return { 
+                    accounts, transactions, loading, syncing, claiming, 
+                    showTokenModal, setupTokenInput, tokenMessage, tokenError, 
+                    error, formatCurrency, formatDate, syncData, claimToken 
+                };
             }
         }).mount('#app');
     </script>
