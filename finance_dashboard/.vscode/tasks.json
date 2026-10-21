@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Finance: Run backend",
+      "type": "shell",
+      "command": "uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Finance: Check backend Python",
+      "type": "shell",
+      "command": "python -m py_compile backend/*.py",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Finance: Check frontend JS",
+      "type": "shell",
+      "command": "python3 - <<'PY'\nfrom pathlib import Path\nimport re\ntext = Path('frontend/index.html').read_text()\nscript = re.search(r'<script>(.*)</script>\\s*</body>', text, re.S)\nif not script:\n    raise SystemExit('script block not found')\nout = Path('.devcontainer') / 'frontend-check.js'\nout.write_text(script.group(1))\nPY\nnode --check .devcontainer/frontend-check.js",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Finance: Build category defaults",
+      "type": "shell",
+      "command": "./hacks/propose-category-rules.sh --format markdown",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
