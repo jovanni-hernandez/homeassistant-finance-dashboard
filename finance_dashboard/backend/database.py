@@ -173,3 +173,11 @@ def get_category_rules_value():
 
 def set_category_rules_value(value: str):
     set_setting("category_rules_json", value)
+
+
+def get_recurring_rules_value():
+    return get_setting("recurring_rules_json")
+
+
+def set_recurring_rules_value(value: str):
+    set_setting("recurring_rules_json", value)

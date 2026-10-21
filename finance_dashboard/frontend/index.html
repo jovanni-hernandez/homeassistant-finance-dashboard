@@ -306,6 +306,22 @@
                             {{ recurringMessage }}
                         </div>
 
+                        <div v-if="recurringActionMessage" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="recurringActionError ? 'border-red-200 bg-red-50 text-red-700' : 'border-sky-200 bg-sky-50 text-sky-700'">
+                            {{ recurringActionMessage }}
+                        </div>
+
+                        <div class="mt-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                            <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                                <input v-model="recurringHideLowConfidence" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                                Hide low-confidence
+                            </label>
+                            <div class="flex flex-wrap gap-2">
+                                <button @click="recurringQuickFilter = 'all'" class="rounded-lg border px-3 py-2 text-sm font-medium" :class="recurringQuickFilter === 'all' ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'">All</button>
+                                <button @click="recurringQuickFilter = 'subscriptions'" class="rounded-lg border px-3 py-2 text-sm font-medium" :class="recurringQuickFilter === 'subscriptions' ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'">Subscriptions</button>
+                                <button @click="recurringQuickFilter = 'bills'" class="rounded-lg border px-3 py-2 text-sm font-medium" :class="recurringQuickFilter === 'bills' ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'">Bills</button>
+                            </div>
+                        </div>
+
                         <div class="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                             <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                                 <div class="text-sm text-slate-500">Subscriptions</div>
@@ -325,11 +341,14 @@
                             </div>
                         </div>
 
-                        <div class="mt-4 text-xs text-slate-500">Last scanned: {{ formatDateTime(recurringGeneratedAt) }}</div>
+                        <div class="mt-4 text-xs text-slate-500">
+                            Last scanned: {{ formatDateTime(recurringGeneratedAt) }}
+                            <span v-if="recurringHideLowConfidence && recurringHiddenLowConfidenceCount" class="ml-2">· {{ recurringHiddenLowConfidenceCount }} low-confidence hidden</span>
+                        </div>
                     </div>
 
                     <div class="grid gap-6 lg:grid-cols-2">
-                        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div v-if="recurringShowSubscriptions" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                             <h3 class="text-lg font-semibold text-slate-800">Subscriptions</h3>
                             <div v-if="recurringSubscriptionItems.length" class="mt-4 space-y-3">
                                 <article v-for="item in recurringSubscriptionItems" :key="item.merchant_key" class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -345,6 +364,10 @@
                                             <div class="text-lg font-semibold text-slate-900">{{ formatCurrency(item.average_amount) }}</div>
                                             <div class="text-xs text-slate-500">{{ item.confidence }}% match</div>
                                         </div>
+                                    </div>
+                                    <div class="mt-3 flex flex-wrap gap-2">
+                                        <button @click="openRecurringEdit(item)" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">Edit</button>
+                                        <button @click="ignoreRecurringItem(item)" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-100">Ignore</button>
                                     </div>
                                     <div class="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
                                         <div>Last seen: <span class="font-medium text-slate-800">{{ formatDateTime(item.last_seen) }}</span></div>
@@ -366,7 +389,7 @@
                             <div v-else class="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">No recurring subscriptions detected yet.</div>
                         </div>
 
-                        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div v-if="recurringShowOther" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                             <h3 class="text-lg font-semibold text-slate-800">Other recurring payments</h3>
                             <div v-if="recurringBillItems.length || recurringOtherItems.length" class="mt-4 space-y-3">
                                 <article v-for="item in [...recurringBillItems, ...recurringOtherItems]" :key="item.merchant_key" class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -386,6 +409,10 @@
                                             <div class="text-xs text-slate-500">{{ item.confidence }}% match</div>
                                         </div>
                                     </div>
+                                    <div class="mt-3 flex flex-wrap gap-2">
+                                        <button @click="openRecurringEdit(item)" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">Edit</button>
+                                        <button @click="ignoreRecurringItem(item)" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-100">Ignore</button>
+                                    </div>
                                     <div class="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
                                         <div>Last seen: <span class="font-medium text-slate-800">{{ formatDateTime(item.last_seen) }}</span></div>
                                         <div>Next expected: <span class="font-medium text-slate-800">{{ formatDateTime(item.next_expected) }}</span></div>
@@ -397,7 +424,59 @@
                             <div v-else class="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">No other recurring payments detected yet.</div>
                         </div>
                     </div>
+
+                    <div v-if="recurringRules.ignored_keys && recurringRules.ignored_keys.length" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <h3 class="text-lg font-semibold text-slate-800">Ignored recurring items</h3>
+                                <p class="mt-1 text-sm text-slate-500">Restoring one will make it show up again on the next scan.</p>
+                            </div>
+                        </div>
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            <span v-for="key in recurringRules.ignored_keys" :key="key" class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                {{ key }}
+                                <button @click="restoreRecurringItem(key)" class="text-sky-600 hover:text-sky-800">Restore</button>
+                            </span>
+                        </div>
+                    </div>
                 </section>
+
+                <div v-if="recurringEditOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 backdrop-blur-sm" @click.self="closeRecurringEdit">
+                    <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <h3 class="text-lg font-semibold text-slate-900">Edit recurring rule</h3>
+                                <p class="text-sm text-slate-500">Update the display label or classification for this pattern.</p>
+                            </div>
+                            <button @click="closeRecurringEdit" class="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700" aria-label="Close edit dialog">×</button>
+                        </div>
+
+                        <div class="mt-5 space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700">Label</label>
+                                <input v-model="recurringEditLabel" type="text" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100" />
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700">Kind</label>
+                                <select v-model="recurringEditKind" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+                                    <option value="subscription">subscription</option>
+                                    <option value="recurring bill">recurring bill</option>
+                                    <option value="recurring income">recurring income</option>
+                                    <option value="recurring payment">recurring payment</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="mt-5 flex flex-col gap-3 sm:flex-row">
+                            <button @click="saveRecurringEdit" :disabled="recurringEditSaving" class="inline-flex flex-1 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60">
+                                {{ recurringEditSaving ? 'Saving…' : 'Save' }}
+                            </button>
+                            <button @click="closeRecurringEdit" class="inline-flex flex-1 items-center justify-center rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
 
                 <section v-else-if="view === 'settings'" class="space-y-6">
                     <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -824,6 +903,16 @@
                 const recurringMessage = ref('');
                 const recurringError = ref(false);
                 const recurringLoading = ref(false);
+                const recurringHideLowConfidence = ref(true);
+                const recurringQuickFilter = ref('all');
+                const recurringRules = ref({ ignored_keys: [], overrides: {} });
+                const recurringActionMessage = ref('');
+                const recurringActionError = ref(false);
+                const recurringEditOpen = ref(false);
+                const recurringEditKey = ref('');
+                const recurringEditLabel = ref('');
+                const recurringEditKind = ref('subscription');
+                const recurringEditSaving = ref(false);
                 const loading = ref(true);
                 const pinLoading = ref(true);
                 const syncing = ref(false);
@@ -1085,6 +1174,9 @@
                     recurringGeneratedAt.value = null;
                     recurringMessage.value = '';
                     recurringError.value = false;
+                    recurringActionMessage.value = '';
+                    recurringActionError.value = false;
+                    recurringRules.value = { ignored_keys: [], overrides: {} };
                     status.value = {
                         connected: false,
                         account_count: 0,
@@ -1215,7 +1307,7 @@
                 };
 
                 const fetchProtectedState = async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings()]);
+                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings()]);
                     await nextTick();
                     renderSankey();
                 };
@@ -1362,10 +1454,6 @@
                     }
                 };
 
-                const recurringSubscriptionItems = computed(() => recurringItems.value.filter((item) => item.kind === 'subscription'));
-                const recurringBillItems = computed(() => recurringItems.value.filter((item) => item.kind === 'recurring bill'));
-                const recurringOtherItems = computed(() => recurringItems.value.filter((item) => item.kind !== 'subscription' && item.kind !== 'recurring bill'));
-
                 const monthKeyFromTimestamp = (timestamp) => {
                     if (!timestamp) return '';
                     const date = new Date(Number(timestamp) * 1000);
@@ -1483,6 +1571,126 @@
                         recurringError.value = true;
                     } finally {
                         recurringLoading.value = false;
+                    }
+                };
+
+                const normalizeRecurringRules = (value) => {
+                    const base = { ignored_keys: [], overrides: {} };
+                    if (!value || typeof value !== 'object') return base;
+                    const ignored = Array.isArray(value.ignored_keys) ? value.ignored_keys.map((item) => String(item || '').trim()).filter(Boolean) : [];
+                    const overrides = value.overrides && typeof value.overrides === 'object' ? value.overrides : {};
+                    const normalizedOverrides = {};
+                    Object.entries(overrides).forEach(([key, item]) => {
+                        if (!key || !item || typeof item !== 'object') return;
+                        normalizedOverrides[key] = {
+                            label: String(item.label || '').trim(),
+                            kind: String(item.kind || '').trim(),
+                            hidden: !!item.hidden,
+                        };
+                    });
+                    return { ignored_keys: ignored, overrides: normalizedOverrides };
+                };
+
+                const fetchRecurringRules = async () => {
+                    try {
+                        const res = await apiFetch('/api/recurring-rules');
+                        if (!res.ok) throw new Error('Failed to load recurring rules');
+                        const data = await res.json();
+                        recurringRules.value = normalizeRecurringRules(JSON.parse(data.recurring_rules_json || '{}'));
+                    } catch (err) {
+                        console.warn(err);
+                        recurringRules.value = { ignored_keys: [], overrides: {} };
+                    }
+                };
+
+                const saveRecurringRules = async (nextRules, message) => {
+                    const payload = normalizeRecurringRules(nextRules);
+                    const res = await apiFetch('/api/recurring-rules', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        body: JSON.stringify({ recurring_rules_json: JSON.stringify(payload, null, 2) }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.detail || data.message || `Failed to save recurring rules (${res.status})`);
+                    recurringActionMessage.value = message || data.message || 'Recurring rules saved.';
+                    recurringActionError.value = false;
+                    recurringRules.value = payload;
+                    await Promise.all([fetchRecurringPayments()]);
+                };
+
+                const recurringFilteredItems = computed(() => {
+                    const items = recurringItems.value || [];
+                    return items.filter((item) => !recurringHideLowConfidence.value || Number(item.confidence || 0) >= 70);
+                });
+
+                const recurringSubscriptionItems = computed(() => recurringFilteredItems.value.filter((item) => item.kind === 'subscription'));
+                const recurringBillItems = computed(() => recurringFilteredItems.value.filter((item) => item.kind === 'recurring bill'));
+                const recurringOtherItems = computed(() => recurringFilteredItems.value.filter((item) => item.kind !== 'subscription' && item.kind !== 'recurring bill'));
+                const recurringHiddenLowConfidenceCount = computed(() => (recurringItems.value || []).length - recurringFilteredItems.value.length);
+                const recurringShowSubscriptions = computed(() => recurringQuickFilter.value !== 'bills');
+                const recurringShowOther = computed(() => recurringQuickFilter.value !== 'subscriptions');
+
+                const openRecurringEdit = (item) => {
+                    recurringEditKey.value = item.merchant_key;
+                    recurringEditLabel.value = item.label || '';
+                    recurringEditKind.value = item.kind || 'subscription';
+                    recurringActionMessage.value = '';
+                    recurringActionError.value = false;
+                    recurringEditOpen.value = true;
+                };
+
+                const closeRecurringEdit = () => {
+                    recurringEditOpen.value = false;
+                    recurringEditKey.value = '';
+                    recurringEditLabel.value = '';
+                    recurringEditKind.value = 'subscription';
+                    recurringEditSaving.value = false;
+                };
+
+                const ignoreRecurringItem = async (item) => {
+                    try {
+                        const nextRules = normalizeRecurringRules(recurringRules.value);
+                        if (!nextRules.ignored_keys.includes(item.merchant_key)) {
+                            nextRules.ignored_keys.push(item.merchant_key);
+                        }
+                        delete nextRules.overrides[item.merchant_key];
+                        await saveRecurringRules(nextRules, 'Recurring item ignored.');
+                    } catch (err) {
+                        recurringActionError.value = true;
+                        recurringActionMessage.value = err.message;
+                    }
+                };
+
+                const restoreRecurringItem = async (merchantKey) => {
+                    try {
+                        const nextRules = normalizeRecurringRules(recurringRules.value);
+                        nextRules.ignored_keys = nextRules.ignored_keys.filter((item) => item !== merchantKey);
+                        await saveRecurringRules(nextRules, 'Recurring item restored.');
+                    } catch (err) {
+                        recurringActionError.value = true;
+                        recurringActionMessage.value = err.message;
+                    }
+                };
+
+                const saveRecurringEdit = async () => {
+                    recurringEditSaving.value = true;
+                    recurringActionMessage.value = '';
+                    recurringActionError.value = false;
+                    try {
+                        const nextRules = normalizeRecurringRules(recurringRules.value);
+                        nextRules.ignored_keys = nextRules.ignored_keys.filter((item) => item !== recurringEditKey.value);
+                        nextRules.overrides[recurringEditKey.value] = {
+                            label: recurringEditLabel.value.trim(),
+                            kind: recurringEditKind.value.trim(),
+                            hidden: false,
+                        };
+                        await saveRecurringRules(nextRules, 'Recurring item updated.');
+                        closeRecurringEdit();
+                    } catch (err) {
+                        recurringActionError.value = true;
+                        recurringActionMessage.value = err.message;
+                    } finally {
+                        recurringEditSaving.value = false;
                     }
                 };
 
@@ -1886,6 +2094,17 @@
                     recurringMessage,
                     recurringError,
                     recurringLoading,
+                    recurringHideLowConfidence,
+                    recurringQuickFilter,
+                    recurringRules,
+                    recurringActionMessage,
+                    recurringActionError,
+                    recurringEditOpen,
+                    recurringEditKey,
+                    recurringEditLabel,
+                    recurringEditKind,
+                    recurringEditSaving,
+                    recurringFilteredItems,
                     filteredTransactions,
                     monthOptions,
                     selectedMonth,
@@ -1925,6 +2144,7 @@
                     hasSankeyData,
                     setView,
                     syncData,
+                    fetchRecurringRules,
                     fetchRecurringPayments,
                     claimToken,
                     toggleCategoryRulesMode,
@@ -1938,6 +2158,11 @@
                     saveAiSettings,
                     buildCategoryDefaults,
                     buildAiCategoryDefaults,
+                    openRecurringEdit,
+                    closeRecurringEdit,
+                    ignoreRecurringItem,
+                    restoreRecurringItem,
+                    saveRecurringEdit,
                     updateTransactionCategory,
                     renderSankey,
                     formatCurrency,

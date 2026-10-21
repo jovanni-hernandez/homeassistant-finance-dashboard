@@ -12,7 +12,9 @@ from database import (
     get_stored_accounts,
     get_stored_transactions,
     get_category_rules_value,
+    get_recurring_rules_value,
     set_category_rules_value,
+    set_recurring_rules_value,
     set_transaction_category,
 )
 import pin_auth
@@ -63,6 +65,10 @@ class CategoryDefaultsRequest(BaseModel):
 class RecurringRequest(BaseModel):
     top: int = 40
     min_count: int = 2
+
+
+class RecurringRulesRequest(BaseModel):
+    recurring_rules_json: str
 
 
 class AiSettingsRequest(BaseModel):
@@ -260,6 +266,21 @@ def api_get_recurring_payments(top: int = 40, min_count: int = 2):
         return {"status": "success", **analysis}
     except Exception as e:
         logger.error(f"Failed to generate recurring analysis: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/recurring-rules", dependencies=[Depends(verify_ha_auth)])
+def api_get_recurring_rules():
+    return {"recurring_rules_json": get_recurring_rules_value() or ""}
+
+
+@app.post("/api/recurring-rules", dependencies=[Depends(verify_ha_auth)])
+def api_set_recurring_rules(payload: RecurringRulesRequest):
+    try:
+        set_recurring_rules_value(payload.recurring_rules_json)
+        return {"status": "success", "message": "Recurring payment rules saved."}
+    except Exception as e:
+        logger.error(f"Failed to save recurring rules: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

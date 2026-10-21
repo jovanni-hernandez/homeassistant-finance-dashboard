@@ -1,7 +1,9 @@
+import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from statistics import median
 
+from database import get_recurring_rules_value
 from models import SessionLocal, Transaction
 
 
@@ -90,9 +92,48 @@ def _confidence(count: int, cadence_days: float | None, amount_stability: float,
     return max(0, min(100, score))
 
 
+def _load_recurring_rules():
+    raw = get_recurring_rules_value()
+    if not raw:
+        return {"ignored_keys": [], "overrides": {}}
+
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return {"ignored_keys": [], "overrides": {}}
+
+        ignored_keys = parsed.get("ignored_keys", [])
+        if not isinstance(ignored_keys, list):
+            ignored_keys = []
+
+        overrides = parsed.get("overrides", {})
+        if not isinstance(overrides, dict):
+            overrides = {}
+
+        normalized_overrides = {}
+        for key, value in overrides.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+            normalized_overrides[key] = {
+                "label": str(value.get("label", "")).strip(),
+                "kind": str(value.get("kind", "")).strip(),
+                "hidden": bool(value.get("hidden", False)),
+            }
+
+        return {
+            "ignored_keys": [str(item).strip() for item in ignored_keys if str(item).strip()],
+            "overrides": normalized_overrides,
+        }
+    except Exception:
+        return {"ignored_keys": [], "overrides": {}}
+
+
 def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
     db = SessionLocal()
     try:
+        rules = _load_recurring_rules()
+        ignored_keys = set(rules.get("ignored_keys", []))
+        overrides = rules.get("overrides", {})
         txs = db.query(Transaction).order_by(Transaction.date.asc()).all()
         grouped = defaultdict(list)
 
@@ -107,6 +148,8 @@ def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
 
             key = merchant_key(tx.payee or '', tx.description or '')
             if not key:
+                continue
+            if key in ignored_keys:
                 continue
 
             grouped[key].append(
@@ -156,6 +199,10 @@ def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
             if not recurring:
                 continue
 
+            override = overrides.get(key, {}) if isinstance(overrides, dict) else {}
+            if override.get("hidden"):
+                continue
+
             confidence = _confidence(count, cadence_days, amount_stability, keyword_hit, kind)
             first_seen = datetime.fromtimestamp(entries[0]['date'], tz=timezone.utc).isoformat()
             last_seen = datetime.fromtimestamp(entries[-1]['date'], tz=timezone.utc).isoformat()
@@ -166,8 +213,8 @@ def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
             items.append(
                 {
                     'merchant_key': key,
-                    'label': entries[-1]['payee'] or entries[-1]['description'] or key,
-                    'kind': kind,
+                    'label': override.get('label') or entries[-1]['payee'] or entries[-1]['description'] or key,
+                    'kind': override.get('kind') or kind,
                     'cadence_days': round(cadence_days, 1) if cadence_days is not None else None,
                     'cadence_label': _cadence_label(cadence_days),
                     'count': count,
@@ -191,6 +238,7 @@ def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
                         for entry in entries[-3:]
                     ],
                     'account_names': sorted({entry['account_name'] for entry in entries}),
+                    'is_overridden': bool(override.get('label') or override.get('kind') or override.get('hidden')),
                 }
             )
 
