@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 
+from PIL import Image
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -162,22 +163,39 @@ def main():
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
         wait.until(lambda d: "Finance Dashboard" in d.title)
 
-        body_text = driver.find_element(By.TAG_NAME, "body").text
+        dashboard_text = driver.find_element(By.TAG_NAME, "body").text
         logs = driver.get_log("browser")
-        screenshot.write_bytes(driver.get_screenshot_as_png())
 
-        locked = "PIN required" in body_text
+        locked = "PIN required" in dashboard_text
+        critical_dashboard_sections = ["Cash flow", "Recent transactions", "Accounts"]
+        critical_recurring_sections = ["Recurring payments", "Hide low-confidence", "Subscriptions"]
+
         if not locked:
-            # If the dashboard is unlocked, exercise the recurring screen directly.
+            for text in critical_dashboard_sections:
+                wait.until(lambda d, needle=text: needle in d.find_element(By.TAG_NAME, "body").text)
+
+            # Exercise the recurring screen directly.
             menu_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[aria-label="Open menu"]')))
             menu_button.click()
             recurring_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[.//span[text()='Recurring']]")))
             recurring_button.click()
-            wait.until(lambda d: "Recurring payments" in d.find_element(By.TAG_NAME, "body").text)
-            body_text = driver.find_element(By.TAG_NAME, "body").text
+            for text in critical_recurring_sections:
+                wait.until(lambda d, needle=text: needle in d.find_element(By.TAG_NAME, "body").text)
+            recurring_text = driver.find_element(By.TAG_NAME, "body").text
+        else:
+            recurring_text = dashboard_text
 
-        body_text_length = len(body_text)
-        source = driver.page_source
+        driver.save_screenshot(str(screenshot))
+        image = Image.open(screenshot).convert("RGB")
+        width, height = image.size
+        gray_bytes = image.convert("L").tobytes()
+        content_pixels = 0
+        for value in gray_bytes:
+            if value < 245:
+                content_pixels += 1
+        content_ratio = content_pixels / max(1, width * height)
+
+        body_text_length = len(dashboard_text)
         severe_logs = []
         warnings = []
         for entry in logs:
@@ -190,24 +208,26 @@ def main():
         ok = (
             "Finance Dashboard" in driver.title
             and body_text_length > 50
-            and (
-                (locked and "PIN required" in body_text)
-                or (not locked and "Recurring payments" in body_text)
-            )
+            and (locked or all(text in dashboard_text for text in critical_dashboard_sections))
+            and (locked or all(text in recurring_text for text in critical_recurring_sections))
+            and content_ratio >= 0.003
             and not severe_logs
             and not warnings
-            and "Finance Dashboard" in source
         )
 
         result = {
             "ok": ok,
             "title": driver.title,
-            "body_length": len(body_text),
+            "body_length": len(dashboard_text),
+            "recurring_body_length": len(recurring_text),
             "screenshot": str(screenshot),
+            "screenshot_content_ratio": round(content_ratio, 4),
             "browser_logs": len(logs),
             "locked": locked,
             "severe_logs": len(severe_logs),
             "vue_warnings": len(warnings),
+            "critical_dashboard_sections": critical_dashboard_sections,
+            "critical_recurring_sections": critical_recurring_sections,
         }
         print(json.dumps(result, indent=2))
         if not result["ok"]:

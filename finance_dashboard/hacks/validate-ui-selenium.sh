@@ -6,8 +6,9 @@ VENV_DIR="/data/v2/cache/opencode/finance-dashboard-selenium-venv"
 
 if [ ! -x "$VENV_DIR/bin/python" ]; then
   python3 -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-  "$VENV_DIR/bin/pip" install selenium >/dev/null
 fi
+
+"$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
+"$VENV_DIR/bin/pip" install selenium pillow >/dev/null
 
 exec "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/validate-ui-selenium.py" "$@"

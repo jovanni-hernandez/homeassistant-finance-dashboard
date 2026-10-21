@@ -14,7 +14,8 @@ What it does:
 3. opens the frontend in headless Chromium
 4. captures a screenshot and checks for runtime exceptions
 5. retries transient browser failures with exponential backoff
-6. runs a Selenium-backed browser validation pass against the recurring-payments view
+6. runs a Selenium-backed browser validation pass against the critical dashboard sections and recurring-payments view
+7. rejects blank/near-blank screenshots with a visual-content check
 
 ## Manual HA refresh
 
