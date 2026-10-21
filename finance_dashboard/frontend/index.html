@@ -6,10 +6,11 @@
     <title>Finance Dashboard</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
 </head>
 <body class="bg-slate-100 text-slate-900">
     <div id="app" class="min-h-screen">
-        <!-- App shell -->
         <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
             <div class="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
                 <button
@@ -75,7 +76,6 @@
             </div>
         </header>
 
-        <!-- Drawer -->
         <div v-if="drawerOpen" class="fixed inset-0 z-40" @click.self="drawerOpen = false">
             <div class="absolute inset-0 bg-slate-900/30"></div>
             <aside class="absolute left-0 top-0 h-full w-80 max-w-[85vw] border-r border-slate-200 bg-white shadow-2xl">
@@ -156,6 +156,19 @@
                             <div class="mt-2 text-lg font-semibold">{{ formatDateTime(status.last_sync_at) }}</div>
                         </div>
                     </div>
+
+                    <section>
+                        <div class="mb-3 flex items-center justify-between gap-3">
+                            <h2 class="text-xl font-semibold text-slate-800">Cash flow</h2>
+                            <div class="text-sm text-slate-500">Paycheck deposits to spending categories</div>
+                        </div>
+                        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <div ref="sankeyEl" class="h-[420px] w-full overflow-x-auto"></div>
+                            <p v-if="!hasSankeyData" class="mt-3 text-sm text-slate-500">
+                                Not enough paycheck and expense data yet to draw the flow chart.
+                            </p>
+                        </div>
+                    </section>
 
                     <section>
                         <div class="mb-3 flex items-center justify-between gap-3">
@@ -294,7 +307,7 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted } = Vue;
+        const { createApp, ref, onMounted, nextTick, computed } = Vue;
 
         createApp({
             setup() {
@@ -317,6 +330,7 @@
                     last_sync_message: '',
                     last_sync_at: null,
                 });
+                const sankeyEl = ref(null);
 
                 const getApiUrl = (endpoint) => window.location.pathname.replace(/\/$/, '') + endpoint;
 
@@ -369,6 +383,8 @@
                         syncMessage.value = data.message || 'Sync completed successfully.';
                         syncError.value = false;
                         await Promise.all([fetchStatus(), fetchData()]);
+                        await nextTick();
+                        renderSankey();
                     } catch (err) {
                         syncError.value = true;
                         syncMessage.value = err.message;
@@ -378,30 +394,143 @@
                     }
                 };
 
-                const claimToken = async () => {
-                    if (!setupTokenInput.value.trim()) return;
-                    claiming.value = true;
-                    syncMessage.value = '';
-                    syncError.value = false;
-                    try {
-                        const res = await fetch(getApiUrl('/api/simplefin/claim-token'), {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                            body: JSON.stringify({ setup_token: setupTokenInput.value.trim() }),
-                        });
-                        const data = await res.json().catch(() => ({}));
-                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to claim token (${res.status})`);
-                        syncMessage.value = data.message || 'SimpleFIN connected successfully.';
-                        syncError.value = false;
-                        setupTokenInput.value = '';
-                        await Promise.all([fetchStatus(), fetchData()]);
-                        view.value = 'dashboard';
-                    } catch (err) {
-                        syncError.value = true;
-                        syncMessage.value = err.message;
-                    } finally {
-                        claiming.value = false;
+                const normalizeLabel = (text) => (text || '').toLowerCase();
+
+                const categorizeExpense = (tx) => {
+                    const haystack = `${tx.payee || ''} ${tx.description || ''}`.toLowerCase();
+                    const categories = [
+                        ['Income', ['payroll', 'salary', 'deposit', 'direct deposit', 'paycheck']],
+                        ['Groceries', ['grocery', 'supermarket', 'food lion', 'whole foods', 'trader joe', 'costco', 'aldi', 'kroger', 'walmart']],
+                        ['Dining', ['restaurant', 'coffee', 'cafe', 'mcdonald', 'chipotle', 'starbucks', 'doordash', 'ubereats', 'grubhub']],
+                        ['Housing', ['rent', 'mortgage', 'property', 'hoa']],
+                        ['Utilities', ['electric', 'water', 'gas', 'internet', 'phone', 'utility']],
+                        ['Transport', ['gas', 'fuel', 'uber', 'lyft', 'parking', 'toll', 'metro', 'transit']],
+                        ['Shopping', ['amazon', 'target', 'costco', 'shopping', 'store', 'walmart']],
+                        ['Travel', ['hotel', 'airlines', 'flight', 'travel', 'rental car']],
+                        ['Subscriptions', ['netflix', 'spotify', 'subscription', 'prime', 'hulu', 'apple']],
+                        ['Fees', ['fee', 'interest', 'late']],
+                    ];
+
+                    for (const [category, words] of categories) {
+                        if (words.some((w) => haystack.includes(w))) return category;
                     }
+                    return 'Other';
+                };
+
+                const calculateSankey = () => {
+                    const incomeTx = transactions.value.filter((tx) => parseFloat(tx.amount || 0) > 0);
+                    const expenseTx = transactions.value.filter((tx) => parseFloat(tx.amount || 0) < 0);
+
+                    if (!incomeTx.length || !expenseTx.length) return null;
+
+                    const paycheckDeposits = incomeTx.filter((tx) => /payroll|salary|deposit|direct deposit|paycheck/i.test(`${tx.payee || ''} ${tx.description || ''}`));
+                    const incomeTotal = paycheckDeposits.length
+                        ? paycheckDeposits.reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount || 0)), 0)
+                        : incomeTx.reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount || 0)), 0);
+
+                    if (incomeTotal <= 0) return null;
+
+                    const categoryTotals = expenseTx.reduce((acc, tx) => {
+                        const category = categorizeExpense(tx);
+                        acc[category] = (acc[category] || 0) + Math.abs(parseFloat(tx.amount || 0));
+                        return acc;
+                    }, {});
+
+                    const visibleCategories = Object.entries(categoryTotals)
+                        .filter(([, total]) => total > 0)
+                        .sort((a, b) => b[1] - a[1])
+                        .slice(0, 8);
+
+                    if (!visibleCategories.length) return null;
+
+                    const nodes = [
+                        { name: 'Paycheck deposits' },
+                        ...visibleCategories.map(([name]) => ({ name })),
+                    ];
+
+                    const links = visibleCategories.map(([name, total]) => ({
+                        source: 0,
+                        target: nodes.findIndex((n) => n.name === name),
+                        value: total,
+                    }));
+
+                    return { nodes, links };
+                };
+
+                const hasSankeyData = computed(() => !!calculateSankey());
+
+                const renderSankey = () => {
+                    if (!sankeyEl.value) return;
+                    sankeyEl.value.innerHTML = '';
+
+                    const data = calculateSankey();
+                    if (!data) {
+                        sankeyEl.value.innerHTML = '<div class="flex h-full items-center justify-center text-sm text-slate-500">No sankey data yet.</div>';
+                        return;
+                    }
+
+                    const container = sankeyEl.value;
+                    const width = Math.max(container.clientWidth || 0, 700);
+                    const height = 380;
+                    const marginTop = 10;
+                    const marginRight = 10;
+                    const marginBottom = 10;
+                    const marginLeft = 10;
+
+                    const svg = d3.select(container)
+                        .append('svg')
+                        .attr('viewBox', [0, 0, width, height])
+                        .attr('width', '100%')
+                        .attr('height', height)
+                        .style('max-width', '100%')
+                        .style('overflow', 'visible');
+
+                    const sankey = d3.sankey()
+                        .nodeWidth(18)
+                        .nodePadding(18)
+                        .extent([[marginLeft, marginTop], [width - marginRight, height - marginBottom]]);
+
+                    const graph = sankey({
+                        nodes: data.nodes.map((d) => ({ ...d })),
+                        links: data.links.map((d) => ({ ...d })),
+                    });
+
+                    svg.append('g')
+                        .selectAll('path')
+                        .data(graph.links)
+                        .join('path')
+                        .attr('d', d3.sankeyLinkHorizontal())
+                        .attr('fill', 'none')
+                        .attr('stroke', '#38bdf8')
+                        .attr('stroke-opacity', 0.28)
+                        .attr('stroke-width', (d) => Math.max(1, d.width))
+                        .append('title')
+                        .text((d) => `${d.source.name} → ${d.target.name}: ${formatCurrency(d.value)}`);
+
+                    const node = svg.append('g')
+                        .selectAll('g')
+                        .data(graph.nodes)
+                        .join('g');
+
+                    node.append('rect')
+                        .attr('x', (d) => d.x0)
+                        .attr('y', (d) => d.y0)
+                        .attr('height', (d) => Math.max(1, d.y1 - d.y0))
+                        .attr('width', (d) => d.x1 - d.x0)
+                        .attr('rx', 6)
+                        .attr('fill', (d) => d.name === 'Paycheck deposits' ? '#0f766e' : '#2563eb')
+                        .attr('fill-opacity', 0.9)
+                        .append('title')
+                        .text((d) => `${d.name}: ${formatCurrency(d.value)}`);
+
+                    node.append('text')
+                        .attr('x', (d) => d.x0 < width / 2 ? d.x1 + 8 : d.x0 - 8)
+                        .attr('y', (d) => (d.y0 + d.y1) / 2)
+                        .attr('dy', '0.35em')
+                        .attr('text-anchor', (d) => d.x0 < width / 2 ? 'start' : 'end')
+                        .attr('class', 'fill-slate-700 text-[12px]')
+                        .style('font-family', 'system-ui, sans-serif')
+                        .text((d) => `${d.name} (${formatCurrency(d.value)})`);
                 };
 
                 const formatCurrency = (value, currency = 'USD') => new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(parseFloat(value || 0));
@@ -414,6 +543,9 @@
 
                 onMounted(async () => {
                     await Promise.all([fetchStatus(), fetchData()]);
+                    await nextTick();
+                    renderSankey();
+                    window.addEventListener('resize', () => renderSankey(), { passive: true });
                 });
 
                 return {
@@ -429,9 +561,12 @@
                     error,
                     setupTokenInput,
                     status,
+                    sankeyEl,
+                    hasSankeyData,
                     setView,
                     syncData,
                     claimToken,
+                    renderSankey,
                     formatCurrency,
                     formatDate,
                     formatDateTime,
