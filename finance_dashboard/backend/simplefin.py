@@ -18,6 +18,8 @@ from database import (
 logger = logging.getLogger("finance_dashboard")
 
 OPTIONS_PATH = "/data/options.json"
+ACCESS_URL_KEY = "simplefin_access_url"
+LEGACY_ACCESS_KEY = "simplefin_access_token"
 
 
 def _record_sync_state(status: str, message: str):
@@ -26,34 +28,114 @@ def _record_sync_state(status: str, message: str):
     set_setting("last_sync_at", datetime.now(timezone.utc).isoformat())
 
 
-def get_simplefin_token():
-    """Prioritize fetching token from database, then add-on options."""
+def _looks_like_access_url(value: str) -> bool:
+    return isinstance(value, str) and value.startswith(("http://", "https://")) and "@" in value
+
+
+def _decode_base64(text: str):
     try:
-        db_token = get_setting("simplefin_access_token")
-        if db_token:
-            logger.info("SimpleFIN access token retrieved from DB.")
-            return db_token
+        decoded = base64.b64decode(text).decode("utf-8")
+        return decoded.strip()
+    except Exception:
+        return None
+
+
+def _store_access_url(access_url: str):
+    if not access_url:
+        raise ValueError("Empty SimpleFIN access URL.")
+    set_setting(ACCESS_URL_KEY, access_url.strip())
+    # Keep the legacy key in sync for backward compatibility.
+    set_setting(LEGACY_ACCESS_KEY, access_url.strip())
+
+
+def _resolve_access_url_from_candidate(candidate: str, allow_claim: bool = False):
+    """Resolve a stored candidate to a raw access URL.
+
+    Accepts either:
+    - raw access URL (preferred, matches the SimpleFIN guide)
+    - legacy base64-encoded access URL
+    - setup token (base64-encoded claim URL), when allow_claim=True
+    """
+    if not candidate:
+        return None
+
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+
+    if _looks_like_access_url(candidate):
+        return candidate
+
+    decoded = _decode_base64(candidate)
+    if not decoded:
+        return None
+
+    if _looks_like_access_url(decoded):
+        # Either a legacy base64 access URL or a setup-token claim URL that was already claimed.
+        parsed = urlsplit(decoded)
+        if parsed.path.endswith("/claim") or "/claim/" in parsed.path:
+            if not allow_claim:
+                return None
+            return _claim_setup_url(decoded)
+        return decoded
+
+    return None
+
+
+def _claim_setup_url(claim_url: str):
+    logger.info(f"Claiming SimpleFIN setup token via: {claim_url}")
+    response = requests.post(claim_url, headers={"Content-Length": "0"}, timeout=30)
+    response.raise_for_status()
+    access_url = response.text.strip()
+    if not _looks_like_access_url(access_url):
+        raise ValueError("SimpleFIN did not return a valid access URL.")
+    return access_url
+
+
+def get_simplefin_token():
+    """Return the raw SimpleFIN access URL."""
+    try:
+        stored = get_setting(ACCESS_URL_KEY)
+        resolved = _resolve_access_url_from_candidate(stored or "", allow_claim=False)
+        if resolved:
+            logger.info("SimpleFIN access URL retrieved from DB.")
+            if resolved != stored:
+                _store_access_url(resolved)
+            return resolved
     except Exception as e:
-        logger.warning(f"Could not retrieve SimpleFIN token from DB (initial attempt): {e}")
+        logger.warning(f"Could not retrieve SimpleFIN access URL from DB: {e}")
+
+    try:
+        legacy = get_setting(LEGACY_ACCESS_KEY)
+        resolved = _resolve_access_url_from_candidate(legacy or "", allow_claim=False)
+        if resolved:
+            logger.info("Legacy SimpleFIN access value retrieved from DB.")
+            _store_access_url(resolved)
+            return resolved
+    except Exception as e:
+        logger.warning(f"Could not retrieve legacy SimpleFIN access value from DB: {e}")
 
     try:
         with open(OPTIONS_PATH) as f:
             options = json.load(f)
-            token = options.get("simplefin_token")
-            if token and token.strip():
-                logger.info("SimpleFIN token retrieved from options.json.")
-                return token.strip()
+            candidate = (options.get("simplefin_token") or "").strip()
+            if candidate:
+                logger.info("SimpleFIN candidate retrieved from options.json.")
+                resolved = _resolve_access_url_from_candidate(candidate, allow_claim=True)
+                if resolved:
+                    _store_access_url(resolved)
+                    return resolved
     except Exception as e:
         logger.warning(f"Could not retrieve SimpleFIN token from options.json: {e}")
 
-    logger.info("SimpleFIN access token not found in DB or options.json.")
+    logger.info("SimpleFIN access URL not found in DB or options.json.")
     return None
 
 
 def set_simplefin_token(token: str):
-    """Save SimpleFIN access token securely to the database settings."""
-    logger.info("Saving SimpleFIN access token to DB...")
-    set_setting("simplefin_access_token", token.strip())
+    """Save a raw SimpleFIN access URL securely to the database settings."""
+    logger.info("Saving SimpleFIN access URL to DB...")
+    _store_access_url(token)
     return True
 
 
@@ -68,20 +150,14 @@ def claim_simplefin_setup_token(setup_token: str):
         if not setup_token:
             raise ValueError("Setup token cannot be empty.")
 
-        claim_url = base64.b64decode(setup_token).decode("utf-8")
-        logger.info(f"Attempting to claim SimpleFIN token from: {claim_url}")
+        claim_url = _decode_base64(setup_token)
+        if not claim_url or not claim_url.startswith(("http://", "https://")):
+            raise ValueError("Invalid SimpleFIN setup token.")
 
-        response = requests.post(claim_url, headers={"Content-Length": "0"}, timeout=30)
-        response.raise_for_status()
-
-        access_url = response.text.strip()
-        if not access_url:
-            raise ValueError("SimpleFIN did not return an access URL.")
-
+        access_url = _claim_setup_url(claim_url)
         logger.info("Successfully received SimpleFIN access URL.")
-        access_token = base64.b64encode(access_url.encode("utf-8")).decode("utf-8")
-        set_simplefin_token(access_token)
-        logger.info("SimpleFIN access token saved.")
+        _store_access_url(access_url)
+        logger.info("SimpleFIN access URL saved.")
         _record_sync_state("success", "SimpleFIN token claimed successfully")
         return {"status": "success", "message": "Successfully claimed SimpleFIN token"}
     except Exception as e:
@@ -103,8 +179,7 @@ def get_dashboard_status():
     }
 
 
-def _decode_access_token_to_request(token: str):
-    access_url = base64.b64decode(token).decode("utf-8")
+def _decode_access_url_to_request(access_url: str):
     parsed = urlsplit(access_url)
 
     if not parsed.scheme or not parsed.hostname:
@@ -123,7 +198,12 @@ def _decode_access_token_to_request(token: str):
 def _normalize_simplefin_payload(data: dict):
     accounts = []
     for account in data.get("accounts", []):
-        account_id = str(account.get("id") or account.get("account") or account.get("name") or hashlib.sha256(repr(account).encode()).hexdigest()[:16])
+        account_id = str(
+            account.get("id")
+            or account.get("account")
+            or account.get("name")
+            or hashlib.sha256(repr(account).encode()).hexdigest()[:16]
+        )
         org_raw = account.get("org", {})
         if isinstance(org_raw, dict):
             org = org_raw.get("name") or org_raw.get("id") or "Unknown"
@@ -169,11 +249,11 @@ def _normalize_simplefin_payload(data: dict):
 
 def fetch_and_sync_simplefin():
     """Fetch normalized financial data from SimpleFIN and persist to DB."""
-    token = get_simplefin_token()
+    access_url = get_simplefin_token()
 
-    if token and token != "":
+    if access_url and access_url != "":
         try:
-            base_url, auth = _decode_access_token_to_request(token)
+            base_url, auth = _decode_access_url_to_request(access_url)
             accounts_url = f"{base_url}/accounts"
             logger.info(f"Fetching accounts from SimpleFIN API: {accounts_url}?version=2")
 
@@ -181,17 +261,17 @@ def fetch_and_sync_simplefin():
             response.raise_for_status()
             payload = response.json()
 
-            warnings = []
+            simplefin_errors = []
             for key in ("errlist", "errors"):
                 if payload.get(key):
-                    warnings.extend(payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)])
+                    simplefin_errors.extend(payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)])
 
             normalized = _normalize_simplefin_payload(payload)
             save_simplefin_data(normalized)
 
             message = "Synced successfully from SimpleFIN"
-            if warnings:
-                message = f"Synced with warnings: {warnings[0]}"
+            if simplefin_errors:
+                message = f"Synced with warnings: {simplefin_errors[0]}"
 
             _record_sync_state("success", message)
             logger.info("SimpleFIN data synced and saved to DB.")
@@ -200,14 +280,14 @@ def fetch_and_sync_simplefin():
                 "message": message,
                 "account_count": get_account_count(),
                 "transaction_count": get_transaction_count(),
-                "warnings": warnings,
+                "warnings": simplefin_errors,
             }
         except Exception as e:
             logger.error(f"Error fetching SimpleFIN data: {e}")
             _record_sync_state("error", f"Sync failed: {e}")
             return {"status": "error", "message": str(e)}
 
-    logger.warning("No SimpleFIN access token found. Seeding mock data.")
+    logger.warning("No SimpleFIN access URL found. Seeding mock data.")
     mock_data = {
         "accounts": [
             {
