@@ -16,6 +16,11 @@ if [ -f "$ENV_FILE" ]; then
   source "$ENV_FILE"
 fi
 
+export HA_URL HA_TOKEN
+export GH_TOKEN="${GH_TOKEN:-}"
+export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
+export FINANCE_DASHBOARD_URL="${FINANCE_DASHBOARD_URL:-}"
+
 if [ -z "${HA_URL:-}" ] || [ -z "${HA_TOKEN:-}" ]; then
   echo "HA_URL and HA_TOKEN are required for the full release flow."
   echo "Set them in finance_dashboard/.env or finance_dashboard/hacks/.release.env, then rerun."
@@ -43,12 +48,9 @@ git -C "$ROOT_DIR" add -A
 
 if ! git -C "$ROOT_DIR" diff --cached --quiet; then
   git -C "$ROOT_DIR" commit -m "Release v$VERSION"
-  git -C "$ROOT_DIR" push
+  "$ROOT_DIR/hacks/push-github.sh" origin main
 else
   echo "No changes to commit after certification."
 fi
 
 "$ROOT_DIR/hacks/deploy-and-verify.sh" "$REPO"
-
-echo "Running Selenium against the deployed finance add-on over the HA internal network..."
-"$ROOT_DIR/hacks/validate-ui-selenium.sh"

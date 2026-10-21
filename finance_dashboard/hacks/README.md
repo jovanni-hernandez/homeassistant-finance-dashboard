@@ -10,29 +10,23 @@ Run from the repository root:
 
 What it does:
 1. bumps `config.yaml` patch version
-2. syntax-checks backend Python
-3. opens the frontend in headless Chromium
-4. captures a screenshot and checks for runtime exceptions
-5. retries transient browser failures with exponential backoff
-6. runs Selenium against the real FastAPI app with an isolated SQLite database (or `FINANCE_DASHBOARD_URL` when set)
-7. checks the critical dashboard sections and recurring-payments view
-8. rejects blank/near-blank screenshots with a visual-content check
-9. fails if the boot/fallback screen never disappears, Vue emits render warnings, or browser requests fail
+2. tests the Supervisor refresh/update job protocol
+3. syntax-checks backend Python
+4. runs Selenium against the deployed app by default (or the real FastAPI app with an isolated DB when explicitly set to `FINANCE_DASHBOARD_URL=local`)
+5. checks the critical dashboard sections, recurring view, and quick filters
+6. rejects blank/near-blank screenshots
+7. fails if Vue renders warnings, browser requests fail, or the boot fallback remains visible
+8. retries transient browser failures with exponential backoff
 
 The Selenium helper defaults to the deployed app at `http://homeassistant:8000/` over Home Assistant's internal network. Set `FINANCE_DASHBOARD_URL` to another directly reachable app URL to override it. `FINANCE_DASHBOARD_URL=local` runs the real FastAPI app with a disposable SQLite database as a pre-publish check; it is not the deployed-app acceptance test.
 
-## Manual HA refresh
-
-Home Assistant's add-on store refresh is the equivalent of a repo metadata check. The underlying HA tooling exposes a `hab marketplace refresh <repository>` command, but the bridge can be flaky in this environment. Use the HA UI refresh button when needed, or run the matching `hab` command if available in your session.
-
-
-## Repository refresh
+## Marketplace refresh
 
 ```bash
 ./hacks/refresh-marketplace.sh
 ```
 
-This mirrors the Home Assistant marketplace refresh button and retries transient failures with exponential backoff. If you pass an expected version, it also retries the post-refresh version check until the metadata catches up.
+This calls the authenticated Supervisor store-reload endpoint through HA's REST proxy, then retries the store-version check until `config.yaml`'s version appears. It requires `HA_URL` and `HA_TOKEN` from `.env` or `hacks/.release.env`; it does not depend on a shell `hab` login.
 
 ## Release / verify helper
 
@@ -40,21 +34,14 @@ This mirrors the Home Assistant marketplace refresh button and retries transient
 ./hacks/release.sh
 ```
 
-This runs the full release flow: local real-backend preflight, commit/push, refresh marketplace metadata, update with `backup: false`, then Selenium against the deployed add-on over the HA internal network.
-It requires `HA_URL` and `HA_TOKEN`; with those set, it also triggers the Home Assistant add-on update and polls it to completion with `backup: false`.
+This runs the full release flow: local real-backend preflight, authenticated GitHub push, Supervisor store refresh through `/api/hassio/store/reload`, add-on update with `backup: false`, job/version verification, and finally Selenium against the deployed add-on over the HA internal network.
+It requires `HA_URL` and an administrator `HA_TOKEN` in `.env` or `hacks/.release.env`. Git push uses existing Git/`gh` auth, `GITHUB_TOKEN`/`GH_TOKEN`, or OpenCode's managed GitHub credential store. The Selenium acceptance target defaults to `http://homeassistant:8000/`; set `FINANCE_DASHBOARD_URL` to override it.
+
+`deploy-and-verify.sh` can be run by itself to refresh the store, update the currently published add-on, confirm its installed version, and run the live Selenium check. `refresh-marketplace.sh` performs just the authenticated store refresh/version wait.
 
 ## Dev launcher add-on
 
-The repo also includes a separate dev-launcher add-on under `finance_dashboard_dev/`. It clones the finance dashboard repo into `/data`, installs the runtime plus Selenium/browser tooling, and boots the app from that workspace.
-
-If you only want the repository refresh + sync wait step:
-
-```bash
-./hacks/deploy-and-verify.sh
-```
-
-This runs the repo refresh helper using the version from `config.yaml`, then waits for the marketplace metadata to report that version before it triggers the Home Assistant update step.
-If you set `HA_URL` and `HA_TOKEN`, it will also drive the add-on update end-to-end, auto-detect the update entity, retry transient update-trigger failures, and wait for Home Assistant to report the new installed version.
+The repo also includes a separate dev-launcher add-on under `finance_dashboard_dev/`. It clones the finance dashboard repo into `/data`, installs the runtime plus Selenium/browser tooling, and boots the launcher UI from that workspace.
 
 ## Categorization rule proposals
 

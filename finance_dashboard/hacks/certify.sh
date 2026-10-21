@@ -8,6 +8,7 @@ MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 BASE_DELAY_SECONDS="${BASE_DELAY_SECONDS:-2}"
 
 python3 "$ROOT_DIR/hacks/bump-version.py" "$VERSION_FILE" patch >/dev/null
+python3 "$ROOT_DIR/hacks/test-ha-release.py"
 python3 -m py_compile "$ROOT_DIR/backend"/*.py
 
 attempt=1
