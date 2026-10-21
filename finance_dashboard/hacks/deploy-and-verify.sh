@@ -17,9 +17,22 @@ print(match.group(1))
 PY
 )"
 
+ADDON_TITLE="$(python3 - "$VERSION_FILE" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+match = re.search(r'^name:\s*(.+?)\s*$', text, re.M)
+if not match:
+    raise SystemExit('Could not determine add-on title from config.yaml')
+print(match.group(1))
+PY
+)"
+
 HA_URL="${HA_URL:-}"
 HA_TOKEN="${HA_TOKEN:-}"
-UPDATE_ENTITY_ID="${UPDATE_ENTITY_ID:-update.personal_finance_dashboard_update}"
+UPDATE_ENTITY_ID="${UPDATE_ENTITY_ID:-}"
 HA_MAX_ATTEMPTS="${HA_MAX_ATTEMPTS:-10}"
 HA_BASE_DELAY_SECONDS="${HA_BASE_DELAY_SECONDS:-2}"
 
@@ -92,6 +105,42 @@ print(str(value).lower())
 PY
 }
 
+detect_update_entity_id() {
+  if [ -n "$UPDATE_ENTITY_ID" ]; then
+    return 0
+  fi
+
+  UPDATE_ENTITY_ID="$(ha_call GET "/api/states" '__EMPTY__' | python3 - "$ADDON_TITLE" <<'PY'
+import json
+import re
+import sys
+
+target = sys.argv[1].strip().lower()
+payload = json.loads(sys.stdin.read() or '[]')
+
+def normalize(text):
+    return re.sub(r'\s+', ' ', str(text or '').strip().lower())
+
+for entity in payload:
+    if entity.get('entity_id', '').startswith('update.'):
+        attrs = entity.get('attributes', {})
+        title = normalize(attrs.get('title'))
+        friendly = normalize(attrs.get('friendly_name'))
+        if title == target or friendly == target:
+            print(entity['entity_id'])
+            raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+)"
+
+  if [ -z "$UPDATE_ENTITY_ID" ]; then
+    echo "Could not auto-detect the Home Assistant update entity for $ADDON_TITLE."
+    echo "Set UPDATE_ENTITY_ID manually and re-run."
+    exit 1
+  fi
+}
+
 refresh_update_entity() {
   ha_call POST "/api/services/homeassistant/update_entity" "$(python3 - <<'PY' "$UPDATE_ENTITY_ID"
 import json
@@ -127,6 +176,7 @@ wait_for_update_entity() {
       attempt=$((attempt + 1))
       continue
     fi
+
     installed_version="$(printf '%s' "$state_json" | parse_state_field installed_version || true)"
     latest_version="$(printf '%s' "$state_json" | parse_state_field latest_version || true)"
     in_progress="$(printf '%s' "$state_json" | parse_state_field in_progress || true)"
@@ -150,6 +200,10 @@ wait_for_update_entity() {
     attempt=$((attempt + 1))
   done
 }
+
+
+detect_update_entity_id
+echo "Using Home Assistant update entity: $UPDATE_ENTITY_ID"
 
 current_state_json="$(get_update_state || true)"
 current_installed_version="$(printf '%s' "$current_state_json" | parse_state_field installed_version || true)"

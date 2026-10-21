@@ -44,4 +44,4 @@ If you only want the repository refresh + sync wait step:
 ```
 
 This runs the repo refresh helper using the version from `config.yaml`, then waits for the marketplace metadata to report that version before you move on to the Home Assistant update step.
-If you set `HA_URL` and `HA_TOKEN`, it will also drive the add-on update end-to-end and wait for Home Assistant to report the new installed version.
+If you set `HA_URL` and `HA_TOKEN`, it will also drive the add-on update end-to-end, auto-detect the update entity, and wait for Home Assistant to report the new installed version.
