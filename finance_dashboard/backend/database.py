@@ -21,8 +21,10 @@ def save_simplefin_data(data):
         for acc in accounts:
             acc_id = str(acc.get("id"))
             org_raw = acc.get("org", {})
-            org = org_raw.get("name") if isinstance(org_raw, dict) else str(acc.get("org", "Unknown"))
+            org = org_raw.get("name") if isinstance(org_raw, dict) else str(acc.get("org", ""))
             name = acc.get("name", "Account")
+            if not org or org.strip().lower() == "unknown":
+                org = name or "Account"
             balance = str(acc.get("balance", "0.00"))
             currency = acc.get("currency", "USD")
 

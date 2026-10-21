@@ -64,7 +64,7 @@ class Account(Base):
     def to_dict(self):
         return {
             "id": self.id,
-            "org": self.org,
+            "org": self.org if self.org and self.org.strip().lower() != "unknown" else (self.name or "Account"),
             "name": self.name,
             "balance": self.balance,
             "currency": self.currency,
@@ -109,11 +109,20 @@ class Transaction(Base):
         self._description = encrypt_value(value)
 
     def to_dict(self):
+        account_name = "Unknown"
+        if self.account:
+            if self.account.name and self.account.name.strip().lower() != "unknown":
+                account_name = self.account.name
+            elif self.account.org and self.account.org.strip().lower() != "unknown":
+                account_name = self.account.org
+            else:
+                account_name = self.account_id or "Unknown"
+
         return {
             "id": self.id,
             "account_id": self.account_id,
-            "account_name": self.account.name if self.account else "Unknown",
-            "org": self.account.org if self.account else "Unknown",
+            "account_name": account_name,
+            "org": self.account.org if self.account and self.account.org and self.account.org.strip().lower() != "unknown" else account_name,
             "date": self.date,
             "amount": self.amount,
             "payee": self.payee,

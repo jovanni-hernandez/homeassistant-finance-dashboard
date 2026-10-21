@@ -54,23 +54,18 @@
                 </button>
             </div>
 
-            <div class="mx-auto max-w-7xl px-4 pb-3 sm:px-6 lg:px-8">
+            <div class="mx-auto max-w-7xl px-4 pb-2 sm:px-6 lg:px-8">
                 <div
-                    class="rounded-xl border px-4 py-3 text-sm"
+                    class="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs sm:text-sm"
                     :class="status.connected ? 'border-emerald-200 bg-emerald-50/80 text-emerald-800' : 'border-amber-200 bg-amber-50/80 text-amber-800'"
                 >
-                    <div class="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
-                        <div>
-                            <span class="font-semibold">{{ status.connected ? 'SimpleFIN connected.' : 'SimpleFIN is not connected.' }}</span>
-                            <span class="ml-1">
-                                {{ status.connected
-                                    ? 'This dashboard is reading your stored connection from the local database.'
-                                    : 'You can still use the dashboard with sample data until a token is saved.' }}
-                            </span>
-                        </div>
-                        <div class="text-xs opacity-90">
-                            {{ status.last_sync_status || 'never' }} · {{ status.last_sync_message || 'No sync has completed yet.' }}
-                        </div>
+                    <div class="flex min-w-0 items-center gap-2">
+                        <span class="h-2.5 w-2.5 rounded-full" :class="status.connected ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+                        <span class="font-semibold">{{ status.connected ? 'SimpleFIN connected' : 'SimpleFIN not connected' }}</span>
+                        <span class="hidden sm:inline text-slate-600">· {{ status.last_sync_status || 'never' }}</span>
+                    </div>
+                    <div class="min-w-0 max-w-[52vw] truncate text-right text-slate-600">
+                        {{ status.last_sync_message || 'No sync has completed yet.' }}
                     </div>
                 </div>
             </div>
