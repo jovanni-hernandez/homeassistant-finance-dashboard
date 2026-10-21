@@ -2,7 +2,7 @@ import base64
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -19,6 +19,8 @@ logger = logging.getLogger("finance_dashboard")
 
 OPTIONS_PATH = "/data/options.json"
 ACCESS_URL_KEY = "simplefin_access_url"
+SYNC_HISTORY_DAYS = 30
+SYNC_OVERLAP_DAYS = 5
 
 
 def _record_sync_state(status: str, message: str):
@@ -229,19 +231,39 @@ def _normalize_simplefin_payload(data: dict):
     return {"accounts": accounts}
 
 
+def _fetch_simplefin_payload(access_url: str, start_ts: int | None = None, end_ts: int | None = None):
+    base_url, auth = _decode_access_url_to_request(access_url)
+    accounts_url = f"{base_url}/accounts"
+
+    params = {"version": "2"}
+    if start_ts is not None:
+        params["start-date"] = int(start_ts)
+    if end_ts is not None:
+        params["end-date"] = int(end_ts)
+
+    url_desc = f"{accounts_url}?version=2"
+    if start_ts is not None and end_ts is not None:
+        url_desc += f"&start-date={int(start_ts)}&end-date={int(end_ts)}"
+
+    logger.info(f"Fetching accounts from SimpleFIN API: {url_desc}")
+    response = requests.get(accounts_url, auth=auth, params=params, timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
 def fetch_and_sync_simplefin():
     """Fetch normalized financial data from SimpleFIN and persist to DB."""
     access_url = get_simplefin_token()
 
     if access_url and access_url != "":
         try:
-            base_url, auth = _decode_access_url_to_request(access_url)
-            accounts_url = f"{base_url}/accounts"
-            logger.info(f"Fetching accounts from SimpleFIN API: {accounts_url}?version=2")
-
-            response = requests.get(accounts_url, auth=auth, params={"version": "2"}, timeout=30)
-            response.raise_for_status()
-            payload = response.json()
+            now = datetime.now(timezone.utc)
+            start = now - timedelta(days=SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS)
+            payload = _fetch_simplefin_payload(
+                access_url,
+                start_ts=int(start.timestamp()),
+                end_ts=int(now.timestamp()),
+            )
 
             simplefin_errors = []
             for key in ("errlist", "errors"):
@@ -251,7 +273,7 @@ def fetch_and_sync_simplefin():
             normalized = _normalize_simplefin_payload(payload)
             save_simplefin_data(normalized)
 
-            message = "Synced successfully from SimpleFIN"
+            message = f"Synced successfully from SimpleFIN ({SYNC_HISTORY_DAYS}-day window)"
             if simplefin_errors:
                 message = f"Synced with warnings: {simplefin_errors[0]}"
 
