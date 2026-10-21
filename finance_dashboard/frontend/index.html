@@ -623,46 +623,102 @@
                     return 'Uncategorized';
                 };
 
+                const isTransferLike = (tx) => {
+                    const haystack = `${tx.payee || ''} ${tx.description || ''} ${tx.category || ''}`.toLowerCase();
+                    return [
+                        'transfer',
+                        'zelle',
+                        'venmo',
+                        'cash app',
+                        'cashapp',
+                        'payment to self',
+                        'ach xfer',
+                        'external transfer',
+                        'internal transfer',
+                    ].some((pattern) => haystack.includes(pattern));
+                };
+
+                const transactionAccountName = (tx) => tx.account_name || tx.org || 'Account';
+
+                const dateDiffDays = (a, b) => {
+                    if (!a || !b) return Number.POSITIVE_INFINITY;
+                    const diff = Math.abs(Number(a) - Number(b));
+                    return diff / (60 * 60 * 24);
+                };
+
                 const calculateSankey = () => {
                     const incomeTx = filteredTransactions.value.filter((tx) => parseFloat(tx.amount || 0) > 0);
                     const expenseTx = filteredTransactions.value.filter((tx) => parseFloat(tx.amount || 0) < 0);
 
-                    if (!incomeTx.length || !expenseTx.length) return null;
+                    if (!incomeTx.length && !expenseTx.length) return null;
 
                     const paycheckDeposits = incomeTx.filter((tx) => /payroll|salary|deposit|direct deposit|paycheck/i.test(`${tx.payee || ''} ${tx.description || ''}`));
-                    const incomeTotal = paycheckDeposits.length
-                        ? paycheckDeposits.reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount || 0)), 0)
-                        : incomeTx.reduce((sum, tx) => sum + Math.abs(parseFloat(tx.amount || 0)), 0);
 
-                    if (incomeTotal <= 0) return null;
+                    const transferCandidates = filteredTransactions.value.filter((tx) => isTransferLike(tx));
+                    const transferOut = transferCandidates.filter((tx) => parseFloat(tx.amount || 0) < 0);
+                    const transferIn = transferCandidates.filter((tx) => parseFloat(tx.amount || 0) > 0);
+                    const usedTransferIds = new Set();
+                    const accountNodes = new Map();
 
-                    const categoryTotals = expenseTx.reduce((acc, tx) => {
+                    const nodes = [{ name: 'Paycheck deposits' }, { name: 'Transfers' }];
+                    const links = [];
+
+                    const ensureNode = (name) => {
+                        const key = name || 'Uncategorized';
+                        if (!accountNodes.has(key)) {
+                            accountNodes.set(key, nodes.length);
+                            nodes.push({ name: key });
+                        }
+                        return accountNodes.get(key);
+                    };
+
+                    const addLink = (source, target, value) => {
+                        if (!value || value <= 0) return;
+                        links.push({ source, target, value });
+                    };
+
+                    paycheckDeposits.forEach((tx) => {
+                        const accountName = transactionAccountName(tx);
+                        addLink(0, ensureNode(accountName), Math.abs(parseFloat(tx.amount || 0)));
+                    });
+
+                    transferOut.forEach((outTx) => {
+                        if (usedTransferIds.has(outTx.id)) return;
+                        const outAmount = Math.abs(parseFloat(outTx.amount || 0));
+                        const outAccount = transactionAccountName(outTx);
+
+                        const match = transferIn.find((inTx) => {
+                            if (usedTransferIds.has(inTx.id)) return false;
+                            if (transactionAccountName(inTx) === outAccount) return false;
+                            if (Math.abs(Math.abs(parseFloat(inTx.amount || 0)) - outAmount) > 0.01) return false;
+                            if (dateDiffDays(inTx.date, outTx.date) > 5) return false;
+                            return true;
+                        });
+
+                        if (match) {
+                            usedTransferIds.add(outTx.id);
+                            usedTransferIds.add(match.id);
+                            addLink(ensureNode(outAccount), ensureNode(transactionAccountName(match)), outAmount);
+                        } else {
+                            usedTransferIds.add(outTx.id);
+                            addLink(ensureNode(outAccount), 1, outAmount);
+                        }
+                    });
+
+                    transferIn.forEach((inTx) => {
+                        if (usedTransferIds.has(inTx.id)) return;
+                        usedTransferIds.add(inTx.id);
+                        addLink(1, ensureNode(transactionAccountName(inTx)), Math.abs(parseFloat(inTx.amount || 0)));
+                    });
+
+                    expenseTx.forEach((tx) => {
+                        if (usedTransferIds.has(tx.id)) return;
+                        const accountNode = ensureNode(transactionAccountName(tx));
                         const category = categorizeExpense(tx);
-                        acc[category] = (acc[category] || 0) + Math.abs(parseFloat(tx.amount || 0));
-                        return acc;
-                    }, {});
+                        addLink(accountNode, ensureNode(category), Math.abs(parseFloat(tx.amount || 0)));
+                    });
 
-                    const visibleCategories = Object.entries(categoryTotals)
-                        .filter(([, total]) => total > 0)
-                        .sort((a, b) => {
-                            if (a[0] === 'Uncategorized') return 1;
-                            if (b[0] === 'Uncategorized') return -1;
-                            return b[1] - a[1];
-                        })
-                        .slice(0, 8);
-
-                    if (!visibleCategories.length) return null;
-
-                    const nodes = [
-                        { name: 'Paycheck deposits' },
-                        ...visibleCategories.map(([name]) => ({ name })),
-                    ];
-
-                    const links = visibleCategories.map(([name, total]) => ({
-                        source: 0,
-                        target: nodes.findIndex((n) => n.name === name),
-                        value: total,
-                    }));
+                    if (!links.length) return null;
 
                     return { nodes, links };
                 };
