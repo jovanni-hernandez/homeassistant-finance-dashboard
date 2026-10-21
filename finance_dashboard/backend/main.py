@@ -13,14 +13,16 @@ app = FastAPI(title="Finance Dashboard API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
 class ClaimTokenRequest(BaseModel):
     setup_token: str
+
 
 @app.on_event("startup")
 def startup_event():
@@ -32,9 +34,16 @@ def startup_event():
     except Exception as e:
         logger.error(f"Startup sync failed: {e}")
 
+
 def verify_ha_auth(authorization: str = Header(None)):
     """Placeholder for Home Assistant auth token verification."""
     pass
+
+
+@app.get("/api/status", dependencies=[Depends(verify_ha_auth)])
+def api_status():
+    return simplefin.get_dashboard_status()
+
 
 @app.get("/api/accounts", dependencies=[Depends(verify_ha_auth)])
 def api_get_accounts():
@@ -45,6 +54,7 @@ def api_get_accounts():
         logger.error(f"Failed to query accounts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/transactions", dependencies=[Depends(verify_ha_auth)])
 def api_get_transactions(limit: int = 100):
     """Retrieve financial transactions from primary database."""
@@ -54,6 +64,7 @@ def api_get_transactions(limit: int = 100):
         logger.error(f"Failed to query transactions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/api/simplefin/claim-token", dependencies=[Depends(verify_ha_auth)])
 def api_claim_token(payload: ClaimTokenRequest):
     """Claim a SimpleFIN setup token and exchange it for a persistent access token."""
@@ -61,19 +72,24 @@ def api_claim_token(payload: ClaimTokenRequest):
         result = simplefin.claim_simplefin_setup_token(payload.setup_token)
         if result.get("status") == "error":
             raise HTTPException(status_code=400, detail=result.get("message"))
-        
-        # Trigger an immediate sync after claiming
+
         sync_result = simplefin.fetch_and_sync_simplefin()
-        return {"status": "success", "message": "Token claimed and initial sync performed", "sync_result": sync_result}
+        return {
+            "status": "success",
+            "message": "Token claimed and initial sync performed",
+            "sync_result": sync_result,
+        }
     except Exception as e:
         logger.error(f"Failed to claim token API error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @app.post("/api/sync", dependencies=[Depends(verify_ha_auth)])
 def api_sync():
     """Trigger an out-of-band sync from SimpleFIN upstream."""
     result = simplefin.fetch_and_sync_simplefin()
     return result
+
 
 # Mount frontend static files.
 app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")

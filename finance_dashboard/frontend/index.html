@@ -3,53 +3,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Finance Dashboard</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100 p-6">
     <div id="app" class="max-w-6xl mx-auto">
-        <div class="flex justify-between items-center mb-6">
-            <div>
-                <h1 class="text-3xl font-bold text-gray-800">Financial Dashboard</h1>
-                <p class="text-sm text-gray-500 mt-1">Primary Source: SQLite / SQLAlchemy Database (Encrypted at Rest)</p>
+        <div class="flex flex-col gap-4 mb-6">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-800">Financial Dashboard</h1>
+                    <p class="text-sm text-gray-500 mt-1">SQLite / SQLAlchemy backend · encrypted at rest</p>
+                </div>
+                <div class="flex flex-wrap gap-3">
+                    <button
+                        @click="syncData"
+                        :disabled="syncing"
+                        class="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg shadow font-medium transition flex items-center gap-2"
+                    >
+                        <svg v-if="syncing" class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a10 10 0 00-10 10h4z"></path>
+                        </svg>
+                        <span>{{ syncing ? 'Syncing…' : 'Sync now' }}</span>
+                    </button>
+                </div>
             </div>
-            <div class="flex space-x-3">
-                <button @click="showTokenModal = true" class="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg shadow font-medium transition">
-                    Link SimpleFIN Account
-                </button>
-                <button @click="syncData" :disabled="syncing" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg shadow font-medium transition flex items-center">
-                    <span v-if="syncing">Syncing...</span>
-                    <span v-else>Sync Upstream</span>
-                </button>
+
+            <div
+                class="rounded-lg border p-4 shadow-sm"
+                :class="status.connected ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'"
+            >
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div class="flex items-start gap-3">
+                        <div
+                            class="mt-1 h-3 w-3 rounded-full"
+                            :class="status.connected ? 'bg-green-500' : 'bg-yellow-500'"
+                        ></div>
+                        <div>
+                            <div class="font-semibold text-gray-800">
+                                {{ status.connected ? 'SimpleFIN connected' : 'SimpleFIN not connected' }}
+                            </div>
+                            <div class="text-sm text-gray-600 mt-1">
+                                {{ status.connected
+                                    ? 'Your accounts are linked in SimpleFIN and this dashboard is reading from the local database.'
+                                    : 'No active SimpleFIN token was found yet. You can still use the dashboard with mock data.' }}
+                            </div>
+                            <div v-if="status.last_sync_message" class="text-sm mt-2 text-gray-700">
+                                Latest sync: {{ status.last_sync_message }}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                        <div class="bg-white/70 rounded-md px-3 py-2">
+                            <div class="text-gray-500">Accounts</div>
+                            <div class="font-semibold text-gray-800">{{ status.account_count ?? 0 }}</div>
+                        </div>
+                        <div class="bg-white/70 rounded-md px-3 py-2">
+                            <div class="text-gray-500">Transactions</div>
+                            <div class="font-semibold text-gray-800">{{ status.transaction_count ?? 0 }}</div>
+                        </div>
+                        <div class="bg-white/70 rounded-md px-3 py-2">
+                            <div class="text-gray-500">Last sync</div>
+                            <div class="font-semibold text-gray-800">{{ formatDateTime(status.last_sync_at) }}</div>
+                        </div>
+                        <div class="bg-white/70 rounded-md px-3 py-2">
+                            <div class="text-gray-500">Sync state</div>
+                            <div class="font-semibold" :class="status.last_sync_status === 'success' ? 'text-green-700' : status.last_sync_status === 'error' ? 'text-red-700' : 'text-gray-800'">
+                                {{ status.last_sync_status || 'never' }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="syncMessage" class="rounded-lg px-4 py-3 text-sm" :class="syncError ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200'">
+                {{ syncMessage }}
             </div>
         </div>
 
-        <!-- Token Modal / Banner -->
-        <div v-if="showTokenModal" class="bg-white rounded-lg shadow p-6 mb-6 border border-gray-200">
-            <h2 class="text-lg font-semibold text-gray-800 mb-2">Connect SimpleFIN Account</h2>
-            <p class="text-sm text-gray-600 mb-4">Paste your SimpleFIN Setup Token below to link your financial institutions securely. This token will be exchanged for a secure access token and encrypted at rest.</p>
-            <div class="flex space-x-3">
-                <input v-model="setupTokenInput" type="text" placeholder="Paste Setup Token here..." class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                <button @click="claimToken" :disabled="claiming" class="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg shadow font-medium transition">
-                    <span v-if="claiming">Connecting...</span>
-                    <span v-else>Connect & Sync</span>
-                </button>
-                <button @click="showTokenModal = false" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium transition">
-                    Cancel
-                </button>
-            </div>
-            <p v-if="tokenMessage" class="text-sm mt-3" :class="tokenError ? 'text-red-600' : 'text-green-600'">{{ tokenMessage }}</p>
-        </div>
-        
-        <div v-if="loading" class="text-gray-500 py-8">Loading financial data from database...</div>
-        <div v-else-if="error" class="bg-red-50 border-l-4 border-red-500 p-4 mb-6 text-red-700">
+        <div v-if="loading" class="text-gray-500 py-8">Loading financial data…</div>
+        <div v-else-if="error" class="bg-red-50 border-l-4 border-red-500 p-4 mb-6 text-red-700 rounded-r-lg">
             <p class="font-bold">Error</p>
             <p>{{ error }}</p>
         </div>
-        
+
         <div v-else>
-            <!-- Net Worth & Accounts -->
             <h2 class="text-xl font-semibold text-gray-700 mb-4">Accounts</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                 <div v-for="account in accounts" :key="account.id" class="bg-white rounded-lg shadow p-5 border border-gray-200">
@@ -63,7 +103,6 @@
                 </div>
             </div>
 
-            <!-- Transactions Table -->
             <h2 class="text-xl font-semibold text-gray-700 mb-4">Recent Transactions</h2>
             <div class="bg-white rounded-lg shadow overflow-hidden border border-gray-200">
                 <table class="min-w-full divide-y divide-gray-200">
@@ -104,15 +143,29 @@
                 const transactions = ref([]);
                 const loading = ref(true);
                 const syncing = ref(false);
-                const claiming = ref(false);
-                const showTokenModal = ref(false);
-                const setupTokenInput = ref('');
-                const tokenMessage = ref('');
-                const tokenError = ref(false);
+                const syncMessage = ref('');
+                const syncError = ref(false);
                 const error = ref(null);
+                const status = ref({
+                    connected: false,
+                    account_count: 0,
+                    transaction_count: 0,
+                    last_sync_status: 'never',
+                    last_sync_message: '',
+                    last_sync_at: null,
+                });
 
-                const getApiUrl = (endpoint) => {
-                    return window.location.pathname.replace(/\/$/, '') + endpoint;
+                const getApiUrl = (endpoint) => window.location.pathname.replace(/\/$/, '') + endpoint;
+
+                const fetchStatus = async () => {
+                    try {
+                        const res = await fetch(getApiUrl('/api/status'), { headers: { 'Accept': 'application/json' } });
+                        if (!res.ok) throw new Error('Failed to load connection status');
+                        status.value = await res.json();
+                    } catch (err) {
+                        // keep the dashboard usable even if status cannot be loaded
+                        console.warn(err);
+                    }
                 };
 
                 const fetchData = async () => {
@@ -121,14 +174,14 @@
                             fetch(getApiUrl('/api/accounts'), { headers: { 'Accept': 'application/json' } }),
                             fetch(getApiUrl('/api/transactions'), { headers: { 'Accept': 'application/json' } })
                         ]);
-                        
+
                         if (!accRes.ok || !txRes.ok) {
-                            throw new Error(`Failed to fetch from DB: Accounts status ${accRes.status}, Transactions status ${txRes.status}`);
+                            throw new Error(`Failed to fetch from DB: accounts ${accRes.status}, transactions ${txRes.status}`);
                         }
-                        
+
                         const accData = await accRes.json();
                         const txData = await txRes.json();
-                        
+
                         accounts.value = accData.accounts || [];
                         transactions.value = txData.transactions || [];
                         error.value = null;
@@ -141,40 +194,22 @@
 
                 const syncData = async () => {
                     syncing.value = true;
+                    syncMessage.value = 'Sync started…';
+                    syncError.value = false;
                     try {
                         const res = await fetch(getApiUrl('/api/sync'), { method: 'POST' });
-                        if (!res.ok) throw new Error('Sync failed with status ' + res.status);
-                        await fetchData();
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Sync failed (${res.status})`);
+
+                        syncMessage.value = data.message || 'Sync completed successfully.';
+                        syncError.value = false;
+                        await Promise.all([fetchStatus(), fetchData()]);
                     } catch (err) {
-                        error.value = err.message;
+                        syncError.value = true;
+                        syncMessage.value = err.message;
+                        await fetchStatus();
                     } finally {
                         syncing.value = false;
-                    }
-                };
-
-                const claimToken = async () => {
-                    if (!setupTokenInput.value.trim()) return;
-                    claiming.value = true;
-                    tokenMessage.value = '';
-                    tokenError.value = false;
-                    try {
-                        const res = await fetch(getApiUrl('/api/simplefin/claim-token'), {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                            body: JSON.stringify({ setup_token: setupTokenInput.value.trim() })
-                        });
-                        const data = await res.json();
-                        if (!res.ok) throw new Error(data.detail || 'Failed to claim setup token');
-                        
-                        tokenMessage.value = 'Successfully linked SimpleFIN and synced accounts!';
-                        setupTokenInput.value = '';
-                        await fetchData();
-                        setTimeout(() => { showTokenModal.value = false; }, 2000);
-                    } catch (err) {
-                        tokenError.value = true;
-                        tokenMessage.value = err.message;
-                    } finally {
-                        claiming.value = false;
                     }
                 };
 
@@ -187,16 +222,33 @@
 
                 const formatDate = (timestamp) => {
                     if (!timestamp) return '';
-                    const date = new Date(timestamp * 1000);
-                    return date.toLocaleDateString();
+                    return new Date(timestamp * 1000).toLocaleDateString();
                 };
 
-                onMounted(() => fetchData());
+                const formatDateTime = (value) => {
+                    if (!value) return 'Not yet';
+                    const date = new Date(value);
+                    if (Number.isNaN(date.getTime())) return 'Not yet';
+                    return date.toLocaleString();
+                };
 
-                return { 
-                    accounts, transactions, loading, syncing, claiming, 
-                    showTokenModal, setupTokenInput, tokenMessage, tokenError, 
-                    error, formatCurrency, formatDate, syncData, claimToken 
+                onMounted(async () => {
+                    await Promise.all([fetchStatus(), fetchData()]);
+                });
+
+                return {
+                    accounts,
+                    transactions,
+                    loading,
+                    syncing,
+                    syncMessage,
+                    syncError,
+                    error,
+                    status,
+                    formatCurrency,
+                    formatDate,
+                    formatDateTime,
+                    syncData,
                 };
             }
         }).mount('#app');

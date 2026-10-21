@@ -3,17 +3,12 @@ from models import engine, SessionLocal, Base, Account, Transaction, Setting
 
 logger = logging.getLogger("finance_dashboard")
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 def init_db():
     logger.info("Initializing database tables via SQLAlchemy...")
     Base.metadata.create_all(bind=engine)
     logger.info("Database initialized successfully.")
+
 
 def save_simplefin_data(data):
     """Save normalized SimpleFIN accounts and transactions into SQLite via SQLAlchemy."""
@@ -56,7 +51,7 @@ def save_simplefin_data(data):
                         amount=amount,
                         payee=payee,
                         description=description,
-                        pending=pending
+                        pending=pending,
                     )
                     db.add(db_tx)
                 else:
@@ -84,6 +79,7 @@ def get_setting(key: str):
     finally:
         db.close()
 
+
 def set_setting(key: str, value: str):
     db = SessionLocal()
     try:
@@ -101,6 +97,7 @@ def set_setting(key: str, value: str):
     finally:
         db.close()
 
+
 def get_stored_accounts():
     db = SessionLocal()
     try:
@@ -109,10 +106,27 @@ def get_stored_accounts():
     finally:
         db.close()
 
+
 def get_stored_transactions(limit=100):
     db = SessionLocal()
     try:
         transactions = db.query(Transaction).order_by(Transaction.date.desc()).limit(limit).all()
         return [tx.to_dict() for tx in transactions]
+    finally:
+        db.close()
+
+
+def get_account_count():
+    db = SessionLocal()
+    try:
+        return db.query(Account).count()
+    finally:
+        db.close()
+
+
+def get_transaction_count():
+    db = SessionLocal()
+    try:
+        return db.query(Transaction).count()
     finally:
         db.close()
