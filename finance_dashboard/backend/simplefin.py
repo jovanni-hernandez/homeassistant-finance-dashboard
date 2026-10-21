@@ -172,7 +172,8 @@ def _decode_access_url_to_request(access_url: str):
     if parsed.port:
         netloc = f"{netloc}:{parsed.port}"
 
-    base_url = urlunsplit((parsed.scheme, netloc, "", "", ""))
+    base_path = parsed.path.rstrip("/")
+    base_url = urlunsplit((parsed.scheme, netloc, base_path, "", ""))
     return base_url, (username, password)
 
 
