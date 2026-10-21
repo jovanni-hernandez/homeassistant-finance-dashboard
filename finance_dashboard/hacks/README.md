@@ -57,5 +57,10 @@ Use `--format json` if you want machine-readable output.
 
 You can also build the same defaults from the dashboard Settings panel with the "Build defaults" button.
 
+## AI-assisted categorization
+
+The dashboard also supports AI-generated defaults through the Settings panel.
+Configure the provider, model, and keys under **AI assistance**, then use **Build with AI** in Category rules.
+
 You can also store those values in `hacks/.release.env` (copy from `hacks/release.env.example`) so the release command works without exporting env vars every time.
 The helpers also read `finance_dashboard/.env` if you prefer one repo-root env file for all release settings.
