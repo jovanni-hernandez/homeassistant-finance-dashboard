@@ -3,6 +3,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="${REPO:-https://github.com/jovanni-hernandez/homeassistant-finance-dashboard}"
+ENV_FILE="$ROOT_DIR/hacks/.release.env"
+
+if [ -f "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+fi
 
 "$ROOT_DIR/hacks/certify.sh"
 

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ENV_FILE="$ROOT_DIR/hacks/.release.env"
 REPO="${1:-https://github.com/jovanni-hernandez/homeassistant-finance-dashboard}"
 VERSION_FILE="$ROOT_DIR/config.yaml"
 EXPECTED_VERSION="$(python3 - "$VERSION_FILE" <<'PY'
@@ -35,6 +36,11 @@ HA_TOKEN="${HA_TOKEN:-}"
 UPDATE_ENTITY_ID="${UPDATE_ENTITY_ID:-}"
 HA_MAX_ATTEMPTS="${HA_MAX_ATTEMPTS:-10}"
 HA_BASE_DELAY_SECONDS="${HA_BASE_DELAY_SECONDS:-2}"
+
+if [ -f "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+fi
 
 "$ROOT_DIR/hacks/refresh-marketplace.sh" "$REPO" "$EXPECTED_VERSION"
 
