@@ -34,6 +34,7 @@ fi
 "$VENV_DIR/bin/pip" install selenium pillow fastapi uvicorn requests sqlalchemy cryptography >/dev/null
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-recurring-analysis.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-api-validation.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-admin-stdin.py"
 
 MODE_ARGS=()
 if [ "${FINANCE_DASHBOARD_URL:-}" = "local" ]; then

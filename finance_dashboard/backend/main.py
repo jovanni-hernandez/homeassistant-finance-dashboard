@@ -1,5 +1,9 @@
 import logging
 import json
+import re
+import sys
+import threading
+from collections import Counter, defaultdict
 from fastapi import FastAPI, Header, HTTPException, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -18,11 +22,15 @@ from database import (
     set_transaction_category,
 )
 import pin_auth
+from models import SessionLocal, Transaction
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("finance_dashboard")
 
 app = FastAPI(title="Finance Dashboard API")
+
+FINANCE_STDIN_MAX_BYTES = 65536
+FINANCE_AUDIT_PAGE_SIZE = 100
 
 class ClaimTokenRequest(BaseModel):
     setup_token: str = Field(min_length=1, max_length=4096)
@@ -80,6 +88,7 @@ def startup_event():
         simplefin.fetch_and_sync_simplefin()
     except Exception as e:
         logger.error(f"Startup sync failed: {e}")
+    threading.Thread(target=_finance_agent_stdin_worker, name="finance-agent-stdin", daemon=True).start()
 
 
 def verify_ha_auth(finance_session: str | None = Header(None, alias="X-Finance-Session")):
@@ -138,6 +147,136 @@ def validate_recurring_rules_json(raw: str):
             raise ValueError("Recurring kind is not supported.")
         if "hidden" in override and not isinstance(override["hidden"], bool):
             raise ValueError("Recurring hidden flag must be a boolean.")
+
+
+def _finance_agent_stdin_result(payload: dict):
+    if pin_auth.pin_is_required() and not pin_auth.validate_session_token(payload.get("finance_session")):
+        return {"ok": False, "error": "A valid Finance PIN session is required."}
+
+    command = payload.get("command")
+    if command == "merchant_audit":
+        offset = payload.get("offset", 0)
+        limit = payload.get("limit", 50)
+        if type(offset) is not int or offset < 0 or offset > 10000:
+            return {"ok": False, "error": "offset must be an integer between 0 and 10000."}
+        if type(limit) is not int or limit < 1 or limit > 100:
+            return {"ok": False, "error": "limit must be an integer between 1 and 100."}
+
+        db = SessionLocal()
+        try:
+            grouped = {}
+            for tx in db.query(Transaction).all():
+                if tx.pending:
+                    continue
+                raw_label = (tx.payee or "").strip() or (tx.description or "").strip()
+                if not raw_label:
+                    continue
+                label = re.sub(r"\b(?:ref(?:erence)?|txn|transaction|auth|trace|order)\s*[:#-]?\s*[a-z0-9-]+\b", " ", raw_label, flags=re.IGNORECASE)
+                label = re.sub(r"\b\d{4,}\b", " ", label)
+                label = re.sub(r"\s+", " ", label).strip(" -:#")[:160]
+                if not label:
+                    continue
+                key = re.sub(r"[^a-z0-9]+", " ", label.casefold()).strip()
+                if not key:
+                    continue
+                entry = grouped.setdefault(key, {"labels": Counter(), "categories": Counter(), "count": 0})
+                entry["labels"][label] += 1
+                entry["categories"][tx.category or "Uncategorized"] += 1
+                entry["count"] += 1
+
+            merchants = [
+                {
+                    "merchant": entry["labels"].most_common(1)[0][0],
+                    "count": entry["count"],
+                    "categories": dict(entry["categories"]),
+                }
+                for entry in grouped.values()
+            ]
+            merchants.sort(key=lambda item: (-item["count"], item["merchant"].casefold()))
+            page = merchants[offset:offset + limit]
+            return {
+                "ok": True,
+                "command": command,
+                "offset": offset,
+                "limit": limit,
+                "total_merchants": len(merchants),
+                "merchants": page,
+                "current_rules_json": get_category_rules_value() or "" if offset == 0 else None,
+            }
+        finally:
+            db.close()
+
+    if command == "apply_category_rules":
+        raw_rules = payload.get("rules_json")
+        if isinstance(payload.get("rules"), list):
+            raw_rules = json.dumps(payload["rules"], ensure_ascii=False)
+        if not isinstance(raw_rules, str) or len(raw_rules) > 50000:
+            return {"ok": False, "error": "rules_json must be a string of at most 50000 characters."}
+        try:
+            validate_category_rules_json(raw_rules)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        set_category_rules_value(raw_rules)
+        rules = simplefin._load_category_rules()
+        db = SessionLocal()
+        reclassified = 0
+        try:
+            for tx in db.query(Transaction).all():
+                if (tx.category or "Uncategorized") != "Uncategorized":
+                    continue
+                category = simplefin.categorize_transaction(
+                    {"payee": tx.payee or "", "description": tx.description or ""},
+                    rules=rules,
+                )
+                if category != "Uncategorized":
+                    tx.category = category
+                    reclassified += 1
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.error("Finance agent category reclassification failed (%s).", type(sys.exc_info()[1]).__name__)
+            return {"ok": False, "error": "Rules were saved, but existing uncategorized transactions could not be reclassified."}
+        finally:
+            db.close()
+
+        return {
+            "ok": True,
+            "command": command,
+            "saved_rule_count": len(json.loads(raw_rules)),
+            "reclassified_uncategorized": reclassified,
+        }
+
+    return {"ok": False, "error": "Unknown Finance agent command."}
+
+
+def _finance_agent_stdin_worker():
+    """Accept a narrow, admin-only command protocol over Supervisor app stdin."""
+    while True:
+        try:
+            line = sys.stdin.readline(FINANCE_STDIN_MAX_BYTES + 1)
+        except Exception as exc:
+            logger.warning("Finance agent stdin stopped (%s).", type(exc).__name__)
+            return
+        if not line:
+            return
+        if len(line.encode("utf-8", errors="replace")) > FINANCE_STDIN_MAX_BYTES:
+            result = {"ok": False, "error": "Finance agent command exceeds the size limit."}
+        else:
+            try:
+                payload = json.loads(line)
+                if isinstance(payload, str):
+                    payload = json.loads(payload) if payload.lstrip().startswith("{") else {"command": payload.strip()}
+                if not isinstance(payload, dict):
+                    result = {"ok": False, "error": "Finance agent command must be a JSON object."}
+                else:
+                    result = _finance_agent_stdin_result(payload)
+            except (json.JSONDecodeError, ValueError) as exc:
+                result = {"ok": False, "error": str(exc)}
+            except Exception as exc:
+                logger.error("Finance agent stdin command failed (%s).", type(exc).__name__)
+                result = {"ok": False, "error": "Finance agent command failed; check add-on logs."}
+        print("FINANCE_AGENT_RESULT " + json.dumps(result, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
 @app.get("/api/status", dependencies=[Depends(verify_ha_auth)])
