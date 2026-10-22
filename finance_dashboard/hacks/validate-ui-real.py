@@ -30,9 +30,35 @@ def parse_args():
     if configured_url == "local":
         configured_url = None
     parser.add_argument("--url", default=configured_url, help="Optional deployed app URL to test directly")
+    parser.add_argument("--ha-ingress", action="store_true", help="Create an authenticated HA Ingress session using HA_URL/HA_TOKEN")
     parser.add_argument("--screenshot", default="/data/v2/cache/opencode/finance-dashboard-real-selenium.png")
     parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument("--device", choices=("desktop", "iphone", "pixel"), default="desktop")
     return parser.parse_args()
+
+
+def resolve_ingress_target():
+    """Create a short-lived Supervisor ingress session without exposing its token."""
+    from ha_release import HAProxy, read_config
+
+    ha_url = os.environ.get("HA_URL", "").rstrip("/")
+    if not ha_url:
+        raise RuntimeError("HA_URL is required for authenticated Ingress testing")
+    client = HAProxy()
+    slug, _ = read_config()
+    app_info, _ = client.supervisor("GET", f"/addons/{slug}/info")
+    ingress_entry = app_info.get("ingress_entry")
+    if not isinstance(ingress_entry, str) or not ingress_entry.startswith("/api/hassio_ingress/"):
+        raise RuntimeError("Supervisor returned no usable ingress_entry for the finance app")
+    session_data, envelope = client.supervisor("POST", "/ingress/session", {})
+    session = session_data.get("session") if isinstance(session_data, dict) else None
+    if not session and isinstance(envelope, dict):
+        session = (envelope.get("data") or {}).get("session")
+    if not isinstance(session, str) or not session:
+        raise RuntimeError("Supervisor returned no ingress session")
+    parsed = urlparse(ha_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return origin, f"{origin}{ingress_entry.rstrip('/')}/", ingress_entry, session
 
 
 def reserve_port() -> int:
@@ -91,7 +117,7 @@ def start_real_backend(frontend_file: Path):
     raise TimeoutError(f"Real FastAPI app did not become ready: {last_error}")
 
 
-def probe_api(base_url: str) -> dict[str, int]:
+def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str, int]:
     endpoints = [
         "api/status",
         "api/pin/status",
@@ -105,7 +131,8 @@ def probe_api(base_url: str) -> dict[str, int]:
     ]
     statuses = {}
     for endpoint in endpoints:
-        request = urllib.request.Request(base_url + endpoint, headers={"Accept": "application/json"})
+        request_headers = {"Accept": "application/json", **(headers or {})}
+        request = urllib.request.Request(base_url + endpoint, headers=request_headers)
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 statuses[endpoint] = response.status
@@ -126,20 +153,36 @@ def screenshot_content_ratio(path: Path) -> float:
 
 def main():
     args = parse_args()
-    screenshot = Path(args.screenshot)
+    screenshot_base = Path(args.screenshot)
+    suffix = screenshot_base.suffix or ".png"
+    screenshot = screenshot_base.with_name(f"{screenshot_base.stem}-{args.device}{suffix}")
     screenshot.parent.mkdir(parents=True, exist_ok=True)
     frontend_file = Path(args.file).resolve()
     server = thread = test_data_dir = None
+    ingress_entry = None
+    ingress_origin = None
+    ingress_cookie = None
 
     try:
-        if args.url:
+        if args.ha_ingress and args.url:
+            raise RuntimeError("Choose --ha-ingress or --url, not both")
+        if args.ha_ingress:
+            ingress_origin, base_url, ingress_entry, ingress_cookie = resolve_ingress_target()
+            test_mode = "deployed-ha-ingress"
+        elif args.url:
             base_url = args.url.rstrip("/") + "/"
             test_mode = "deployed-url"
         else:
             base_url, server, thread, test_data_dir = start_real_backend(frontend_file)
             test_mode = "real-fastapi-isolated-db"
 
-        api_statuses = probe_api(base_url)
+        request_headers = {}
+        if ingress_cookie:
+            request_headers["Cookie"] = f"ingress_session={ingress_cookie}"
+        app_session = os.environ.get("FINANCE_SESSION_TOKEN", "")
+        if app_session:
+            request_headers["X-Finance-Session"] = app_session
+        api_statuses = probe_api(base_url, request_headers)
         options = Options()
         options.binary_location = "/usr/bin/chromium"
         options.add_argument("--headless=new")
@@ -150,8 +193,19 @@ def main():
         driver = webdriver.Chrome(options=options)
 
         try:
-            driver.set_window_size(1280, 1000)
+            viewport_sizes = {"desktop": (1280, 1000), "iphone": (390, 844), "pixel": (412, 915)}
+            viewport_width, viewport_height = viewport_sizes[args.device]
+            driver.set_window_size(viewport_width, viewport_height)
             driver.set_page_load_timeout(args.timeout)
+            if app_session:
+                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                    "source": "sessionStorage.setItem('finance-dashboard-session-token', " + json.dumps(app_session) + ");"
+                })
+            if ingress_cookie:
+                # Set the transient Supervisor session cookie on the HA origin;
+                # do not include its value or ingress token in diagnostics.
+                driver.get(ingress_origin + "/")
+                driver.add_cookie({"name": "ingress_session", "value": ingress_cookie, "path": "/"})
             driver.get(base_url)
             wait = WebDriverWait(driver, args.timeout)
             wait.until(lambda current: "Finance Dashboard" in current.title)
@@ -159,6 +213,7 @@ def main():
             wait.until(lambda current: "Loading financial data…" not in current.find_element(By.TAG_NAME, "body").text)
 
             dashboard_text = driver.find_element(By.TAG_NAME, "body").text
+            dashboard_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
             render_snippets = driver.execute_script(
                 "const app=document.querySelector('#app')?.__vue_app__;"
                 "const text=(app?app._instance?.render?.toString():'')||'';"
@@ -182,13 +237,14 @@ def main():
                     current_text = driver.find_element(By.TAG_NAME, "body").text
                     print(json.dumps({
                         "failed_recurring_assertion": section,
-                        "url": driver.current_url,
+                        "mode": test_mode,
                         "body_length": len(current_text),
                         "browser_logs": driver.get_log("browser"),
                         "render_length_expressions": render_snippets,
                     }, indent=2))
                     raise RuntimeError(f"Recurring view did not render {section}") from exc
             recurring_text = driver.find_element(By.TAG_NAME, "body").text
+            recurring_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-recurring" + screenshot.suffix)))
             recurring_ratio = screenshot_content_ratio(screenshot.with_name(screenshot.stem + "-recurring" + screenshot.suffix))
 
@@ -210,9 +266,36 @@ def main():
                 and len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="recurring-other-panel"]')) == 1
             )
 
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
+            WebDriverWait(driver, args.timeout).until(lambda current: "Recent transactions" in current.find_element(By.TAG_NAME, "body").text)
+            transaction_rows = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-card"]')
+            if not transaction_rows:
+                transaction_rows = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-row"]')
+            show_more_buttons = [button for button in driver.find_elements(By.CSS_SELECTOR, '[data-testid="show-more-transactions"]') if button.is_displayed()]
+            if show_more_buttons:
+                initial_row_count = len(transaction_rows)
+                show_more_buttons[0].click()
+                visible_row_selector = '[data-testid="transaction-card"]' if args.device in {"iphone", "pixel"} else '[data-testid="transaction-row"]'
+                WebDriverWait(driver, args.timeout).until(lambda current: len(current.find_elements(By.CSS_SELECTOR, visible_row_selector)) > initial_row_count)
+                show_more_works = True
+            else:
+                show_more_works = len(transaction_rows) <= 15
+
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.XPATH, "//button[.//span[text()='Settings']]").click()
+            WebDriverWait(driver, args.timeout).until(lambda current: "Settings" in current.find_element(By.TAG_NAME, "body").text)
+            settings_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+            driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings" + screenshot.suffix)))
+
             logs = driver.get_log("browser")
-            severe = [entry["message"] for entry in logs if entry.get("level") in {"SEVERE", "ERROR"}]
-            vue_warnings = [entry["message"] for entry in logs if "[Vue warn]" in entry.get("message", "")]
+            def redact_log(message: str) -> str:
+                if ingress_entry:
+                    message = message.replace(ingress_entry, "/api/hassio_ingress/<redacted>")
+                return message
+
+            severe = [redact_log(entry["message"]) for entry in logs if entry.get("level") in {"SEVERE", "ERROR"}]
+            vue_warnings = [redact_log(entry["message"]) for entry in logs if "[Vue warn]" in entry.get("message", "")]
             boot_screen_visible = driver.execute_script("return !!document.getElementById('boot-screen')")
             origin = urlparse(base_url).netloc
             script_urls = driver.execute_script("return Array.from(document.scripts).map((script) => script.src).filter(Boolean)")
@@ -229,6 +312,10 @@ def main():
                 "no_vue_warnings": not vue_warnings,
                 "recurring_quick_filters": filter_checks,
                 "no_external_runtime_scripts": not external_script_urls,
+                "dashboard_no_horizontal_overflow": not dashboard_overflow,
+                "recurring_no_horizontal_overflow": not recurring_overflow,
+                "settings_no_horizontal_overflow": not settings_overflow,
+                "show_more_transactions_works": show_more_works,
             }
             ok = (
                 all(checks["dashboard_sections"].values())
@@ -241,11 +328,16 @@ def main():
                 and checks["no_vue_warnings"]
                 and all(filter_checks.values())
                 and checks["no_external_runtime_scripts"]
+                and checks["dashboard_no_horizontal_overflow"]
+                and checks["recurring_no_horizontal_overflow"]
+                and checks["settings_no_horizontal_overflow"]
+                and checks["show_more_transactions_works"]
             )
             print(json.dumps({
                 "ok": ok,
                 "mode": test_mode,
-                "url": base_url,
+                "device": args.device,
+                "url": "HA Ingress (session/entry redacted)" if ingress_entry else base_url,
                 "title": driver.title,
                 "dashboard_screenshot": str(screenshot),
                 "dashboard_screenshot_content_ratio": round(dashboard_ratio, 4),

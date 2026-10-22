@@ -24,7 +24,7 @@ Use this loop for any UI/dashboard/frontend/visual change.
 
 ## Notes
 - The helper scripts are intentionally repo-local so they can be reused outside OpenCode.
-- `validate-ui-selenium.sh` defaults to the deployed add-on at `http://homeassistant:8000/` on HA's internal network. Override with `FINANCE_DASHBOARD_URL` for another reachable URL. Use `FINANCE_DASHBOARD_URL=local` only for a pre-publish real-backend check; it does not satisfy deployed acceptance.
+- `validate-ui-selenium.sh` defaults to the deployed add-on through an authenticated HA Ingress session using `HA_URL`/`HA_TOKEN`. Use `FINANCE_DASHBOARD_URL=local` only for a pre-publish real-backend check; it does not satisfy deployed acceptance.
 - For this add-on, deployment verification should use `backup: false` unless backup is explicitly requested.
 - The refresh helper retries until marketplace metadata reports the expected version, because HA often lags for a few seconds after a push.
 - If the browser validation fails, inspect the console errors first.

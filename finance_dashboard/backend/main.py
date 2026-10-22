@@ -1,7 +1,6 @@
 import logging
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import simplefin
 from ai_assistant import build_ai_category_defaults, get_ai_settings, update_ai_settings
@@ -23,15 +22,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("finance_dashboard")
 
 app = FastAPI(title="Finance Dashboard API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 class ClaimTokenRequest(BaseModel):
     setup_token: str

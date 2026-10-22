@@ -24,4 +24,4 @@ fi
 HA_URL="$HA_URL" HA_TOKEN="$HA_TOKEN" python3 "$ROOT_DIR/hacks/ha_release.py" deploy "$REPO"
 
 echo "Running Selenium against the deployed finance add-on on the HA internal network..."
-"$ROOT_DIR/hacks/validate-ui-selenium.sh"
+HA_URL="$HA_URL" HA_TOKEN="$HA_TOKEN" FINANCE_DASHBOARD_URL="${FINANCE_DASHBOARD_URL:-}" "$ROOT_DIR/hacks/validate-ui-selenium.sh"

@@ -18,7 +18,7 @@ What it does:
 7. fails if Vue renders warnings, browser requests fail, or the boot fallback remains visible
 8. retries transient browser failures with exponential backoff
 
-The Selenium helper defaults to the deployed app at `http://homeassistant:8000/` over Home Assistant's internal network. Set `FINANCE_DASHBOARD_URL` to another directly reachable app URL to override it. `FINANCE_DASHBOARD_URL=local` runs the real FastAPI app with a disposable SQLite database as a pre-publish check; it is not the deployed-app acceptance test.
+The Selenium helper defaults to an authenticated Home Assistant Ingress session using `HA_URL` and `HA_TOKEN`. Set `FINANCE_DASHBOARD_URL` only to explicitly test a directly reachable app URL. `FINANCE_DASHBOARD_URL=local` runs the real FastAPI app with a disposable SQLite database as a pre-publish check; it is not the deployed-app acceptance test.
 
 ## Marketplace refresh
 
@@ -34,8 +34,8 @@ This calls the authenticated Supervisor store-reload endpoint through HA's REST 
 ./hacks/release.sh
 ```
 
-This runs the full release flow: local real-backend preflight, authenticated GitHub push, Supervisor store refresh through `/api/hassio/store/reload`, add-on update with `backup: false`, job/version verification, and finally Selenium against the deployed add-on over the HA internal network.
-It requires `HA_URL` and an administrator `HA_TOKEN` in `.env` or `hacks/.release.env`. Git push uses existing Git/`gh` auth, `GITHUB_TOKEN`/`GH_TOKEN`, or OpenCode's managed GitHub credential store. The Selenium acceptance target defaults to `http://homeassistant:8000/`; set `FINANCE_DASHBOARD_URL` to override it.
+This runs the full release flow: local real-backend preflight, authenticated GitHub push, Supervisor store refresh through `/api/hassio/store/reload`, add-on update with `backup: false`, job/version verification, and finally Selenium through authenticated HA Ingress at desktop, iPhone, and Pixel viewports.
+It requires `HA_URL` and an administrator `HA_TOKEN` in `.env` or `hacks/.release.env`. Git push uses existing Git/`gh` auth, `GITHUB_TOKEN`/`GH_TOKEN`, or OpenCode's managed GitHub credential store. The add-on is ingress-only; its host port is not published.
 
 `deploy-and-verify.sh` can be run by itself to refresh the store, update the currently published add-on, confirm its installed version, and run the live Selenium check. `refresh-marketplace.sh` performs just the authenticated store refresh/version wait.
 
