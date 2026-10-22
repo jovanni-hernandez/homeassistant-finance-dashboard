@@ -19,6 +19,7 @@ from PIL import Image
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -209,6 +210,24 @@ def main():
             viewport_width, viewport_height = viewport_sizes[args.device]
             driver.set_window_size(viewport_width, viewport_height)
             driver.set_page_load_timeout(args.timeout)
+            if test_mode == "real-fastapi-isolated-db":
+                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                    "source": r'''(() => {
+                      const nativeFetch = window.fetch.bind(window);
+                      window.fetch = async (...args) => {
+                        const response = await nativeFetch(...args);
+                        const url = typeof args[0] === "string" ? args[0] : args[0].url;
+                        if (url.includes("/api/transactions")) {
+                          const payload = await response.clone().json();
+                          if (payload.transactions && payload.transactions.length) {
+                            payload.transactions[0].description = "LONG-REFERENCE-" + "X".repeat(130) + " payment description should wrap instead of overflowing the card edge";
+                          }
+                          return new Response(JSON.stringify(payload), {status: response.status, headers: response.headers});
+                        }
+                        return response;
+                      };
+                    })();''',
+                })
             if app_session:
                 driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
                     "source": "sessionStorage.setItem('finance-dashboard-session-token', " + json.dumps(app_session) + ");"
@@ -294,6 +313,69 @@ def main():
             else:
                 show_more_works = len(transaction_rows) <= 15
 
+            transaction_description_fits_card = True
+            transaction_screenshot = None
+            if args.device in {"iphone", "pixel"}:
+                cards = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-card"]')
+                if cards:
+                    description = cards[0].find_element(By.CSS_SELECTOR, '[data-testid="transaction-description"]')
+                    if test_mode == "real-fastapi-isolated-db":
+                        transaction_description_fits_card = description.text.startswith("LONG-REFERENCE-")
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cards[0])
+                    layout = driver.execute_script("""const description=arguments[0], card=arguments[1];
+                      return {
+                        descriptionFits: description.scrollWidth <= description.clientWidth + 1,
+                        cardFits: card.scrollWidth <= card.clientWidth + 1,
+                        pageFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
+                      };""", description, cards[0])
+                    transaction_description_fits_card = transaction_description_fits_card and all(layout.values())
+                    transaction_screenshot = screenshot.with_name(screenshot.stem + "-transactions" + screenshot.suffix)
+                    driver.save_screenshot(str(transaction_screenshot))
+                else:
+                    transaction_description_fits_card = False
+
+            sankey_interaction_checks = {
+                "flow_click_shows_transactions": False,
+                "node_click_shows_transactions": False,
+                "node_keyboard_selection": False,
+            }
+            sankey_details_screenshot = screenshot.with_name(screenshot.stem + "-sankey-details" + screenshot.suffix)
+            sankey_links = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-link"]')
+            sankey_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+            if sankey_links and sankey_nodes:
+                driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", sankey_links[0])
+                details_panel = WebDriverWait(driver, args.timeout).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sankey-details"]'))
+                )
+                sankey_interaction_checks["flow_click_shows_transactions"] = (
+                    details_panel.get_attribute("data-sankey-selection-type") == "link"
+                    and "→" in details_panel.text
+                    and bool(details_panel.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]'))
+                )
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", details_panel)
+                driver.save_screenshot(str(sankey_details_screenshot))
+
+                sankey_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", sankey_nodes[0])
+                driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", sankey_nodes[0])
+                node_panel = WebDriverWait(driver, args.timeout).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sankey-details"]'))
+                )
+                sankey_interaction_checks["node_click_shows_transactions"] = (
+                    node_panel.get_attribute("data-sankey-selection-type") == "node"
+                    and bool(node_panel.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]'))
+                )
+
+                sankey_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                sankey_nodes[0].send_keys(Keys.ENTER)
+                keyboard_panel = WebDriverWait(driver, args.timeout).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sankey-details"]'))
+                )
+                sankey_interaction_checks["node_keyboard_selection"] = (
+                    keyboard_panel.get_attribute("data-sankey-selection-type") == "node"
+                    and bool(keyboard_panel.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]'))
+                )
+
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Settings']]").click()
             WebDriverWait(driver, args.timeout).until(lambda current: "Settings" in current.find_element(By.TAG_NAME, "body").text)
@@ -323,6 +405,8 @@ def main():
                 "no_severe_browser_errors": not severe,
                 "no_vue_warnings": not vue_warnings,
                 "recurring_quick_filters": filter_checks,
+                "sankey_interactions": sankey_interaction_checks,
+                "transaction_description_fits_card": transaction_description_fits_card,
                 "no_external_runtime_scripts": not external_script_urls,
                 "dashboard_no_horizontal_overflow": not dashboard_overflow,
                 "recurring_no_horizontal_overflow": not recurring_overflow,
@@ -339,6 +423,8 @@ def main():
                 and checks["no_severe_browser_errors"]
                 and checks["no_vue_warnings"]
                 and all(filter_checks.values())
+                and all(sankey_interaction_checks.values())
+                and transaction_description_fits_card
                 and checks["no_external_runtime_scripts"]
                 and checks["dashboard_no_horizontal_overflow"]
                 and checks["recurring_no_horizontal_overflow"]
@@ -355,6 +441,8 @@ def main():
                 "dashboard_screenshot_content_ratio": round(dashboard_ratio, 4),
                 "recurring_screenshot": str(screenshot.with_name(screenshot.stem + "-recurring" + screenshot.suffix)),
                 "recurring_screenshot_content_ratio": round(recurring_ratio, 4),
+                "sankey_details_screenshot": str(sankey_details_screenshot),
+                "transaction_screenshot": str(transaction_screenshot) if transaction_screenshot else None,
                 "checks": checks,
                 "external_script_urls": external_script_urls,
                 "severe_browser_errors": severe,
