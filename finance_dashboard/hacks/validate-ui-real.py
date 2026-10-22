@@ -31,10 +31,23 @@ def parse_args():
         configured_url = None
     parser.add_argument("--url", default=configured_url, help="Optional deployed app URL to test directly")
     parser.add_argument("--ha-ingress", action="store_true", help="Create an authenticated HA Ingress session using HA_URL/HA_TOKEN")
-    parser.add_argument("--screenshot", default="/data/v2/cache/opencode/finance-dashboard-real-selenium.png")
+    parser.add_argument("--screenshot", default=str(artifact_dir() / "finance-dashboard-real-selenium.png"))
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--device", choices=("desktop", "iphone", "pixel"), default="desktop")
     return parser.parse_args()
+
+
+def artifact_dir() -> Path:
+    preferred = Path(os.environ.get("FINANCE_TEST_ARTIFACT_DIR", "/data/v2/cache/opencode"))
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        if os.access(preferred, os.W_OK):
+            return preferred
+    except OSError:
+        pass
+    fallback = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "opencode"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 
 def resolve_ingress_target():
@@ -73,8 +86,7 @@ def start_real_backend(frontend_file: Path):
     if not (backend_dir / "main.py").is_file():
         raise FileNotFoundError(f"Backend not found next to {frontend_file}: {backend_dir}")
 
-    cache_root = Path("/data/v2/cache/opencode")
-    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_root = artifact_dir()
     test_data_dir = tempfile.TemporaryDirectory(prefix="finance-dashboard-e2e-", dir=cache_root)
     os.environ["FINANCE_DB_PATH"] = str(Path(test_data_dir.name) / "test.sqlite")
     os.environ["FINANCE_KEY_PATH"] = str(Path(test_data_dir.name) / "test.key")

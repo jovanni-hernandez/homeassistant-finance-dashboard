@@ -34,7 +34,8 @@ def get_or_create_key():
             f.write(key)
         os.chmod(KEY_PATH, 0o600)
     except Exception as e:
-        logger.warning(f"Could not persist encryption key to disk: {e}")
+        logger.error("Could not persist finance encryption key (%s).", type(e).__name__)
+        raise RuntimeError("Could not persist finance encryption key; refusing to start with an ephemeral key.") from e
         
     return key
 
@@ -47,8 +48,8 @@ def encrypt_value(plain_text: str) -> str:
     try:
         return cipher.encrypt(plain_text.encode('utf-8')).decode('utf-8')
     except Exception as e:
-        logger.error(f"Encryption error: {e}")
-        return plain_text
+        logger.error("Finance data encryption failed (%s).", type(e).__name__)
+        raise RuntimeError("Could not encrypt finance data; refusing to store it in plaintext.") from e
 
 def decrypt_value(cipher_text: str) -> str:
     if not cipher_text:

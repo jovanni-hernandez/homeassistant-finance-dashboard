@@ -33,7 +33,9 @@ def normalize(text: str) -> str:
 
 def merchant_key(payee: str, description: str) -> str:
     candidate = normalize(payee or '') or normalize(description or '')
-    parts = [part for part in candidate.split() if not part.isdigit() and len(part) < 8]
+    # Retain long merchant names (e.g. Starbucks, Microsoft); drop only numeric
+    # transaction/reference tokens that vary between statements.
+    parts = [part for part in candidate.split() if not part.isdigit()]
     return ' '.join(parts).strip()
 
 
@@ -54,9 +56,33 @@ def _cadence_label(days: float | None) -> str:
         return 'every 6–8 weeks'
     if 75 <= days <= 110:
         return 'quarterly'
+    if 165 <= days <= 200:
+        return 'semiannual'
     if 320 <= days <= 400:
         return 'annual'
     return f'every ~{round(days)} days'
+
+
+def _plausible_cadence(days: float | None) -> bool:
+    if days is None:
+        return False
+    return any(low <= days <= high for low, high in (
+        (5, 9), (12, 18), (25, 35), (40, 60), (75, 110), (165, 200), (320, 400),
+    ))
+
+
+def _looks_recurring(count: int, cadence_days: float | None, interval_jitter: float, amount_stability: float) -> bool:
+    if cadence_days is None:
+        return False
+    if count == 2:
+        # A pair has only one interval, so jitter is always zero. Require a
+        # recognizable cycle and a stable amount instead of treating every pair
+        # of merchant visits as recurring.
+        return _plausible_cadence(cadence_days) and amount_stability <= 0.15
+    return (
+        5 <= cadence_days <= 400
+        and interval_jitter <= max(3.0, cadence_days * 0.35)
+    )
 
 
 def _inferred_kind(text: str, amount: float) -> str:
@@ -129,6 +155,8 @@ def _load_recurring_rules():
 
 
 def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
+    top_n = max(1, min(int(top_n), 100))
+    min_count = max(2, min(int(min_count), 10000))
     db = SessionLocal()
     try:
         rules = _load_recurring_rules()
@@ -139,7 +167,7 @@ def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
 
         for tx in txs:
             amount = float(tx.amount or 0)
-            if amount == 0 or not tx.date:
+            if amount == 0 or not tx.date or tx.pending:
                 continue
 
             text = normalize(f"{tx.payee or ''} {tx.description or ''}")
@@ -188,13 +216,7 @@ def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
             kind = _inferred_kind(' '.join(entry['text'] for entry in entries), entries[-1]['amount'])
             keyword_hit = kind != 'recurring payment'
 
-            recurring = False
-            if cadence_days is not None:
-                recurring = interval_jitter <= max(3.0, cadence_days * 0.35)
-                if cadence_days >= 20 and count >= 2:
-                    recurring = recurring or span_days >= cadence_days * 1.5
-            if not recurring and count >= 3 and span_days >= 45:
-                recurring = True
+            recurring = _looks_recurring(count, cadence_days, interval_jitter, amount_stability)
 
             if not recurring:
                 continue
@@ -243,19 +265,20 @@ def generate_recurring_analysis(top_n: int = 40, min_count: int = 2):
             )
 
         items.sort(key=lambda item: (item['confidence'], item['count'], item['average_amount']), reverse=True)
-        items = items[:top_n]
-
+        total_recurring_count = len(items)
         summary = {
             'subscription_count': sum(1 for item in items if item['kind'] == 'subscription'),
             'recurring_bill_count': sum(1 for item in items if item['kind'] == 'recurring bill'),
             'recurring_income_count': sum(1 for item in items if item['kind'] == 'recurring income'),
             'other_count': sum(1 for item in items if item['kind'] == 'recurring payment'),
         }
+        items = items[:top_n]
 
         return {
             'generated_at': datetime.now(timezone.utc).isoformat(),
             'transaction_count': len(txs),
-            'recurring_count': len(items),
+            'recurring_count': total_recurring_count,
+            'returned_count': len(items),
             'summary': summary,
             'items': items,
         }

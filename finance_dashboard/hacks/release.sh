@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-REPO="${REPO:-https://github.com/jovanni-hernandez/homeassistant-finance-dashboard}"
 ROOT_ENV_FILE="$ROOT_DIR/.env"
 ENV_FILE="$ROOT_DIR/hacks/.release.env"
 
@@ -16,19 +15,11 @@ if [ -f "$ENV_FILE" ]; then
   source "$ENV_FILE"
 fi
 
-export HA_URL HA_TOKEN
 export GH_TOKEN="${GH_TOKEN:-}"
 export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
-export FINANCE_DASHBOARD_URL="${FINANCE_DASHBOARD_URL:-}"
 
-if [ -z "${HA_URL:-}" ] || [ -z "${HA_TOKEN:-}" ]; then
-  echo "HA_URL and HA_TOKEN are required for the full release flow."
-  echo "Set them in finance_dashboard/.env or finance_dashboard/hacks/.release.env, then rerun."
-  exit 1
-fi
-
-# Run the local real-backend preflight before publishing; the live deployed-page
-# Selenium check runs after deploy-and-verify updates the add-on.
+# Phase 1: certify locally and publish the source. Home Assistant deployment is
+# deliberately handled separately through the finance-dashboard-deploy skill/MCP.
 FINANCE_DASHBOARD_URL=local "$ROOT_DIR/hacks/certify.sh"
 
 VERSION="$(python3 - "$ROOT_DIR/config.yaml" <<'PY'
@@ -53,4 +44,5 @@ else
   echo "No changes to commit after certification."
 fi
 
-"$ROOT_DIR/hacks/deploy-and-verify.sh" "$REPO"
+echo "Local certification and GitHub publish phase complete for finance add-on v$VERSION."
+echo "Use the finance-dashboard-deploy OpenCode skill to check the Supervisor store and deploy through Home Assistant MCP."

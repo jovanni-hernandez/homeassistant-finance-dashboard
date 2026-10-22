@@ -5,14 +5,14 @@ import html
 import json
 import mimetypes
 import os
-import shutil
+import re
 import subprocess
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 
 REPO_URL = os.environ.get("FINANCE_DEV_REPO_URL", "https://github.com/jovanni-hernandez/homeassistant-finance-dashboard.git")
@@ -22,20 +22,21 @@ JOBS_DIR = Path(os.environ.get("FINANCE_DEV_JOBS", "/data/finance-dashboard-jobs
 PORT = int(os.environ.get("PORT", "8000"))
 
 COMMANDS = {
-    "backend-syntax": ["python3", "-m", "py_compile", "backend/*.py"],
-    "ui": ["node", "hacks/validate-ui.mjs", "--file", "frontend/index.html", "--screenshot", "/data/v2/cache/opencode/finance-dashboard-dev-ui.png"],
-    "selenium": ["bash", "hacks/validate-ui-selenium.sh", "--file", "frontend/index.html", "--screenshot", "/data/v2/cache/opencode/finance-dashboard-dev-selenium.png"],
-    "certify": ["bash", "hacks/certify.sh"],
-    "status": ["git", "status", "--short"],
-    "pull": ["git", "pull", "--ff-only", "origin", BRANCH],
+    "backend-syntax": {"command": ["python3", "-m", "py_compile"], "cwd": "app"},
+    "selenium": {
+        "command": ["bash", "hacks/validate-ui-selenium.sh"],
+        "cwd": "app",
+        "env": {"FINANCE_DASHBOARD_URL": "local"},
+    },
+    "status": {"command": ["git", "status", "--short"], "cwd": "repo"},
+    "pull": {"command": ["git", "pull", "--ff-only", "origin", BRANCH], "cwd": "repo"},
 }
 
 ARTIFACTS = {
-    "ui": ["/data/v2/cache/opencode/finance-dashboard-dev-ui.png"],
-    "selenium": ["/data/v2/cache/opencode/finance-dashboard-dev-selenium.png"],
-    "certify": [
-        "/data/v2/cache/opencode/finance-dashboard-certify.png",
-        "/data/v2/cache/opencode/finance-dashboard-certify-selenium.png",
+    "selenium": [
+        f"/data/v2/cache/opencode/finance-dashboard-real-selenium-{device}{suffix}.png"
+        for device in ("desktop", "iphone", "pixel")
+        for suffix in ("", "-recurring", "-settings")
     ],
 }
 
@@ -49,7 +50,12 @@ def ensure_repo() -> None:
     if not (WORKDIR / ".git").exists():
         subprocess.run(["git", "clone", "--branch", BRANCH, "--single-branch", REPO_URL, str(WORKDIR)], check=True)
     else:
-        subprocess.run(["git", "-C", str(WORKDIR), "pull", "--ff-only", "origin", BRANCH], check=False)
+        subprocess.run(["git", "-C", str(WORKDIR), "pull", "--ff-only", "origin", BRANCH], check=True)
+
+
+def app_directory() -> Path:
+    nested = WORKDIR / "finance_dashboard"
+    return nested if (nested / "backend").is_dir() else WORKDIR
 
 
 def write_job(job_id: str, **updates) -> dict:
@@ -60,13 +66,25 @@ def write_job(job_id: str, **updates) -> dict:
         return job
 
 
-def spawn_job(label: str, command: list[str] | str, shell: bool = False) -> dict:
+def spawn_job(label: str) -> dict:
+    spec = COMMANDS[label]
+    app_dir = app_directory()
+    cwd = app_dir if spec["cwd"] == "app" else WORKDIR
+    command = list(spec["command"])
+    if label == "backend-syntax":
+        python_files = sorted(str(path.relative_to(cwd)) for path in (cwd / "backend").glob("*.py"))
+        if not python_files:
+            raise FileNotFoundError(f"No backend Python files found under {cwd / 'backend'}")
+        command.extend(python_files)
+    env = os.environ.copy()
+    env.update(spec.get("env", {}))
+
     job_id = uuid.uuid4().hex[:12]
     log_path = JOBS_DIR / f"{job_id}.log"
     write_job(
         job_id,
         label=label,
-        command=command if isinstance(command, str) else " ".join(command),
+        command=" ".join(command),
         status="queued",
         log=str(log_path),
         artifacts=ARTIFACTS.get(label, []),
@@ -77,28 +95,15 @@ def spawn_job(label: str, command: list[str] | str, shell: bool = False) -> dict
         write_job(job_id, status="running", started_at=time.time())
         with log_path.open("w") as log:
             try:
-                if shell:
-                    proc = subprocess.Popen(
-                        command,
-                        cwd=WORKDIR,
-                        shell=True,
-                        executable="/bin/bash",
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                    )
-                else:
-                    if command == ["python3", "-m", "py_compile", "backend/*.py"]:
-                        command_to_run = ["python3", "-m", "py_compile", *sorted(str(p.relative_to(WORKDIR)) for p in (WORKDIR / "backend").glob("*.py"))]
-                    else:
-                        command_to_run = command
-                    proc = subprocess.Popen(
-                        command_to_run,
-                        cwd=WORKDIR,
-                        stdout=log,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                    )
+                proc = subprocess.Popen(
+                    command,
+                    cwd=cwd,
+                    env=env,
+                    shell=False,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
                 rc = proc.wait()
                 write_job(job_id, status="completed" if rc == 0 else "failed", exit_code=rc, finished_at=time.time())
             except Exception as exc:
@@ -116,6 +121,8 @@ def list_jobs() -> list[dict]:
 
 
 def read_log(job_id: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{12}", job_id):
+        raise FileNotFoundError(job_id)
     path = JOBS_DIR / f"{job_id}.log"
     if not path.exists():
         return ""
@@ -123,6 +130,8 @@ def read_log(job_id: str) -> str:
 
 
 def read_artifact(job_id: str, name: str) -> tuple[bytes, str]:
+    if not re.fullmatch(r"[0-9a-f]{12}", job_id):
+        raise FileNotFoundError(job_id)
     job = JOBS.get(job_id, {})
     for artifact in job.get("artifacts", []):
         path = Path(artifact)
@@ -174,18 +183,14 @@ def html_page() -> str:
         <button onclick="runPreset('status')">Git status</button>
         <button onclick="runPreset('pull')" class="secondary">Pull latest</button>
         <button onclick="runPreset('backend-syntax')">Backend syntax</button>
-        <button onclick="runPreset('ui')">UI check</button>
         <button onclick="runPreset('selenium')">Selenium check</button>
-        <button onclick="runPreset('certify')" class="warn">Full certify</button>
       </div>
+      <p class="muted" style="margin-top:12px;">Only fixed repository checks can be started from this page; arbitrary shell execution is disabled.</p>
     </div>
 
     <div class="card">
-      <h2>Shell command</h2>
-      <p class="muted">Runs in the cloned workspace root. Keep it to one command line.</p>
-      <textarea id="command" placeholder="e.g. bash hacks/certify.sh"></textarea>
+      <h2>Test output</h2>
       <div class="row" style="margin-top:12px;">
-        <button onclick="runCustom()">Run command</button>
         <button onclick="refreshAll()" class="secondary">Refresh jobs</button>
       </div>
     </div>
@@ -289,14 +294,6 @@ def html_page() -> str:
       await refreshAll();
     }}
 
-    async function runCustom() {{
-      const command = document.getElementById('command').value.trim();
-      if (!command) return;
-      await api('/api/run', {{ method: 'POST', body: JSON.stringify({{ command }}) }});
-      document.getElementById('command').value = '';
-      await refreshAll();
-    }}
-
     async function refreshAll() {{
       await Promise.all([refreshStatus(), refreshJobs()]);
     }}
@@ -335,7 +332,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(list_jobs(), indent=2), "application/json; charset=utf-8")
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/log"):
             job_id = parsed.path.split("/")[3]
-            return self._send(200, read_log(job_id), "text/plain; charset=utf-8")
+            try:
+                log = read_log(job_id)
+            except FileNotFoundError:
+                return self._send(404, "Not found", "text/plain; charset=utf-8")
+            return self._send(200, log, "text/plain; charset=utf-8")
         if parsed.path.startswith("/api/jobs/") and "/artifact/" in parsed.path:
             parts = parsed.path.split("/")
             job_id = parts[3]
@@ -358,16 +359,15 @@ class Handler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(length) or b"{}") if length else {}
         if parsed.path == "/api/run":
             preset = str(payload.get("preset") or "").strip()
-            command = str(payload.get("command") or "").strip()
-            if preset:
-                if preset not in COMMANDS:
-                    return self._send(400, json.dumps({"error": "Unknown preset"}), "application/json; charset=utf-8")
-                job = spawn_job(preset, COMMANDS[preset], shell=(preset not in {"status", "pull", "backend-syntax"}))
-                return self._send(200, json.dumps(job, indent=2), "application/json; charset=utf-8")
-            if command:
-                job = spawn_job(command, command, shell=True)
-                return self._send(200, json.dumps(job, indent=2), "application/json; charset=utf-8")
-            return self._send(400, json.dumps({"error": "No command provided"}), "application/json; charset=utf-8")
+            if "command" in payload:
+                return self._send(400, json.dumps({"error": "Arbitrary shell commands are disabled; choose a preset."}), "application/json; charset=utf-8")
+            if preset not in COMMANDS:
+                return self._send(400, json.dumps({"error": "Unknown or missing preset"}), "application/json; charset=utf-8")
+            try:
+                job = spawn_job(preset)
+            except Exception as exc:
+                return self._send(400, json.dumps({"error": str(exc)}), "application/json; charset=utf-8")
+            return self._send(200, json.dumps(job, indent=2), "application/json; charset=utf-8")
         return self._send(404, "Not found", "text/plain; charset=utf-8")
 
 

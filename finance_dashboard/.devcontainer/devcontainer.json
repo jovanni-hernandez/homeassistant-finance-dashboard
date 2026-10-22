@@ -1,6 +1,8 @@
 {
   "name": "Finance Dashboard Dev",
-  "image": "mcr.microsoft.com/devcontainers/python:3.11-bookworm",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
       "version": "20"

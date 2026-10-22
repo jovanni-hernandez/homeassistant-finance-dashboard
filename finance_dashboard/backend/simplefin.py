@@ -62,7 +62,8 @@ def _store_access_url(access_url: str):
 
 
 def _claim_setup_url(claim_url: str):
-    logger.info(f"Claiming SimpleFIN setup token via: {claim_url}")
+    # Claim URLs contain the setup credential in their path; never log them.
+    logger.info("Claiming SimpleFIN setup token.")
     response = requests.post(claim_url, headers={"Content-Length": "0"}, timeout=30)
     response.raise_for_status()
     access_url = response.text.strip()
@@ -159,9 +160,10 @@ def claim_simplefin_setup_token(setup_token: str):
         _record_sync_state("success", "SimpleFIN token claimed successfully")
         return {"status": "success", "message": "Successfully claimed SimpleFIN token"}
     except Exception as e:
-        logger.error(f"Failed to claim SimpleFIN setup token: {e}")
-        _record_sync_state("error", f"Failed to claim token: {e}")
-        return {"status": "error", "message": str(e)}
+        safe_message = str(e) if isinstance(e, ValueError) else "Could not claim the SimpleFIN setup token. Check the token and network, then retry."
+        logger.error("Failed to claim SimpleFIN setup token (%s).", type(e).__name__)
+        _record_sync_state("error", safe_message)
+        return {"status": "error", "message": safe_message}
 
 
 def get_dashboard_status():
@@ -188,6 +190,8 @@ def _load_category_rules():
             normalized = []
             for item in parsed:
                 if not isinstance(item, dict):
+                    continue
+                if item.get("enabled") is False:
                     continue
                 category = str(item.get("category", "")).strip()
                 patterns = item.get("patterns", [])

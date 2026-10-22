@@ -13,9 +13,9 @@
     {
       "label": "Finance: Run backend",
       "type": "shell",
-      "command": "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload",
+      "command": "python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload",
       "options": {
-        "cwd": "${workspaceFolder}"
+        "cwd": "${workspaceFolder}/backend"
       },
       "isBackground": true,
       "problemMatcher": []
@@ -30,9 +30,9 @@
       "problemMatcher": []
     },
     {
-      "label": "Finance: Check frontend JS",
+      "label": "Finance: Check frontend in browser",
       "type": "shell",
-      "command": "python3 - <<'PY'\nfrom pathlib import Path\nimport re\ntext = Path('frontend/index.html').read_text()\nscript = re.search(r'<script>(.*)</script>\\s*</body>', text, re.S)\nif not script:\n    raise SystemExit('script block not found')\nout = Path('.devcontainer') / 'frontend-check.js'\nout.write_text(script.group(1))\nPY\nnode --check .devcontainer/frontend-check.js",
+      "command": "FINANCE_DASHBOARD_URL=local ./hacks/validate-ui-selenium.sh",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -41,7 +41,7 @@
     {
       "label": "Finance: Build category defaults",
       "type": "shell",
-      "command": "./hacks/propose-category-rules.sh --format markdown",
+      "command": "if [ -f \"${FINANCE_DB_PATH:-/data/finance.db}\" ]; then ./hacks/propose-category-rules.sh --format markdown; else echo 'No finance DB found; set FINANCE_DB_PATH to a readable test database.'; fi",
       "options": {
         "cwd": "${workspaceFolder}"
       },

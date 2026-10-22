@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY run.sh /app/run.sh
-RUN chmod a+x /app/run.sh
+COPY launcher.py /app/launcher.py
+RUN chmod a+x /app/run.sh && chmod 644 /app/launcher.py
 
 CMD ["/app/run.sh"]
