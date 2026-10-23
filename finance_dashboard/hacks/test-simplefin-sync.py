@@ -108,7 +108,17 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertIsNone(result["latest_incoming_transaction_date"])
         self.assertIn("Freshness NOT verified: SimpleFIN returned no transactions", result["message"])
 
+    def test_sync_requests_exactly_one_day(self):
+        with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as fetch:
+            simplefin.fetch_and_sync_simplefin()
+
+        start_timestamp = fetch.call_args.kwargs["start_ts"]
+        end_timestamp = fetch.call_args.kwargs["end_ts"]
+        self.assertEqual(end_timestamp - start_timestamp, 24 * 60 * 60)
+
     def test_sync_interval_is_six_hours_and_scheduled_runner_calls_sync(self):
+        self.assertEqual(simplefin.SYNC_HISTORY_DAYS, 1)
+        self.assertEqual(simplefin.SYNC_OVERLAP_DAYS, 0)
         self.assertEqual(simplefin.SYNC_INTERVAL_SECONDS, 6 * 60 * 60)
         with patch.object(simplefin, "fetch_and_sync_simplefin", return_value={"status": "success"}) as sync:
             main._run_periodic_sync_once()

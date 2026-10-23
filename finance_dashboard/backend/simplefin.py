@@ -21,8 +21,8 @@ logger = logging.getLogger("finance_dashboard")
 
 OPTIONS_PATH = "/data/options.json"
 ACCESS_URL_KEY = "simplefin_access_url"
-SYNC_HISTORY_DAYS = 365
-SYNC_OVERLAP_DAYS = 14
+SYNC_HISTORY_DAYS = 1
+SYNC_OVERLAP_DAYS = 0
 SYNC_INTERVAL_SECONDS = 6 * 60 * 60
 
 DEFAULT_CATEGORY_RULES = [
