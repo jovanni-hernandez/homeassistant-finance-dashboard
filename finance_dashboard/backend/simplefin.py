@@ -381,19 +381,19 @@ def fetch_and_sync_simplefin():
             )
             save_simplefin_data(normalized)
 
-            message = f"Synced successfully from SimpleFIN ({SYNC_HISTORY_DAYS}-day window)"
+            message = f"SimpleFIN request completed ({SYNC_HISTORY_DAYS}-day window)."
             if simplefin_errors:
-                message = f"Synced with warnings: {simplefin_errors[0]}"
+                message += f" Provider warning: {simplefin_errors[0]}"
             if incoming_count:
-                message += f" SimpleFIN returned {incoming_count} transactions; newest dated {newest_incoming_date or 'unknown'}."
+                message += f" Returned {incoming_count} transactions; newest dated {newest_incoming_date or 'unknown'}."
                 if newest_date_advanced:
-                    message += " The newest transaction date advanced."
+                    message += " Freshness verified: the newest transaction date advanced."
                 elif previous_latest_date:
-                    message += f" No transaction date newer than the previously stored latest ({previous_latest_date}) was returned."
+                    message += f" Freshness NOT verified: no date newer than the previously stored latest ({previous_latest_date}) was returned."
                 else:
-                    message += " No usable transaction date was returned."
+                    message += " Freshness could not be verified because no usable transaction date was returned."
             else:
-                message += " SimpleFIN returned no transactions."
+                message += " Freshness NOT verified: SimpleFIN returned no transactions."
 
             _record_sync_state("success", message)
             logger.info(

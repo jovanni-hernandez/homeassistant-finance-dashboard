@@ -84,7 +84,8 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertEqual(result["latest_incoming_transaction_date"], "2023-11-14")
         self.assertEqual(result["previous_latest_transaction_date"], "2023-11-14")
         self.assertFalse(result["newest_transaction_date_advanced"])
-        self.assertIn("No transaction date newer than the previously stored latest", result["message"])
+        self.assertIn("Freshness NOT verified", result["message"])
+        self.assertIn("no date newer than the previously stored latest", result["message"])
 
     def test_sync_reports_when_latest_transaction_date_advances(self):
         previous_timestamp = 1_700_000_000
@@ -97,7 +98,7 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertEqual(result["incoming_transaction_count"], 1)
         self.assertEqual(result["latest_incoming_transaction_date"], "2023-11-15")
         self.assertTrue(result["newest_transaction_date_advanced"])
-        self.assertIn("The newest transaction date advanced", result["message"])
+        self.assertIn("Freshness verified: the newest transaction date advanced", result["message"])
 
     def test_sync_reports_empty_provider_response(self):
         with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])):
@@ -105,7 +106,7 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         self.assertEqual(result["incoming_transaction_count"], 0)
         self.assertIsNone(result["latest_incoming_transaction_date"])
-        self.assertIn("SimpleFIN returned no transactions", result["message"])
+        self.assertIn("Freshness NOT verified: SimpleFIN returned no transactions", result["message"])
 
     def test_sync_interval_is_six_hours_and_scheduled_runner_calls_sync(self):
         self.assertEqual(simplefin.SYNC_INTERVAL_SECONDS, 6 * 60 * 60)
