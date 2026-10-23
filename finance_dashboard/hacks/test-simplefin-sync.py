@@ -23,7 +23,7 @@ os.chdir(BACKEND)
 
 import main  # noqa: E402
 import simplefin  # noqa: E402
-from database import init_db  # noqa: E402
+from database import get_setting, init_db, set_setting  # noqa: E402
 from models import Account, SessionLocal, Setting, Transaction  # noqa: E402
 
 init_db()
@@ -115,6 +115,41 @@ class SimpleFinSyncTests(unittest.TestCase):
         start_timestamp = fetch.call_args.kwargs["start_ts"]
         end_timestamp = fetch.call_args.kwargs["end_ts"]
         self.assertEqual(end_timestamp - start_timestamp, 24 * 60 * 60)
+
+    def test_sync_backfills_missed_days_with_contiguous_one_day_windows(self):
+        now_timestamp = int(simplefin.datetime.now(simplefin.timezone.utc).timestamp())
+        cursor = now_timestamp - (3 * simplefin.SYNC_WINDOW_SECONDS) - 3600
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(cursor))
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as fetch:
+            result = simplefin.fetch_and_sync_simplefin()
+
+        calls = fetch.call_args_list
+        self.assertEqual(result["backfill_pending"], False)
+        self.assertGreaterEqual(result["sync_windows"], 3)
+        self.assertLessEqual(result["sync_windows"], simplefin.SYNC_MAX_BACKFILL_WINDOWS_PER_RUN + 1)
+        for call in calls:
+            start_timestamp = call.kwargs["start_ts"]
+            end_timestamp = call.kwargs["end_ts"]
+            self.assertGreater(end_timestamp, start_timestamp)
+            self.assertLessEqual(end_timestamp - start_timestamp, simplefin.SYNC_WINDOW_SECONDS)
+        for previous, following in zip(calls, calls[1:]):
+            self.assertEqual(previous.kwargs["end_ts"], following.kwargs["start_ts"])
+        self.assertEqual(get_setting(simplefin.SYNC_CURSOR_SETTING_KEY), str(calls[-1].kwargs["end_ts"]))
+
+    def test_long_backfill_is_bounded_and_resumes_from_saved_cursor(self):
+        now_timestamp = int(simplefin.datetime.now(simplefin.timezone.utc).timestamp())
+        cursor = now_timestamp - (12 * simplefin.SYNC_WINDOW_SECONDS)
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(cursor))
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as fetch:
+            result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertEqual(result["backfill_pending"], True)
+        self.assertEqual(result["sync_windows"], simplefin.SYNC_MAX_BACKFILL_WINDOWS_PER_RUN + 1)
+        saved_cursor = int(get_setting(simplefin.SYNC_CURSOR_SETTING_KEY))
+        self.assertEqual(saved_cursor, cursor + simplefin.SYNC_MAX_BACKFILL_WINDOWS_PER_RUN * simplefin.SYNC_WINDOW_SECONDS)
+        self.assertGreater(result["backfill_remaining_days"], 0)
 
     def test_sync_interval_is_six_hours_and_scheduled_runner_calls_sync(self):
         self.assertEqual(simplefin.SYNC_HISTORY_DAYS, 1)

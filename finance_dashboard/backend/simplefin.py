@@ -2,7 +2,7 @@ import base64
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -24,6 +24,9 @@ ACCESS_URL_KEY = "simplefin_access_url"
 SYNC_HISTORY_DAYS = 1
 SYNC_OVERLAP_DAYS = 0
 SYNC_INTERVAL_SECONDS = 6 * 60 * 60
+SYNC_MAX_BACKFILL_WINDOWS_PER_RUN = 7
+SYNC_CURSOR_SETTING_KEY = "simplefin_sync_cursor"
+SYNC_WINDOW_SECONDS = (SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS) * 24 * 60 * 60
 
 DEFAULT_CATEGORY_RULES = [
     {"category": "Transfers", "patterns": ["transfer", "zelle", "venmo", "cash app", "cashapp", "payment to self", "ach xfer", "ach transfer", "external transfer", "internal transfer", "credit card payment"]},
@@ -341,47 +344,98 @@ def _stored_latest_transaction_timestamp():
         return None
 
 
+def _get_sync_cursor(now_timestamp: int):
+    stored_cursor = get_setting(SYNC_CURSOR_SETTING_KEY)
+    try:
+        cursor = int(stored_cursor)
+    except (TypeError, ValueError):
+        cursor = _stored_latest_transaction_timestamp()
+        if cursor is None:
+            cursor = now_timestamp - SYNC_WINDOW_SECONDS
+
+    if cursor < 0 or cursor > now_timestamp:
+        return max(0, now_timestamp - SYNC_WINDOW_SECONDS)
+    return cursor
+
+
 def fetch_and_sync_simplefin():
     """Fetch normalized financial data from SimpleFIN and persist to DB."""
     access_url = get_simplefin_token()
 
     if access_url and access_url != "":
         try:
-            now = datetime.now(timezone.utc)
-            start = now - timedelta(days=SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS)
-            payload = _fetch_simplefin_payload(
-                access_url,
-                start_ts=int(start.timestamp()),
-                end_ts=int(now.timestamp()),
-            )
-
+            now_timestamp = int(datetime.now(timezone.utc).timestamp())
+            backfill_limit = max(0, now_timestamp - SYNC_WINDOW_SECONDS)
+            cursor = _get_sync_cursor(now_timestamp)
             simplefin_errors = []
-            for key in ("errlist", "errors"):
-                if payload.get(key):
-                    simplefin_errors.extend(payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)])
-
             rules = _load_category_rules()
-            normalized = _normalize_simplefin_payload(payload, rules)
-            incoming_transactions = [
-                transaction
-                for account in normalized.get("accounts", [])
-                for transaction in account.get("transactions", [])
-            ]
-            incoming_count, newest_incoming_timestamp, newest_incoming_date = _transaction_date_summary(
-                incoming_transactions
-            )
             previous_latest_timestamp = _stored_latest_transaction_timestamp()
             previous_latest_date = (
                 datetime.fromtimestamp(previous_latest_timestamp, timezone.utc).date().isoformat()
                 if previous_latest_timestamp is not None
                 else None
             )
+
+            incoming_transactions_by_id = {}
+            backfill_windows = 0
+            while cursor < backfill_limit and backfill_windows < SYNC_MAX_BACKFILL_WINDOWS_PER_RUN:
+                window_end = min(cursor + SYNC_WINDOW_SECONDS, backfill_limit)
+                payload = _fetch_simplefin_payload(access_url, start_ts=cursor, end_ts=window_end)
+                for key in ("errlist", "errors"):
+                    if payload.get(key):
+                        simplefin_errors.extend(
+                            payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)]
+                        )
+
+                normalized = _normalize_simplefin_payload(payload, rules)
+                for account in normalized.get("accounts", []):
+                    for transaction in account.get("transactions", []):
+                        incoming_transactions_by_id[str(transaction.get("id"))] = transaction
+                save_simplefin_data(normalized)
+
+                cursor = window_end
+                set_setting(SYNC_CURSOR_SETTING_KEY, str(cursor))
+                backfill_windows += 1
+
+            backfill_pending = cursor < backfill_limit
+            remaining_backfill_days = (
+                (backfill_limit - cursor + SYNC_WINDOW_SECONDS - 1) // SYNC_WINDOW_SECONDS
+                if backfill_pending
+                else 0
+            )
+
+            # Always re-fetch the latest rolling day so transactions posted late
+            # within the day are still picked up after the backfill cursor advances.
+            rolling_start = max(0, now_timestamp - SYNC_WINDOW_SECONDS)
+            payload = _fetch_simplefin_payload(access_url, start_ts=rolling_start, end_ts=now_timestamp)
+            for key in ("errlist", "errors"):
+                if payload.get(key):
+                    simplefin_errors.extend(
+                        payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)]
+                    )
+            normalized = _normalize_simplefin_payload(payload, rules)
+            for account in normalized.get("accounts", []):
+                for transaction in account.get("transactions", []):
+                    incoming_transactions_by_id[str(transaction.get("id"))] = transaction
+            save_simplefin_data(normalized)
+
+            if not backfill_pending:
+                cursor = now_timestamp
+                set_setting(SYNC_CURSOR_SETTING_KEY, str(cursor))
+
+            incoming_transactions = list(incoming_transactions_by_id.values())
+            incoming_count, newest_incoming_timestamp, newest_incoming_date = _transaction_date_summary(
+                incoming_transactions
+            )
             newest_date_advanced = newest_incoming_timestamp is not None and (
                 previous_latest_timestamp is None or newest_incoming_timestamp > previous_latest_timestamp
             )
-            save_simplefin_data(normalized)
 
-            message = f"SimpleFIN request completed ({SYNC_HISTORY_DAYS}-day window)."
+            total_windows = backfill_windows + 1
+            message = (
+                f"SimpleFIN request completed in {total_windows} window(s), each no longer than "
+                f"{SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS} day."
+            )
             if simplefin_errors:
                 message += f" Provider warning: {simplefin_errors[0]}"
             if incoming_count:
@@ -394,13 +448,22 @@ def fetch_and_sync_simplefin():
                     message += " Freshness could not be verified because no usable transaction date was returned."
             else:
                 message += " Freshness NOT verified: SimpleFIN returned no transactions."
+            if backfill_pending:
+                message += (
+                    f" Historical backfill is incomplete: about {remaining_backfill_days} day(s) remain; "
+                    "it will continue on the next sync."
+                )
 
             _record_sync_state("success", message)
             logger.info(
-                "SimpleFIN data synced and saved: %d transactions returned; newest date %s; date advanced %s.",
+                "SimpleFIN sync completed: %d windows, %d transactions returned; newest date %s; "
+                "date advanced %s; backfill pending %s (%d days).",
+                total_windows,
                 incoming_count,
                 newest_incoming_date or "unknown",
                 newest_date_advanced,
+                backfill_pending,
+                remaining_backfill_days,
             )
             return {
                 "status": "success",
@@ -411,6 +474,9 @@ def fetch_and_sync_simplefin():
                 "latest_incoming_transaction_date": newest_incoming_date,
                 "previous_latest_transaction_date": previous_latest_date,
                 "newest_transaction_date_advanced": newest_date_advanced,
+                "sync_windows": total_windows,
+                "backfill_pending": backfill_pending,
+                "backfill_remaining_days": remaining_backfill_days,
                 "warnings": simplefin_errors,
             }
         except Exception as e:
