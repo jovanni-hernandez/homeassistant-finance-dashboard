@@ -16,13 +16,14 @@ TEST_ROOT = Path(os.environ.get("FINANCE_TEST_ARTIFACT_DIR", "/data/v2/cache/ope
 TEST_ROOT.mkdir(parents=True, exist_ok=True)
 TEST_DATA = tempfile.TemporaryDirectory(prefix="finance-stdin-unit-", dir=TEST_ROOT)
 atexit.register(TEST_DATA.cleanup)
-os.environ["FINANCE_DB_PATH"] = str(Path(TEST_DATA.name) / "test.sqlite")
+os.environ["FINANCE_DB_PATH"] = ":memory:"
 os.environ["FINANCE_KEY_PATH"] = str(Path(TEST_DATA.name) / "test.key")
 sys.path.insert(0, str(BACKEND))
 os.chdir(BACKEND)
 
 from database import init_db, set_category_rules_value  # noqa: E402
-from main import _finance_agent_stdin_result  # noqa: E402
+import main  # noqa: E402
+from main import _finance_agent_stdin_message, _finance_agent_stdin_result  # noqa: E402
 from models import Account, SessionLocal, Transaction  # noqa: E402
 
 init_db()
@@ -33,6 +34,7 @@ try:
         Transaction(id="tx-1", account_id="account-1", date=1, amount="-12.00", payee="Costco #123456", description="Store 123456", category="Uncategorized", pending=False),
         Transaction(id="tx-2", account_id="account-1", date=2, amount="-18.00", payee="Costco #987654", description="Store 987654", category="Groceries", pending=False),
         Transaction(id="tx-3", account_id="account-1", date=3, amount="-5.00", payee="Zelle Alex Example", description="Transfer", category="Uncategorized", pending=False),
+        Transaction(id="tx-4", account_id="account-1", date=4, amount="-20.00", payee="Amy Lindborg", description="Dog walking", category="Other", pending=False),
     ])
     db.commit()
 finally:
@@ -47,6 +49,7 @@ class FinanceAgentStdinTests(unittest.TestCase):
             db.query(Transaction).filter(Transaction.id == "tx-1").update({Transaction.category: "Uncategorized"})
             db.query(Transaction).filter(Transaction.id == "tx-2").update({Transaction.category: "Groceries"})
             db.query(Transaction).filter(Transaction.id == "tx-3").update({Transaction.category: "Uncategorized"})
+            db.query(Transaction).filter(Transaction.id == "tx-4").update({Transaction.category: "Other"})
             db.commit()
         finally:
             db.close()
@@ -81,6 +84,30 @@ class FinanceAgentStdinTests(unittest.TestCase):
         with patch("main.pin_auth.pin_is_required", return_value=True), patch("main.pin_auth.validate_session_token", return_value=False):
             denied = _finance_agent_stdin_result({"command": "merchant_audit"})
         self.assertFalse(denied["ok"])
+
+    def test_explicit_user_merchant_override_replaces_existing_category(self):
+        result = _finance_agent_stdin_result({
+            "command": "apply_category_rules",
+            "rules": [{"category": "Pets", "patterns": ["dog walking"]}],
+            "merchant_overrides": [{"merchant": "Amy Lindborg", "category": "Pets"}],
+        })
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["explicit_merchant_overrides"], 1)
+        db = SessionLocal()
+        try:
+            category = db.query(Transaction).filter(Transaction.id == "tx-4").one().category
+        finally:
+            db.close()
+        self.assertEqual(category, "Pets")
+
+    def test_stdin_accepts_supervisor_json_payload_without_newline(self):
+        result = _finance_agent_stdin_message(b'{"command":"merchant_audit","offset":0,"limit":1}')
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["command"], "merchant_audit")
+
+    def test_stdin_rejects_oversized_payload(self):
+        result = _finance_agent_stdin_message(b"x" * (main.FINANCE_STDIN_MAX_BYTES + 1))
+        self.assertFalse(result["ok"])
 
 
 if __name__ == "__main__":

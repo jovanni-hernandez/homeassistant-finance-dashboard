@@ -16,6 +16,49 @@
     <script src="./vendor/tailwindcss.browser.js?v=2.2.35"></script>
     <script src="./vendor/d3.min.js?v=2.2.35"></script>
     <script src="./vendor/d3-sankey.min.js?v=2.2.35"></script>
+    <style>
+        html.finance-dark-mode { color-scheme: dark; }
+        html.finance-dark-mode body,
+        html.finance-dark-mode .bg-slate-100 { background-color: #0b1220 !important; color: #e2e8f0 !important; }
+        html.finance-dark-mode header { background-color: rgba(15, 23, 42, 0.96) !important; border-color: #334155 !important; }
+        html.finance-dark-mode .bg-white\/90 { background-color: rgba(15, 23, 42, 0.96) !important; }
+        html.finance-dark-mode .bg-white { background-color: #111c2e !important; }
+        html.finance-dark-mode .bg-slate-50 { background-color: #172235 !important; }
+        html.finance-dark-mode .border-slate-100,
+        html.finance-dark-mode .border-slate-200 { border-color: #334155 !important; }
+        html.finance-dark-mode .border-slate-300 { border-color: #475569 !important; }
+        html.finance-dark-mode .text-slate-900 { color: #f8fafc !important; }
+        html.finance-dark-mode .text-slate-800,
+        html.finance-dark-mode .text-slate-700 { color: #e2e8f0 !important; }
+        html.finance-dark-mode .text-slate-600 { color: #cbd5e1 !important; }
+        html.finance-dark-mode .text-slate-500,
+        html.finance-dark-mode .text-slate-400 { color: #94a3b8 !important; }
+        html.finance-dark-mode .fill-slate-700 { fill: #cbd5e1 !important; }
+        html.finance-dark-mode input,
+        html.finance-dark-mode select,
+        html.finance-dark-mode textarea { color-scheme: dark; background-color: #0f172a !important; border-color: #475569 !important; color: #e2e8f0 !important; }
+        html.finance-dark-mode input::placeholder,
+        html.finance-dark-mode textarea::placeholder { color: #94a3b8 !important; }
+        html.finance-dark-mode .bg-emerald-50 { background-color: #052e25 !important; }
+        html.finance-dark-mode .text-emerald-700 { color: #6ee7b7 !important; }
+        html.finance-dark-mode .border-emerald-200 { border-color: #065f46 !important; }
+        html.finance-dark-mode .bg-amber-50 { background-color: #422006 !important; }
+        html.finance-dark-mode .text-amber-700 { color: #fcd34d !important; }
+        html.finance-dark-mode .border-amber-200 { border-color: #92400e !important; }
+        html.finance-dark-mode .bg-sky-50 { background-color: #082f49 !important; }
+        html.finance-dark-mode .text-sky-700,
+        html.finance-dark-mode .text-sky-600 { color: #7dd3fc !important; }
+        html.finance-dark-mode .border-sky-200 { border-color: #075985 !important; }
+        html.finance-dark-mode .bg-violet-50 { background-color: #2e1065 !important; }
+        html.finance-dark-mode .text-violet-700 { color: #c4b5fd !important; }
+        html.finance-dark-mode .border-violet-200 { border-color: #5b21b6 !important; }
+        html.finance-dark-mode .bg-red-50,
+        html.finance-dark-mode .bg-rose-50 { background-color: #450a0a !important; }
+        html.finance-dark-mode .text-red-700,
+        html.finance-dark-mode .text-rose-700 { color: #fca5a5 !important; }
+        html.finance-dark-mode .border-red-200,
+        html.finance-dark-mode .border-rose-200 { border-color: #7f1d1d !important; }
+    </style>
 </head>
 <body class="bg-slate-100 text-slate-900">
     <div id="boot-screen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 px-4 text-slate-100">
@@ -642,6 +685,25 @@
                         </div>
 
                         <div v-if="!categoryRulesAdvanced" class="mt-4 space-y-3">
+                            <div class="flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center">
+                                <div class="min-w-0 flex-1">
+                                    <div class="text-sm font-medium text-slate-800">Categories</div>
+                                    <div class="text-xs text-slate-500">Add a category, then create rules for it.</div>
+                                </div>
+                                <div class="flex w-full gap-2 sm:w-auto">
+                                    <input
+                                        data-testid="custom-category-input"
+                                        v-model="customCategoryInput"
+                                        @keydown.enter.prevent="addCustomCategory"
+                                        type="text"
+                                        maxlength="100"
+                                        placeholder="New category"
+                                        class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100 sm:w-48 sm:flex-none"
+                                    />
+                                    <button data-testid="add-custom-category" @click="addCustomCategory" class="shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">Add</button>
+                                </div>
+                            </div>
+                            <p v-if="customCategoryMessage" class="text-xs text-slate-500">{{ customCategoryMessage }}</p>
                             <div
                                 v-for="(rule, index) in categoryRuleRows"
                                 :key="index"
@@ -671,7 +733,7 @@
                                 <div class="mt-3 grid gap-3 lg:grid-cols-3">
                                     <label class="block">
                                         <span class="block text-sm font-medium text-slate-700">Category</span>
-                                        <select v-model="categoryRuleRows[index].category" @change="applyRuleRowChange(index, { category: $event.target.value })" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+                                        <select data-testid="category-rule-select" v-model="categoryRuleRows[index].category" @change="applyRuleRowChange(index, { category: $event.target.value })" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
                                             <option v-for="option in categoryDropdownOptions" :key="option" :value="option">{{ option }}</option>
                                         </select>
                                     </label>
@@ -737,6 +799,7 @@
 
                         <textarea
                             v-else
+                            data-testid="category-rules-json"
                             v-model="categoryRulesText"
                             rows="12"
                             class="mt-4 w-full rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 font-mono text-xs outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
@@ -1010,10 +1073,65 @@
                 const selectedMonth = ref('');
                 const monthSelectionTouched = ref(false);
                 const visibleTransactionLimit = ref(15);
-                const categoryOptions = [
+                let financeThemeMediaQuery = null;
+                const themeColorLuminance = (color) => {
+                    const value = String(color || '').trim();
+                    let channels = null;
+                    const hex = value.match(/^#([\da-f]{3}|[\da-f]{6})$/i);
+                    if (hex) {
+                        const normalized = hex[1].length === 3
+                            ? hex[1].split('').map((part) => part + part).join('')
+                            : hex[1];
+                        channels = normalized.match(/../g).map((part) => parseInt(part, 16));
+                    } else {
+                        const rgb = value.match(/rgba?\(\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)/i);
+                        if (rgb) channels = rgb.slice(1, 4).map(Number);
+                    }
+                    if (!channels || channels.some((channel) => !Number.isFinite(channel))) return null;
+                    const [red, green, blue] = channels.map((channel) => {
+                        const value = Math.max(0, Math.min(255, channel)) / 255;
+                        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+                    });
+                    return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+                };
+                const getHomeAssistantDarkMode = () => {
+                    try {
+                        const themeDocument = window.parent?.document || document;
+                        const root = themeDocument.documentElement;
+                        const homeAssistant = themeDocument.querySelector('home-assistant');
+                        const mode = [
+                            root?.getAttribute('data-theme-mode'),
+                            root?.getAttribute('data-mode'),
+                            homeAssistant?.getAttribute('data-theme-mode'),
+                        ].find((value) => value && /^(dark|light)$/i.test(value));
+                        if (mode) return mode.toLowerCase() === 'dark';
+
+                        const candidates = [root, homeAssistant, themeDocument.body].filter(Boolean);
+                        for (const element of candidates) {
+                            const background = themeDocument.defaultView
+                                ?.getComputedStyle(element)
+                                .getPropertyValue('--primary-background-color');
+                            const luminance = themeColorLuminance(background);
+                            if (luminance !== null) return luminance < 0.42;
+                        }
+                    } catch (err) {
+                        // Cross-origin or unavailable parent: use the system preference below.
+                    }
+                    return null;
+                };
+                const syncFinanceTheme = () => {
+                    const haMode = getHomeAssistantDarkMode();
+                    const dark = haMode ?? Boolean(window.matchMedia?.('(prefers-color-scheme: dark)').matches);
+                    document.documentElement.classList.toggle('finance-dark-mode', dark);
+                    document.documentElement.dataset.financeTheme = dark ? 'dark' : 'light';
+                };
+                syncFinanceTheme();
+                const baseCategoryOptions = [
                     'Uncategorized',
                     'Income',
                     'Groceries',
+                    'Pets',
+                    'Childcare',
                     'Dining',
                     'Housing',
                     'Utilities',
@@ -1025,7 +1143,24 @@
                     'Fees',
                     'Other',
                 ];
-                const categoryDropdownOptions = categoryOptions.filter((option) => option !== 'Uncategorized');
+                const customCategoryInput = ref('');
+                const customCategoryMessage = ref('');
+                const categoryOptions = computed(() => {
+                    const candidates = [
+                        ...baseCategoryOptions,
+                        ...categoryRuleRows.value.map((row) => String(row?.category || '').trim()),
+                        ...transactions.value.map((tx) => String(tx?.category || '').trim()),
+                    ];
+                    const seen = new Set();
+                    return candidates.filter((category) => {
+                        if (!category) return false;
+                        const key = category.toLocaleLowerCase();
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                    });
+                });
+                const categoryDropdownOptions = computed(() => categoryOptions.value.filter((option) => option !== 'Uncategorized'));
                 const status = ref({
                     connected: false,
                     account_count: 0,
@@ -1058,7 +1193,7 @@
                         const patterns = Array.isArray(row?.patterns)
                             ? row.patterns.map((item) => String(item || '').trim()).filter(Boolean)
                             : splitPatternText(row?.patterns);
-                        if (!category || !patterns.length) return;
+                        if (!category || (!patterns.length && baseCategoryOptions.includes(category))) return;
                         normalized.push({
                             category,
                             patterns: Array.from(new Set(patterns)),
@@ -1097,6 +1232,25 @@
 
                 const addRuleRow = () => {
                     categoryRuleRows.value = [...categoryRuleRows.value, defaultRuleRow()];
+                };
+
+                const addCustomCategory = () => {
+                    const category = String(customCategoryInput.value || '').trim().replace(/\s+/g, ' ');
+                    if (!category) return;
+                    if (categoryOptions.value.some((item) => item.toLocaleLowerCase() === category.toLocaleLowerCase())) {
+                        customCategoryMessage.value = `${category} is already available.`;
+                        return;
+                    }
+                    categoryRuleRows.value = [...categoryRuleRows.value, {
+                        enabled: true,
+                        category,
+                        patterns: [],
+                        patternDraft: '',
+                        customCategory: true,
+                    }];
+                    customCategoryInput.value = '';
+                    customCategoryMessage.value = `${category} added. Add one or more merchant patterns to make an automatic rule.`;
+                    syncRulesJsonFromBuilder();
                 };
 
                 const toggleRuleEnabled = (index) => {
@@ -1890,16 +2044,18 @@
                     if (tx.category && tx.category !== 'Uncategorized') return tx.category;
                     const haystack = `${tx.payee || ''} ${tx.description || ''}`.toLowerCase();
                     const categories = [
-                        ['Income', ['payroll', 'salary', 'deposit', 'direct deposit', 'paycheck', 'ach credit']],
+                        ['Transfers', ['transfer', 'zelle', 'venmo', 'cash app', 'cashapp', 'payment to self', 'ach xfer', 'ach transfer', 'external transfer', 'internal transfer', 'credit card payment']],
+                        ['Income', ['payroll', 'salary', 'direct deposit', 'paycheck', 'ach credit']],
                         ['Groceries', ['grocery', 'supermarket', 'food lion', 'whole foods', 'trader joe', 'costco', 'aldi', 'kroger', 'walmart', 'sprouts']],
-                        ['Dining', ['restaurant', 'coffee', 'cafe', 'mcdonald', 'chipotle', 'starbucks', 'doordash', 'ubereats', 'grubhub', 'pizza']],
+                        ['Pets', ['aspca pet insurance', 'banfield', 'pet insurance', 'veterinary', 'vet clinic', 'pet hospital', 'petco', 'petsmart', 'chewy']],
+                        ['Childcare', ['ivymount school', 'childcare', 'child care', 'daycare', 'day care', 'aftercare', 'babysitter', 'preschool']],
+                        ['Dining', ['restaurant', 'coffee', 'cafe', 'mcdonald', 'chipotle', 'starbucks', 'doordash', 'uber eats', 'ubereats', 'grubhub', 'pizza']],
                         ['Housing', ['rent', 'mortgage', 'property', 'hoa', 'landlord', 'apartment']],
-                        ['Utilities', ['electric', 'water', 'gas', 'internet', 'phone', 'utility', 'spectrum', 'verizon', 'xfinity', 'att']],
-                        ['Transport', ['gas', 'fuel', 'uber', 'lyft', 'parking', 'toll', 'metro', 'transit', 'shell', 'chevron', 'exxon']],
+                        ['Utilities', ['electric', 'water', 'natural gas', 'internet', 'phone', 'utility', 'spectrum', 'verizon', 'xfinity', 'att']],
+                        ['Transport', ['gas station', 'fuel', 'uber', 'lyft', 'parking', 'toll', 'metro', 'transit', 'shell', 'chevron', 'exxon']],
                         ['Shopping', ['amazon', 'target', 'costco', 'shopping', 'store', 'walmart', 'best buy', 'ebay']],
-                        ['Travel', ['hotel', 'airlines', 'flight', 'travel', 'rental car', 'airbnb']],
+                        ['Travel', ['hotel', 'airlines', 'flight', 'travel', 'rental car', 'car rental', 'airbnb', 'amtrak']],
                         ['Subscriptions', ['netflix', 'spotify', 'subscription', 'prime', 'hulu', 'apple', 'youtube', 'google']],
-                        ['Transfers', ['transfer', 'zelle', 'venmo', 'cash app', 'cashapp', 'payment to self']],
                         ['Fees', ['fee', 'interest', 'late', 'overdraft', 'atm', 'service charge']],
                     ];
 
@@ -2191,11 +2347,17 @@
                 });
 
                 onMounted(async () => {
+                    syncFinanceTheme();
+                    if (window.matchMedia) {
+                        financeThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+                        financeThemeMediaQuery.addEventListener?.('change', syncFinanceTheme);
+                    }
                     window.addEventListener('pointerdown', recordActivity, { passive: true });
                     window.addEventListener('keydown', recordActivity, { passive: true });
                     window.addEventListener('touchstart', recordActivity, { passive: true });
                     clockInterval = window.setInterval(() => {
                         nowTick.value = Date.now();
+                        syncFinanceTheme();
                     }, 1000);
 
                     await refreshPinStatus();
@@ -2210,6 +2372,7 @@
                 onUnmounted(() => {
                     if (idleMonitor) clearInterval(idleMonitor);
                     if (clockInterval) clearInterval(clockInterval);
+                    financeThemeMediaQuery?.removeEventListener?.('change', syncFinanceTheme);
                 });
 
                 return {
@@ -2274,7 +2437,10 @@
                     savingCategoryRules,
                     categoryRulesAdvanced,
                     categoryRuleRows,
+                    customCategoryInput,
+                    customCategoryMessage,
                     categoryDropdownOptions,
+                    addCustomCategory,
                     rulePreviewRows,
                     categoryDefaultsMessage,
                     categoryDefaultsError,

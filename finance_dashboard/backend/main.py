@@ -1,6 +1,8 @@
 import logging
 import json
+import os
 import re
+import select
 import sys
 import threading
 from collections import Counter, defaultdict
@@ -88,7 +90,8 @@ def startup_event():
         simplefin.fetch_and_sync_simplefin()
     except Exception as e:
         logger.error(f"Startup sync failed: {e}")
-    threading.Thread(target=_finance_agent_stdin_worker, name="finance-agent-stdin", daemon=True).start()
+    if os.environ.get("FINANCE_AGENT_STDIN_ENABLED") == "1":
+        threading.Thread(target=_finance_agent_stdin_worker, name="finance-agent-stdin", daemon=True).start()
 
 
 def verify_ha_auth(finance_session: str | None = Header(None, alias="X-Finance-Session")):
@@ -217,12 +220,36 @@ def _finance_agent_stdin_result(payload: dict):
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
 
+        merchant_overrides = payload.get("merchant_overrides", [])
+        if not isinstance(merchant_overrides, list) or len(merchant_overrides) > 100:
+            return {"ok": False, "error": "merchant_overrides must be an array with at most 100 entries."}
+        valid_categories = {rule["category"] for rule in json.loads(raw_rules)}
+        normalized_overrides = []
+        for override in merchant_overrides:
+            if not isinstance(override, dict):
+                return {"ok": False, "error": "Each merchant override must be an object."}
+            merchant = override.get("merchant")
+            category = override.get("category")
+            if not isinstance(merchant, str) or not merchant.strip() or len(merchant) > 200:
+                return {"ok": False, "error": "Each merchant override needs a merchant label of 1–200 characters."}
+            if not isinstance(category, str) or category not in valid_categories:
+                return {"ok": False, "error": "Merchant override categories must exist in the submitted rules."}
+            normalized_overrides.append((re.sub(r"[^a-z0-9]+", " ", merchant.casefold()).strip(), category))
+
         set_category_rules_value(raw_rules)
         rules = simplefin._load_category_rules()
         db = SessionLocal()
         reclassified = 0
+        explicitly_overridden = 0
         try:
             for tx in db.query(Transaction).all():
+                merchant_text = re.sub(r"[^a-z0-9]+", " ", f"{tx.payee or ''} {tx.description or ''}".casefold()).strip()
+                forced_category = next((category for merchant, category in normalized_overrides if merchant and merchant in merchant_text), None)
+                if forced_category:
+                    if tx.category != forced_category:
+                        tx.category = forced_category
+                        explicitly_overridden += 1
+                    continue
                 if (tx.category or "Uncategorized") != "Uncategorized":
                     continue
                 category = simplefin.categorize_transaction(
@@ -245,38 +272,76 @@ def _finance_agent_stdin_result(payload: dict):
             "command": command,
             "saved_rule_count": len(json.loads(raw_rules)),
             "reclassified_uncategorized": reclassified,
+            "explicit_merchant_overrides": explicitly_overridden,
         }
 
     return {"ok": False, "error": "Unknown Finance agent command."}
 
 
+def _finance_agent_stdin_message(message: bytes):
+    if len(message) > FINANCE_STDIN_MAX_BYTES:
+        return {"ok": False, "error": "Finance agent command exceeds the size limit."}
+    try:
+        payload = json.loads(message.decode("utf-8"))
+        if isinstance(payload, str):
+            payload = json.loads(payload) if payload.lstrip().startswith("{") else {"command": payload.strip()}
+        if not isinstance(payload, dict):
+            return {"ok": False, "error": "Finance agent command must be a JSON object."}
+        return _finance_agent_stdin_result(payload)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        logger.error("Finance agent stdin command failed (%s).", type(exc).__name__)
+        return {"ok": False, "error": "Finance agent command failed; check add-on logs."}
+
+
 def _finance_agent_stdin_worker():
     """Accept a narrow, admin-only command protocol over Supervisor app stdin."""
+    try:
+        stdin_fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError) as exc:
+        logger.warning("Finance agent stdin unavailable (%s).", type(exc).__name__)
+        return
+
+    logger.info("Finance agent stdin command handler ready.")
+    buffer = bytearray()
+
+    def process_message(message: bytes):
+        result = _finance_agent_stdin_message(message)
+        print("FINANCE_AGENT_RESULT " + json.dumps(result, ensure_ascii=False, separators=(",", ":")), flush=True)
+
     while True:
         try:
-            line = sys.stdin.readline(FINANCE_STDIN_MAX_BYTES + 1)
+            readable, _, _ = select.select([stdin_fd], [], [], 0.5)
         except Exception as exc:
             logger.warning("Finance agent stdin stopped (%s).", type(exc).__name__)
             return
-        if not line:
+        if not readable:
+            if buffer:
+                message = bytes(buffer)
+                buffer.clear()
+                process_message(message)
+            continue
+
+        try:
+            chunk = os.read(stdin_fd, 4096)
+        except OSError as exc:
+            logger.warning("Finance agent stdin read failed (%s).", type(exc).__name__)
             return
-        if len(line.encode("utf-8", errors="replace")) > FINANCE_STDIN_MAX_BYTES:
-            result = {"ok": False, "error": "Finance agent command exceeds the size limit."}
-        else:
-            try:
-                payload = json.loads(line)
-                if isinstance(payload, str):
-                    payload = json.loads(payload) if payload.lstrip().startswith("{") else {"command": payload.strip()}
-                if not isinstance(payload, dict):
-                    result = {"ok": False, "error": "Finance agent command must be a JSON object."}
-                else:
-                    result = _finance_agent_stdin_result(payload)
-            except (json.JSONDecodeError, ValueError) as exc:
-                result = {"ok": False, "error": str(exc)}
-            except Exception as exc:
-                logger.error("Finance agent stdin command failed (%s).", type(exc).__name__)
-                result = {"ok": False, "error": "Finance agent command failed; check add-on logs."}
-        print("FINANCE_AGENT_RESULT " + json.dumps(result, ensure_ascii=False, separators=(",", ":")), flush=True)
+        if not chunk:
+            if buffer:
+                process_message(bytes(buffer))
+            return
+
+        buffer.extend(chunk)
+        while b"\n" in buffer:
+            message, _, remainder = buffer.partition(b"\n")
+            buffer = bytearray(remainder)
+            if message.strip():
+                process_message(bytes(message))
+        if len(buffer) > FINANCE_STDIN_MAX_BYTES:
+            process_message(bytes(buffer))
+            buffer.clear()
 
 
 @app.get("/api/status", dependencies=[Depends(verify_ha_auth)])

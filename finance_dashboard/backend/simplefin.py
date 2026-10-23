@@ -24,16 +24,18 @@ SYNC_HISTORY_DAYS = 365
 SYNC_OVERLAP_DAYS = 14
 
 DEFAULT_CATEGORY_RULES = [
-    {"category": "Income", "patterns": ["payroll", "salary", "deposit", "direct deposit", "paycheck", "ach credit"]},
+    {"category": "Transfers", "patterns": ["transfer", "zelle", "venmo", "cash app", "cashapp", "payment to self", "ach xfer", "ach transfer", "external transfer", "internal transfer", "credit card payment"]},
+    {"category": "Income", "patterns": ["payroll", "salary", "direct deposit", "paycheck", "ach credit"]},
     {"category": "Groceries", "patterns": ["grocery", "supermarket", "food lion", "whole foods", "trader joe", "costco", "aldi", "kroger", "walmart", "sprouts"]},
-    {"category": "Dining", "patterns": ["restaurant", "coffee", "cafe", "mcdonald", "chipotle", "starbucks", "doordash", "ubereats", "grubhub", "pizza"]},
+    {"category": "Pets", "patterns": ["aspca pet insurance", "banfield", "pet insurance", "veterinary", "vet clinic", "pet hospital", "petco", "petsmart", "chewy"]},
+    {"category": "Childcare", "patterns": ["ivymount school", "childcare", "child care", "daycare", "day care", "aftercare", "babysitter", "preschool"]},
+    {"category": "Dining", "patterns": ["restaurant", "coffee", "cafe", "mcdonald", "chipotle", "starbucks", "doordash", "uber eats", "ubereats", "grubhub", "pizza"]},
     {"category": "Housing", "patterns": ["rent", "mortgage", "property", "hoa", "landlord", "apartment"]},
-    {"category": "Utilities", "patterns": ["electric", "water", "gas", "internet", "phone", "utility", "spectrum", "verizon", "xfinity", "att"]},
-    {"category": "Transport", "patterns": ["gas", "fuel", "uber", "lyft", "parking", "toll", "metro", "transit", "shell", "chevron", "exxon"]},
+    {"category": "Utilities", "patterns": ["electric", "water", "natural gas", "internet", "phone", "utility", "spectrum", "verizon", "xfinity", "att"]},
+    {"category": "Transport", "patterns": ["gas station", "fuel", "uber", "lyft", "parking", "toll", "metro", "transit", "shell", "chevron", "exxon"]},
     {"category": "Shopping", "patterns": ["amazon", "target", "costco", "shopping", "store", "walmart", "best buy", "ebay"]},
-    {"category": "Travel", "patterns": ["hotel", "airlines", "flight", "travel", "rental car", "airbnb"]},
+    {"category": "Travel", "patterns": ["hotel", "airlines", "flight", "travel", "rental car", "car rental", "airbnb", "amtrak"]},
     {"category": "Subscriptions", "patterns": ["netflix", "spotify", "subscription", "prime", "hulu", "apple", "youtube", "google"]},
-    {"category": "Transfers", "patterns": ["transfer", "zelle", "venmo", "cash app", "cashapp", "payment to self"]},
     {"category": "Fees", "patterns": ["fee", "interest", "late", "overdraft", "atm", "service charge"]},
 ]
 

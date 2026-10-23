@@ -83,14 +83,17 @@ def reserve_port() -> int:
 
 def start_real_backend(frontend_file: Path):
     """Start the real FastAPI app with isolated DB/key and SimpleFIN mock fallback."""
-    backend_dir = frontend_file.resolve().parent.parent / "backend"
-    if not (backend_dir / "main.py").is_file():
-        raise FileNotFoundError(f"Backend not found next to {frontend_file}: {backend_dir}")
+    source_frontend = frontend_file.resolve().parent
+    source_backend = source_frontend.parent / "backend"
+    if not (source_backend / "main.py").is_file():
+        raise FileNotFoundError(f"Backend not found next to {frontend_file}: {source_backend}")
 
     cache_root = artifact_dir()
     test_data_dir = tempfile.TemporaryDirectory(prefix="finance-dashboard-e2e-", dir=cache_root)
+    backend_dir = source_backend
     os.environ["FINANCE_DB_PATH"] = str(Path(test_data_dir.name) / "test.sqlite")
     os.environ["FINANCE_KEY_PATH"] = str(Path(test_data_dir.name) / "test.key")
+    os.environ["FINANCE_AGENT_STDIN_ENABLED"] = "0"
     sys.path.insert(0, str(backend_dir))
     os.chdir(backend_dir)  # StaticFiles uses ../frontend relative to the app working directory.
 
@@ -110,7 +113,8 @@ def start_real_backend(frontend_file: Path):
     thread.start()
     base_url = f"http://127.0.0.1:{port}/"
 
-    deadline = time.monotonic() + 45
+    startup_timeout = max(45, int(os.environ.get("FINANCE_TEST_BACKEND_STARTUP_TIMEOUT", "120")))
+    deadline = time.monotonic() + startup_timeout
     last_error = None
     while time.monotonic() < deadline:
         if not thread.is_alive():
@@ -119,15 +123,17 @@ def start_real_backend(frontend_file: Path):
         try:
             with urllib.request.urlopen(base_url + "api/pin/status", timeout=2) as response:
                 if response.status == 200:
-                    return base_url, server, thread, test_data_dir
+                    break
         except Exception as exc:  # server may still be starting its DB and mock sync
             last_error = exc
             time.sleep(0.25)
+    else:
+        server.should_exit = True
+        thread.join(timeout=5)
+        test_data_dir.cleanup()
+        raise TimeoutError(f"Real FastAPI app did not become ready: {last_error}")
 
-    server.should_exit = True
-    thread.join(timeout=5)
-    test_data_dir.cleanup()
-    raise TimeoutError(f"Real FastAPI app did not become ready: {last_error}")
+    return base_url, server, thread, test_data_dir
 
 
 def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str, int]:
@@ -210,19 +216,26 @@ def main():
             viewport_width, viewport_height = viewport_sizes[args.device]
             driver.set_window_size(viewport_width, viewport_height)
             driver.set_page_load_timeout(args.timeout)
-            if test_mode == "real-fastapi-isolated-db":
+            inject_test_description = (
+                test_mode == "real-fastapi-isolated-db"
+                and os.environ.get("FINANCE_TEST_LONG_DESCRIPTION", "1") != "0"
+            )
+            if inject_test_description:
                 driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
                     "source": r'''(() => {
                       const nativeFetch = window.fetch.bind(window);
                       window.fetch = async (...args) => {
                         const response = await nativeFetch(...args);
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
-                        if (url.includes("/api/transactions")) {
-                          const payload = await response.clone().json();
-                          if (payload.transactions && payload.transactions.length) {
-                            payload.transactions[0].description = "LONG-REFERENCE-" + "X".repeat(130) + " payment description should wrap instead of overflowing the card edge";
-                          }
-                          return new Response(JSON.stringify(payload), {status: response.status, headers: response.headers});
+                          if (url.includes("/api/transactions")) {
+                            const payload = await response.clone().json();
+                            if (payload.transactions && payload.transactions.length) {
+                              payload.transactions[0].description = "LONG-REFERENCE-" + "X".repeat(130) + " payment description should wrap instead of overflowing the card edge";
+                            }
+                            const headers = new Headers(response.headers);
+                            headers.delete("content-length");
+                            headers.delete("content-encoding");
+                            return new Response(JSON.stringify(payload), {status: response.status, headers});
                         }
                         return response;
                       };
@@ -255,6 +268,36 @@ def main():
                 wait.until(lambda current, item=section: item in current.find_element(By.TAG_NAME, "body").text)
             driver.save_screenshot(str(screenshot))
             dashboard_ratio = screenshot_content_ratio(screenshot)
+
+            theme_checks = {
+                "dark_ha_theme_detected": True,
+                "light_ha_theme_detected": True,
+            }
+            dark_mode_screenshot = None
+            if test_mode == "real-fastapi-isolated-db":
+                original_primary_background = driver.execute_script(
+                    "return document.documentElement.style.getPropertyValue('--primary-background-color');"
+                )
+                driver.execute_script("document.documentElement.style.setProperty('--primary-background-color', '#111111');")
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: "finance-dark-mode" in current.find_element(By.TAG_NAME, "html").get_attribute("class")
+                )
+                theme_checks["dark_ha_theme_detected"] = driver.execute_script(
+                    "return document.documentElement.dataset.financeTheme === 'dark';"
+                )
+                dark_mode_screenshot = screenshot.with_name(screenshot.stem + "-dark-mode" + screenshot.suffix)
+                driver.save_screenshot(str(dark_mode_screenshot))
+                driver.execute_script("document.documentElement.style.setProperty('--primary-background-color', '#fafafa');")
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: "finance-dark-mode" not in current.find_element(By.TAG_NAME, "html").get_attribute("class")
+                )
+                theme_checks["light_ha_theme_detected"] = driver.execute_script(
+                    "return document.documentElement.dataset.financeTheme === 'light';"
+                )
+                if original_primary_background:
+                    driver.execute_script("document.documentElement.style.setProperty('--primary-background-color', arguments[0]);", original_primary_background)
+                else:
+                    driver.execute_script("document.documentElement.style.removeProperty('--primary-background-color');")
 
             menu = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[aria-label="Open menu"]')))
             menu.click()
@@ -319,7 +362,7 @@ def main():
                 cards = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-card"]')
                 if cards:
                     description = cards[0].find_element(By.CSS_SELECTOR, '[data-testid="transaction-description"]')
-                    if test_mode == "real-fastapi-isolated-db":
+                    if inject_test_description:
                         transaction_description_fits_card = description.text.startswith("LONG-REFERENCE-")
                     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cards[0])
                     layout = driver.execute_script("""const description=arguments[0], card=arguments[1];
@@ -380,6 +423,33 @@ def main():
             driver.find_element(By.XPATH, "//button[.//span[text()='Settings']]").click()
             WebDriverWait(driver, args.timeout).until(lambda current: "Settings" in current.find_element(By.TAG_NAME, "body").text)
             settings_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+
+            custom_category_checks = {
+                "pets_category_available": False,
+                "childcare_category_available": False,
+                "custom_category_can_be_added": False,
+            }
+            category_select = driver.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-select"]')
+            options = [option.get_attribute("value") for option in category_select.find_elements(By.TAG_NAME, "option")]
+            custom_category_checks["pets_category_available"] = "Pets" in options
+            custom_category_checks["childcare_category_available"] = "Childcare" in options
+            custom_category_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="custom-category-input"]')
+            custom_category_input.send_keys("Selenium Custom")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="add-custom-category"]').click()
+            category_selects = driver.find_elements(By.CSS_SELECTOR, '[data-testid="category-rule-select"]')
+            custom_category_checks["custom_category_can_be_added"] = any(
+                option.get_attribute("value") == "Selenium Custom"
+                for select in category_selects
+                for option in select.find_elements(By.TAG_NAME, "option")
+            )
+            driver.find_element(By.XPATH, "//button[normalize-space()='Use JSON']").click()
+            custom_category_in_json = driver.find_element(By.CSS_SELECTOR, '[data-testid="category-rules-json"]').get_property("value")
+            custom_category_checks["custom_category_can_be_added"] = (
+                custom_category_checks["custom_category_can_be_added"]
+                and '"category": "Selenium Custom"' in custom_category_in_json
+                and '"patterns": []' in custom_category_in_json
+            )
+            driver.find_element(By.XPATH, "//button[normalize-space()='Use builder']").click()
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings" + screenshot.suffix)))
 
             logs = driver.get_log("browser")
@@ -407,6 +477,8 @@ def main():
                 "recurring_quick_filters": filter_checks,
                 "sankey_interactions": sankey_interaction_checks,
                 "transaction_description_fits_card": transaction_description_fits_card,
+                "ha_theme_auto_detection": theme_checks,
+                "custom_categories": custom_category_checks,
                 "no_external_runtime_scripts": not external_script_urls,
                 "dashboard_no_horizontal_overflow": not dashboard_overflow,
                 "recurring_no_horizontal_overflow": not recurring_overflow,
@@ -425,6 +497,8 @@ def main():
                 and all(filter_checks.values())
                 and all(sankey_interaction_checks.values())
                 and transaction_description_fits_card
+                and all(theme_checks.values())
+                and all(custom_category_checks.values())
                 and checks["no_external_runtime_scripts"]
                 and checks["dashboard_no_horizontal_overflow"]
                 and checks["recurring_no_horizontal_overflow"]
@@ -443,6 +517,7 @@ def main():
                 "recurring_screenshot_content_ratio": round(recurring_ratio, 4),
                 "sankey_details_screenshot": str(sankey_details_screenshot),
                 "transaction_screenshot": str(transaction_screenshot) if transaction_screenshot else None,
+                "dark_mode_screenshot": str(dark_mode_screenshot) if dark_mode_screenshot else None,
                 "checks": checks,
                 "external_script_urls": external_script_urls,
                 "severe_browser_errors": severe,
