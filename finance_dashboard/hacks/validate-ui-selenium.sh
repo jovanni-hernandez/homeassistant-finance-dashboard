@@ -35,6 +35,7 @@ fi
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-recurring-analysis.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-api-validation.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-admin-stdin.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-simplefin-sync.py"
 
 MODE_ARGS=()
 if [ "${FINANCE_DASHBOARD_URL:-}" = "local" ]; then

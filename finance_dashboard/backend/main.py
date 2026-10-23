@@ -33,6 +33,42 @@ app = FastAPI(title="Finance Dashboard API")
 
 FINANCE_STDIN_MAX_BYTES = 65536
 FINANCE_AUDIT_PAGE_SIZE = 100
+_periodic_sync_stop = threading.Event()
+_periodic_sync_thread = None
+_periodic_sync_lock = threading.Lock()
+
+
+def _run_periodic_sync_once():
+    try:
+        result = simplefin.fetch_and_sync_simplefin()
+        if result.get("status") != "success":
+            logger.error("Scheduled SimpleFIN sync failed: %s", result.get("message", "unknown error"))
+    except Exception as exc:
+        logger.exception("Scheduled SimpleFIN sync raised an exception: %s", exc)
+
+
+def _periodic_sync_worker():
+    while not _periodic_sync_stop.wait(simplefin.SYNC_INTERVAL_SECONDS):
+        _run_periodic_sync_once()
+
+
+def _start_periodic_sync():
+    global _periodic_sync_thread
+    with _periodic_sync_lock:
+        if _periodic_sync_thread and _periodic_sync_thread.is_alive():
+            return
+        _periodic_sync_stop.clear()
+        _periodic_sync_thread = threading.Thread(
+            target=_periodic_sync_worker,
+            name="finance-simplefin-periodic-sync",
+            daemon=True,
+        )
+        _periodic_sync_thread.start()
+        logger.info("Scheduled SimpleFIN sync every %d hours.", simplefin.SYNC_INTERVAL_SECONDS // 3600)
+
+
+def _stop_periodic_sync():
+    _periodic_sync_stop.set()
 
 class ClaimTokenRequest(BaseModel):
     setup_token: str = Field(min_length=1, max_length=4096)
@@ -90,8 +126,14 @@ def startup_event():
         simplefin.fetch_and_sync_simplefin()
     except Exception as e:
         logger.error(f"Startup sync failed: {e}")
+    _start_periodic_sync()
     if os.environ.get("FINANCE_AGENT_STDIN_ENABLED") == "1":
         threading.Thread(target=_finance_agent_stdin_worker, name="finance-agent-stdin", daemon=True).start()
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+    _stop_periodic_sync()
 
 
 def verify_ha_auth(finance_session: str | None = Header(None, alias="X-Finance-Session")):

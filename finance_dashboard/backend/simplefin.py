@@ -10,6 +10,7 @@ import requests
 from database import (
     get_account_count,
     get_category_rules_value,
+    get_stored_transactions,
     get_setting,
     get_transaction_count,
     save_simplefin_data,
@@ -22,6 +23,7 @@ OPTIONS_PATH = "/data/options.json"
 ACCESS_URL_KEY = "simplefin_access_url"
 SYNC_HISTORY_DAYS = 365
 SYNC_OVERLAP_DAYS = 14
+SYNC_INTERVAL_SECONDS = 6 * 60 * 60
 
 DEFAULT_CATEGORY_RULES = [
     {"category": "Transfers", "patterns": ["transfer", "zelle", "venmo", "cash app", "cashapp", "payment to self", "ach xfer", "ach transfer", "external transfer", "internal transfer", "credit card payment"]},
@@ -312,6 +314,33 @@ def _fetch_simplefin_payload(access_url: str, start_ts: int | None = None, end_t
     return response.json()
 
 
+def _transaction_date_summary(transactions):
+    timestamps = []
+    for transaction in transactions:
+        try:
+            timestamps.append(int(transaction.get("date")))
+        except (TypeError, ValueError):
+            continue
+
+    newest_timestamp = max(timestamps, default=None)
+    newest_date = (
+        datetime.fromtimestamp(newest_timestamp, timezone.utc).date().isoformat()
+        if newest_timestamp is not None
+        else None
+    )
+    return len(transactions), newest_timestamp, newest_date
+
+
+def _stored_latest_transaction_timestamp():
+    latest = get_stored_transactions(limit=1)
+    if not latest:
+        return None
+    try:
+        return int(latest[0].get("date"))
+    except (TypeError, ValueError):
+        return None
+
+
 def fetch_and_sync_simplefin():
     """Fetch normalized financial data from SimpleFIN and persist to DB."""
     access_url = get_simplefin_token()
@@ -333,19 +362,55 @@ def fetch_and_sync_simplefin():
 
             rules = _load_category_rules()
             normalized = _normalize_simplefin_payload(payload, rules)
+            incoming_transactions = [
+                transaction
+                for account in normalized.get("accounts", [])
+                for transaction in account.get("transactions", [])
+            ]
+            incoming_count, newest_incoming_timestamp, newest_incoming_date = _transaction_date_summary(
+                incoming_transactions
+            )
+            previous_latest_timestamp = _stored_latest_transaction_timestamp()
+            previous_latest_date = (
+                datetime.fromtimestamp(previous_latest_timestamp, timezone.utc).date().isoformat()
+                if previous_latest_timestamp is not None
+                else None
+            )
+            newest_date_advanced = newest_incoming_timestamp is not None and (
+                previous_latest_timestamp is None or newest_incoming_timestamp > previous_latest_timestamp
+            )
             save_simplefin_data(normalized)
 
             message = f"Synced successfully from SimpleFIN ({SYNC_HISTORY_DAYS}-day window)"
             if simplefin_errors:
                 message = f"Synced with warnings: {simplefin_errors[0]}"
+            if incoming_count:
+                message += f" SimpleFIN returned {incoming_count} transactions; newest dated {newest_incoming_date or 'unknown'}."
+                if newest_date_advanced:
+                    message += " The newest transaction date advanced."
+                elif previous_latest_date:
+                    message += f" No transaction date newer than the previously stored latest ({previous_latest_date}) was returned."
+                else:
+                    message += " No usable transaction date was returned."
+            else:
+                message += " SimpleFIN returned no transactions."
 
             _record_sync_state("success", message)
-            logger.info("SimpleFIN data synced and saved to DB.")
+            logger.info(
+                "SimpleFIN data synced and saved: %d transactions returned; newest date %s; date advanced %s.",
+                incoming_count,
+                newest_incoming_date or "unknown",
+                newest_date_advanced,
+            )
             return {
                 "status": "success",
                 "message": message,
                 "account_count": get_account_count(),
                 "transaction_count": get_transaction_count(),
+                "incoming_transaction_count": incoming_count,
+                "latest_incoming_transaction_date": newest_incoming_date,
+                "previous_latest_transaction_date": previous_latest_date,
+                "newest_transaction_date_advanced": newest_date_advanced,
                 "warnings": simplefin_errors,
             }
         except Exception as e:
