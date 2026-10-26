@@ -286,91 +286,89 @@
                     </section>
 
                     <section>
-                        <h2 class="mb-3 text-xl font-semibold text-slate-800">Recent transactions</h2>
-                        <div class="space-y-3 md:hidden">
-                            <article
-                                v-for="tx in displayedTransactions"
-                                :key="tx.id"
-                                data-testid="transaction-card"
-                                class="min-w-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4"
-                            >
-                                <div class="flex items-start justify-between gap-2 sm:gap-3">
-                                    <div class="min-w-0 flex-1">
-                                        <div class="text-[11px] uppercase tracking-wide text-slate-500">{{ formatDate(tx.date) }}</div>
-                                        <div class="mt-1 truncate text-sm font-semibold text-slate-900">{{ tx.payee || 'Unknown payee' }}</div>
-                                        <div data-testid="transaction-description" class="mt-1 break-words text-sm leading-5 text-slate-500">{{ tx.description || 'No description' }}</div>
-                                    </div>
-                                    <div class="w-[40%] max-w-[40%] min-w-0 shrink-0 text-right">
-                                        <div class="text-sm font-semibold" :class="parseFloat(tx.amount) >= 0 ? 'text-emerald-700' : 'text-slate-900'">
-                                            {{ formatCurrency(tx.amount) }}
-                                        </div>
-                                        <div class="mt-1 break-words text-[11px] uppercase tracking-wide text-slate-500">{{ tx.account_name }}</div>
-                                    </div>
-                                </div>
-
-                                <div class="mt-2 grid gap-1.5">
-                                    <label class="text-xs font-medium uppercase tracking-wide text-slate-500">Category</label>
-                                    <select
-                                        :value="tx.category || 'Uncategorized'"
-                                        @change="updateTransactionCategory(tx.id, $event.target.value)"
-                                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
-                                    >
-                                        <option v-for="option in categoryOptions" :key="option" :value="option">{{ option }}</option>
-                                    </select>
-                                </div>
-                            </article>
-
-                            <div v-if="filteredTransactions.length === 0" class="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500 shadow-sm">
-                                No transactions recorded for this period.
-                            </div>
-                            <div v-else-if="displayedTransactions.length < filteredTransactions.length" class="flex flex-col items-center gap-2 py-2 sm:flex-row sm:justify-center">
-                                <span class="text-xs text-slate-500">Showing {{ displayedTransactions.length }} of {{ filteredTransactions.length }}</span>
-                                <button data-testid="show-more-transactions" @click="showMoreTransactions" class="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 sm:w-auto">Show {{ Math.min(15, filteredTransactions.length - displayedTransactions.length) }} more</button>
-                            </div>
+                        <div class="mb-3 flex items-center justify-between gap-3">
+                            <h2 class="text-xl font-semibold text-slate-800">Recent transactions</h2>
+                            <span class="shrink-0 text-xs text-slate-500">{{ filteredTransactions.length }} transactions</span>
+                        </div>
+                        <div class="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr),minmax(10rem,auto)]">
+                            <label class="relative block min-w-0">
+                                <span class="sr-only">Search transactions</span>
+                                <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                    <circle cx="11" cy="11" r="7"></circle>
+                                    <path stroke-linecap="round" d="m16 16 4 4"></path>
+                                </svg>
+                                <input
+                                    v-model="transactionSearch"
+                                    data-testid="transaction-search"
+                                    type="search"
+                                    autocomplete="off"
+                                    placeholder="Search transactions"
+                                    class="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm shadow-sm placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
+                                />
+                            </label>
+                            <label class="min-w-0">
+                                <span class="sr-only">Filter by category</span>
+                                <select
+                                    v-model="transactionCategoryFilter"
+                                    data-testid="transaction-category-filter"
+                                    aria-label="Filter transactions by category"
+                                    class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
+                                >
+                                    <option value="all">All categories</option>
+                                    <option v-for="option in transactionFilterCategoryOptions" :key="option" :value="option">{{ option }}</option>
+                                </select>
+                            </label>
                         </div>
 
-                        <div class="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm md:block">
-                            <div class="overflow-x-auto">
-                                <table class="min-w-full divide-y divide-slate-200">
-                                    <thead class="bg-slate-50">
-                                        <tr>
-                                            <th class="px-3 py-3 text-left text-[11px] font-medium uppercase tracking-wide text-slate-500 sm:px-6 sm:text-xs">Date</th>
-                                            <th class="px-3 py-3 text-left text-[11px] font-medium uppercase tracking-wide text-slate-500 sm:px-6 sm:text-xs">Account</th>
-                                            <th class="px-3 py-3 text-left text-[11px] font-medium uppercase tracking-wide text-slate-500 sm:px-6 sm:text-xs">Payee</th>
-                                            <th class="px-3 py-3 text-left text-[11px] font-medium uppercase tracking-wide text-slate-500 sm:px-6 sm:text-xs">Description</th>
-                                            <th class="px-3 py-3 text-left text-[11px] font-medium uppercase tracking-wide text-slate-500 sm:px-6 sm:text-xs">Category</th>
-                                            <th class="px-3 py-3 text-right text-[11px] font-medium uppercase tracking-wide text-slate-500 sm:px-6 sm:text-xs">Amount</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody class="divide-y divide-slate-200 bg-white">
-                                        <tr v-for="tx in displayedTransactions" :key="tx.id" data-testid="transaction-row">
-                                            <td class="whitespace-nowrap px-3 py-3 text-xs text-slate-500 sm:px-6 sm:py-4 sm:text-sm">{{ formatDate(tx.date) }}</td>
-                                            <td class="whitespace-nowrap px-3 py-3 text-xs font-medium text-slate-900 sm:px-6 sm:py-4 sm:text-sm">{{ tx.account_name }}</td>
-                                            <td class="whitespace-nowrap px-3 py-3 text-xs text-slate-900 sm:px-6 sm:py-4 sm:text-sm">{{ tx.payee }}</td>
-                                            <td class="whitespace-nowrap px-3 py-3 text-xs text-slate-500 sm:px-6 sm:py-4 sm:text-sm">{{ tx.description }}</td>
-                                            <td class="whitespace-nowrap px-3 py-3 text-xs text-slate-900 sm:px-6 sm:py-4 sm:text-sm">
-                                                <select
-                                                    :value="tx.category || 'Uncategorized'"
-                                                    @change="updateTransactionCategory(tx.id, $event.target.value)"
-                                                    class="max-w-[140px] rounded-md border border-slate-300 bg-white px-2 py-1 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
-                                                >
-                                                    <option v-for="option in categoryOptions" :key="option" :value="option">{{ option }}</option>
-                                                </select>
-                                            </td>
-                                            <td class="whitespace-nowrap px-3 py-3 text-right text-xs font-semibold sm:px-6 sm:py-4 sm:text-sm" :class="parseFloat(tx.amount) >= 0 ? 'text-emerald-700' : 'text-slate-900'">
-                                                {{ formatCurrency(tx.amount) }}
-                                            </td>
-                                        </tr>
-                                        <tr v-if="filteredTransactions.length === 0">
-                                            <td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500">No transactions recorded for this period.</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                            <div v-if="displayedTransactions.length < filteredTransactions.length" class="flex flex-col items-center gap-2 px-4 py-3 sm:flex-row sm:justify-center">
-                                <span class="text-xs text-slate-500">Showing {{ displayedTransactions.length }} of {{ filteredTransactions.length }}</span>
-                                <button data-testid="show-more-transactions" @click="showMoreTransactions" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Show {{ Math.min(15, filteredTransactions.length - displayedTransactions.length) }} more</button>
-                            </div>
+                        <div v-if="filteredTransactions.length" data-testid="transaction-list" class="mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                            <section v-for="group in displayedTransactionGroups" :key="group.key" data-testid="transaction-group" :data-group-type="group.type">
+                                <h3 data-testid="transaction-group-heading" class="bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-800 sm:px-5">{{ group.label }}</h3>
+                                <article
+                                    v-for="tx in group.transactions"
+                                    :key="tx.id"
+                                    data-testid="transaction-row"
+                                    class="min-w-0 border-t border-slate-200 px-4 py-3 sm:px-5"
+                                >
+                                    <div class="flex min-w-0 items-start justify-between gap-3">
+                                        <div data-testid="transaction-merchant" class="min-w-0 flex-1 truncate text-base font-medium text-slate-900" :title="tx.payee || tx.description || 'Unknown transaction'">
+                                            {{ tx.payee || tx.description || 'Unknown transaction' }}
+                                        </div>
+                                        <div data-testid="transaction-amount" class="shrink-0 whitespace-nowrap text-right text-base font-medium" :class="parseFloat(tx.amount || 0) >= 0 ? 'text-emerald-700' : 'text-slate-900'">
+                                            {{ formatCurrency(tx.amount) }}
+                                        </div>
+                                    </div>
+                                    <div class="mt-1 flex min-w-0 items-center gap-2 text-xs text-slate-600">
+                                        <select
+                                            :value="tx.category || 'Uncategorized'"
+                                            :aria-label="`Category for ${tx.payee || tx.description || 'transaction'}`"
+                                            data-testid="transaction-category-select"
+                                            @change="updateTransactionCategory(tx.id, $event.target.value)"
+                                            class="max-w-[58%] min-w-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
+                                        >
+                                            <option v-for="option in categoryOptions" :key="option" :value="option">{{ option }}</option>
+                                        </select>
+                                        <span aria-hidden="true" class="shrink-0 text-slate-400">•</span>
+                                        <span data-testid="transaction-account" class="min-w-0 truncate">{{ transactionAccountName(tx) }}</span>
+                                    </div>
+                                    <div
+                                        v-if="tx.description && tx.description !== tx.payee"
+                                        data-testid="transaction-description"
+                                        class="mt-1 truncate text-xs text-slate-500"
+                                        :title="tx.description"
+                                    >{{ tx.description }}</div>
+                                </article>
+                            </section>
+                        </div>
+
+                        <div v-else data-testid="transaction-empty" class="mt-3 rounded-xl border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
+                            No transactions match the selected period, search, and category.
+                        </div>
+
+                        <div v-if="displayedTransactions.length < filteredTransactions.length" class="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
+                            <span class="text-xs text-slate-500">Showing {{ displayedTransactions.length }} of {{ filteredTransactions.length }}</span>
+                            <button data-testid="show-more-transactions" @click="showMoreTransactions" class="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 sm:w-auto">
+                                Show {{ Math.min(15, filteredTransactions.length - displayedTransactions.length) }} more
+                            </button>
                         </div>
                     </section>
                 </section>
@@ -1073,6 +1071,8 @@
                 const selectedMonth = ref('');
                 const monthSelectionTouched = ref(false);
                 const visibleTransactionLimit = ref(15);
+                const transactionSearch = ref('');
+                const transactionCategoryFilter = ref('all');
                 let financeThemeMediaQuery = null;
                 const themeColorLuminance = (color) => {
                     const value = String(color || '').trim();
@@ -1159,6 +1159,13 @@
                         seen.add(key);
                         return true;
                     });
+                });
+                const transactionFilterCategoryOptions = computed(() => {
+                    const options = [...categoryOptions.value];
+                    if (transactionCategoryFilter.value !== 'all' && !options.includes(transactionCategoryFilter.value)) {
+                        options.push(transactionCategoryFilter.value);
+                    }
+                    return options;
                 });
                 const categoryDropdownOptions = computed(() => categoryOptions.value.filter((option) => option !== 'Uncategorized'));
                 const status = ref({
@@ -1691,15 +1698,85 @@
                     ];
                 });
 
-                const filteredTransactions = computed(() => {
-                    if (!selectedMonth.value || selectedMonth.value === 'all') {
-                        return transactions.value;
-                    }
+                const isPendingTransaction = (tx) => (
+                    tx?.pending === true
+                    || tx?.pending === 1
+                    || String(tx?.pending || '').toLocaleLowerCase() === 'true'
+                );
 
-                    return transactions.value.filter((tx) => monthKeyFromTimestamp(tx.date) === selectedMonth.value);
+                const transactionLocalDayKey = (timestamp) => {
+                    const date = new Date(Number(timestamp) * 1000);
+                    if (Number.isNaN(date.getTime())) return 'undated';
+                    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+                };
+
+                const transactionDateGroupLabel = (timestamp) => {
+                    const date = new Date(Number(timestamp) * 1000);
+                    if (Number.isNaN(date.getTime())) return 'Undated';
+                    const today = new Date(nowTick.value);
+                    const yesterday = new Date(today);
+                    yesterday.setDate(yesterday.getDate() - 1);
+                    const sameLocalDay = (left, right) => (
+                        left.getFullYear() === right.getFullYear()
+                        && left.getMonth() === right.getMonth()
+                        && left.getDate() === right.getDate()
+                    );
+                    const label = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+                    if (sameLocalDay(date, today)) return `Today, ${label}`;
+                    if (sameLocalDay(date, yesterday)) return `Yesterday, ${label}`;
+                    return label;
+                };
+
+                const filteredTransactions = computed(() => {
+                    const search = transactionSearch.value.trim().toLocaleLowerCase();
+                    return transactions.value
+                        .filter((tx) => {
+                            if (selectedMonth.value && selectedMonth.value !== 'all' && monthKeyFromTimestamp(tx.date) !== selectedMonth.value) {
+                                return false;
+                            }
+                            if (transactionCategoryFilter.value !== 'all'
+                                && (tx.category || 'Uncategorized') !== transactionCategoryFilter.value) {
+                                return false;
+                            }
+                            if (!search) return true;
+                            const haystack = [
+                                tx.payee,
+                                tx.description,
+                                transactionAccountName(tx),
+                                tx.category || 'Uncategorized',
+                            ].filter(Boolean).join(' ').toLocaleLowerCase();
+                            return haystack.includes(search);
+                        })
+                        .slice()
+                        .sort((left, right) => Number(right.date || 0) - Number(left.date || 0));
                 });
 
                 const displayedTransactions = computed(() => filteredTransactions.value.slice(0, visibleTransactionLimit.value));
+
+                const displayedTransactionGroups = computed(() => {
+                    const pendingTransactions = [];
+                    const postedByDate = new Map();
+                    for (const tx of displayedTransactions.value) {
+                        if (isPendingTransaction(tx)) {
+                            pendingTransactions.push(tx);
+                            continue;
+                        }
+                        const dateKey = transactionLocalDayKey(tx.date);
+                        if (!postedByDate.has(dateKey)) {
+                            postedByDate.set(dateKey, { key: dateKey, label: transactionDateGroupLabel(tx.date), transactions: [] });
+                        }
+                        postedByDate.get(dateKey).transactions.push(tx);
+                    }
+
+                    const groups = [];
+                    if (pendingTransactions.length) {
+                        groups.push({ key: 'pending', type: 'pending', label: 'Pending', transactions: pendingTransactions });
+                    }
+                    for (const group of postedByDate.values()) {
+                        groups.push({ ...group, type: group.key === 'undated' ? 'undated' : 'date' });
+                    }
+                    return groups;
+                });
 
                 const showMoreTransactions = () => {
                     visibleTransactionLimit.value = Math.min(
@@ -2336,7 +2413,7 @@
                     syncSelectedMonth();
                 }, { immediate: true });
 
-                watch(selectedMonth, () => {
+                watch([selectedMonth, transactionSearch, transactionCategoryFilter], () => {
                     visibleTransactionLimit.value = 15;
                 });
 
@@ -2405,10 +2482,14 @@
                     recurringShowOther,
                     filteredTransactions,
                     displayedTransactions,
+                    displayedTransactionGroups,
                     visibleTransactionLimit,
                     monthOptions,
                     selectedMonth,
                     monthSelectionTouched,
+                    transactionSearch,
+                    transactionCategoryFilter,
+                    transactionFilterCategoryOptions,
                     loading,
                     pinLoading,
                     pinStatus,

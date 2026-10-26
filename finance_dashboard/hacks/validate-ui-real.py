@@ -21,7 +21,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import Select, WebDriverWait
 
 
 def parse_args():
@@ -178,6 +178,8 @@ def main():
     screenshot.parent.mkdir(parents=True, exist_ok=True)
     frontend_file = Path(args.file).resolve()
     server = thread = test_data_dir = None
+    browser_profile_dir = None
+    driver = None
     ingress_entry = None
     ingress_origin = None
     ingress_cookie = None
@@ -204,6 +206,12 @@ def main():
         api_statuses = probe_api(base_url, request_headers)
         options = Options()
         options.binary_location = "/usr/bin/chromium"
+        options.page_load_strategy = "none"
+        browser_profile_dir = tempfile.TemporaryDirectory(
+            prefix="finance-dashboard-chrome-",
+            dir=artifact_dir(),
+        )
+        options.add_argument(f"--user-data-dir={browser_profile_dir.name}")
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-gpu")
@@ -231,6 +239,10 @@ def main():
                             const payload = await response.clone().json();
                             if (payload.transactions && payload.transactions.length) {
                               payload.transactions[0].description = "LONG-REFERENCE-" + "X".repeat(130) + " payment description should wrap instead of overflowing the card edge";
+                              payload.transactions[0].pending = true;
+                              if (payload.transactions[0].category === "Uncategorized") {
+                                payload.transactions[0].category = "Groceries";
+                              }
                             }
                             const headers = new Headers(response.headers);
                             headers.delete("content-length");
@@ -343,39 +355,84 @@ def main():
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
             WebDriverWait(driver, args.timeout).until(lambda current: "Recent transactions" in current.find_element(By.TAG_NAME, "body").text)
-            transaction_rows = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-card"]')
-            if not transaction_rows:
-                transaction_rows = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-row"]')
+            transaction_row_selector = '[data-testid="transaction-row"]'
+            transaction_rows = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+            group_headings = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-group-heading"]')
+            group_types = [group.get_attribute("data-group-type") for group in driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-group"]')]
+            transaction_group_checks = {
+                "pending_group_first": bool(group_types) and group_types[0] == "pending" and group_headings[0].text == "Pending",
+                "posted_transactions_grouped_by_date": "date" in group_types,
+            }
             show_more_buttons = [button for button in driver.find_elements(By.CSS_SELECTOR, '[data-testid="show-more-transactions"]') if button.is_displayed()]
             if show_more_buttons:
                 initial_row_count = len(transaction_rows)
                 show_more_buttons[0].click()
-                visible_row_selector = '[data-testid="transaction-card"]' if args.device in {"iphone", "pixel"} else '[data-testid="transaction-row"]'
-                WebDriverWait(driver, args.timeout).until(lambda current: len(current.find_elements(By.CSS_SELECTOR, visible_row_selector)) > initial_row_count)
+                WebDriverWait(driver, args.timeout).until(lambda current: len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) > initial_row_count)
                 show_more_works = True
             else:
                 show_more_works = len(transaction_rows) <= 15
 
             transaction_description_fits_card = True
+            transaction_filter_checks = {
+                "search_matches_merchant": False,
+                "category_filter_matches": False,
+                "empty_state_for_no_match": False,
+                "manual_category_edit_works": False,
+            }
             transaction_screenshot = None
             if args.device in {"iphone", "pixel"}:
-                cards = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-card"]')
-                if cards:
-                    description = cards[0].find_element(By.CSS_SELECTOR, '[data-testid="transaction-description"]')
+                rows = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                if rows:
+                    description = rows[0].find_element(By.CSS_SELECTOR, '[data-testid="transaction-description"]')
                     if inject_test_description:
                         transaction_description_fits_card = description.text.startswith("LONG-REFERENCE-")
-                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cards[0])
-                    layout = driver.execute_script("""const description=arguments[0], card=arguments[1];
+                    transaction_search = driver.find_element(By.CSS_SELECTOR, '[data-testid="transaction-search"]')
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", transaction_search)
+                    layout = driver.execute_script("""const description=arguments[0], row=arguments[1];
+                      const style=getComputedStyle(description);
                       return {
-                        descriptionFits: description.scrollWidth <= description.clientWidth + 1,
-                        cardFits: card.scrollWidth <= card.clientWidth + 1,
+                        descriptionHasCompactOverflow: description.clientWidth > 0 && style.textOverflow === 'ellipsis' && style.whiteSpace === 'nowrap',
+                        rowFits: row.scrollWidth <= row.clientWidth + 1,
                         pageFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1
-                      };""", description, cards[0])
+                      };""", description, rows[0])
                     transaction_description_fits_card = transaction_description_fits_card and all(layout.values())
                     transaction_screenshot = screenshot.with_name(screenshot.stem + "-transactions" + screenshot.suffix)
                     driver.save_screenshot(str(transaction_screenshot))
                 else:
                     transaction_description_fits_card = False
+
+            search_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="transaction-search"]')
+            search_input.send_keys("Grocery Store")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) == 1
+            )
+            search_row = driver.find_element(By.CSS_SELECTOR, transaction_row_selector)
+            transaction_filter_checks["search_matches_merchant"] = "Grocery Store" in search_row.text
+            driver.execute_script("""const input=arguments[0];
+              const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+              setter.call(input, '');
+              input.dispatchEvent(new Event('input', {bubbles:true}));
+              input.dispatchEvent(new Event('change', {bubbles:true}));""", search_input)
+            WebDriverWait(driver, args.timeout).until(lambda current: search_input.get_attribute("value") == "")
+
+            category_filter = Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]'))
+            category_filter.select_by_value("Groceries")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) >= 1
+            )
+            transaction_filter_checks["category_filter_matches"] = all(
+                "Grocery Store" in row.text
+                for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+            )
+            category_filter.select_by_value("Childcare")
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="transaction-empty"]'))
+            )
+            transaction_filter_checks["empty_state_for_no_match"] = True
+            category_filter.select_by_value("all")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) >= 1
+            )
 
             sankey_interaction_checks = {
                 "flow_click_shows_transactions": False,
@@ -418,6 +475,21 @@ def main():
                     keyboard_panel.get_attribute("data-sankey-selection-type") == "node"
                     and bool(keyboard_panel.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]'))
                 )
+
+            grocery_row = next(
+                row for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                if "Grocery Store" in row.text
+            )
+            grocery_category = Select(grocery_row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]'))
+            grocery_category.select_by_value("Shopping")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: any(
+                    "Grocery Store" in row.text
+                    and row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == "Shopping"
+                    for row in current.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                )
+            )
+            transaction_filter_checks["manual_category_edit_works"] = True
 
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Settings']]").click()
@@ -476,6 +548,8 @@ def main():
                 "no_vue_warnings": not vue_warnings,
                 "recurring_quick_filters": filter_checks,
                 "sankey_interactions": sankey_interaction_checks,
+                "transaction_grouping": transaction_group_checks,
+                "transaction_search_and_category_filter": transaction_filter_checks,
                 "transaction_description_fits_card": transaction_description_fits_card,
                 "ha_theme_auto_detection": theme_checks,
                 "custom_categories": custom_category_checks,
@@ -496,6 +570,8 @@ def main():
                 and checks["no_vue_warnings"]
                 and all(filter_checks.values())
                 and all(sankey_interaction_checks.values())
+                and all(transaction_group_checks.values())
+                and all(transaction_filter_checks.values())
                 and transaction_description_fits_card
                 and all(theme_checks.values())
                 and all(custom_category_checks.values())
@@ -526,8 +602,19 @@ def main():
             if not ok:
                 raise SystemExit(1)
         finally:
-            driver.quit()
+            try:
+                driver.quit()
+            except Exception:
+                pass
+            driver = None
     finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        if browser_profile_dir is not None:
+            browser_profile_dir.cleanup()
         if server is not None:
             server.should_exit = True
         if thread is not None:
