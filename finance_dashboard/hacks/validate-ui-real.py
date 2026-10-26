@@ -235,19 +235,48 @@ def main():
                       window.fetch = async (...args) => {
                         const response = await nativeFetch(...args);
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
-                          if (url.includes("/api/transactions")) {
-                            const payload = await response.clone().json();
-                            if (payload.transactions && payload.transactions.length) {
-                              payload.transactions[0].description = "LONG-REFERENCE-" + "X".repeat(130) + " payment description should wrap instead of overflowing the card edge";
-                              payload.transactions[0].pending = true;
-                              if (payload.transactions[0].category === "Uncategorized") {
-                                payload.transactions[0].category = "Groceries";
-                              }
+                        if (url.includes("/api/accounts")) {
+                          const payload = await response.clone().json();
+                          payload.accounts = [
+                            ...(payload.accounts || []),
+                            {id: "test-account-checking-main", name: "Checking", org: "Test Bank", balance: "1000.00", currency: "USD"},
+                            {id: "test-account-savings-main", name: "Savings", org: "Test Bank", balance: "2000.00", currency: "USD"},
+                            {id: "test-account-checking-joint", name: "Checking", org: "Test Credit Union", balance: "500.00", currency: "USD"}
+                          ];
+                          const headers = new Headers(response.headers);
+                          headers.delete("content-length");
+                          headers.delete("content-encoding");
+                          return new Response(JSON.stringify(payload), {status: response.status, headers});
+                        }
+                        if (url.includes("/api/transactions")) {
+                          const payload = await response.clone().json();
+                          if (payload.transactions && payload.transactions.length) {
+                            payload.transactions[0].description = "LONG-REFERENCE-" + "X".repeat(130) + " payment description should wrap instead of overflowing the card edge";
+                            payload.transactions[0].pending = true;
+                            if (payload.transactions[0].category === "Uncategorized") {
+                              payload.transactions[0].category = "Groceries";
                             }
-                            const headers = new Headers(response.headers);
-                            headers.delete("content-length");
-                            headers.delete("content-encoding");
-                            return new Response(JSON.stringify(payload), {status: response.status, headers});
+                            const now = Number(payload.transactions[0].date || Math.floor(Date.now() / 1000));
+                            const transfer = (id, account_name, account_id, amount, offsetSeconds) => ({
+                              id, account_name, account_id, amount, date: now + offsetSeconds,
+                              org: account_id === "test-account-checking-joint" ? "Test Credit Union" : "Test Bank",
+                              payee: "Internal Transfer", description: "Internal transfer between linked accounts",
+                              category: "Transfers", pending: false
+                            });
+                            payload.transactions.push(
+                              transfer("test-transfer-checking-savings-out", "Checking", "test-account-checking-main", -1234.56, -30),
+                              transfer("test-transfer-checking-savings-in", "Savings", "test-account-savings-main", 1234.56, 30),
+                              transfer("test-transfer-checking-checking-out", "Checking", "test-account-checking-joint", -789.01, -20),
+                              transfer("test-transfer-checking-checking-in", "Checking", "test-account-checking-main", 789.01, 20),
+                              transfer("test-transfer-savings-checking-out", "Savings", "test-account-savings-main", -2468.02, -10),
+                              transfer("test-transfer-savings-checking-in", "Checking", "test-account-checking-main", 2468.02, 10),
+                              transfer("test-transfer-unmatched-out", "Checking", "test-account-checking-main", -321.09, -5)
+                            );
+                          }
+                          const headers = new Headers(response.headers);
+                          headers.delete("content-length");
+                          headers.delete("content-encoding");
+                          return new Response(JSON.stringify(payload), {status: response.status, headers});
                         }
                         return response;
                       };
@@ -378,8 +407,11 @@ def main():
                 "category_filter_matches": False,
                 "empty_state_for_no_match": False,
                 "manual_category_edit_works": False,
+                "account_cards_toggle_and_multi_select": False,
+                "account_filtered_phone_layout_has_no_overflow": True,
             }
             transaction_screenshot = None
+            account_filter_screenshot = None
             if args.device in {"iphone", "pixel"}:
                 rows = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
                 if rows:
@@ -402,12 +434,15 @@ def main():
                     transaction_description_fits_card = False
 
             search_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="transaction-search"]')
-            search_input.send_keys("Grocery Store")
+            search_target = driver.find_element(By.CSS_SELECTOR, f'{transaction_row_selector} [data-testid="transaction-merchant"]').text
+            search_input.send_keys(search_target)
             WebDriverWait(driver, args.timeout).until(
-                lambda current: len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) == 1
+                lambda current: len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) >= 1
             )
-            search_row = driver.find_element(By.CSS_SELECTOR, transaction_row_selector)
-            transaction_filter_checks["search_matches_merchant"] = "Grocery Store" in search_row.text
+            transaction_filter_checks["search_matches_merchant"] = any(
+                search_target in row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-merchant"]').text
+                for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+            )
             driver.execute_script("""const input=arguments[0];
               const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
               setter.call(input, '');
@@ -421,7 +456,7 @@ def main():
                 lambda current: len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) >= 1
             )
             transaction_filter_checks["category_filter_matches"] = all(
-                "Grocery Store" in row.text
+                row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == "Groceries"
                 for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
             )
             category_filter.select_by_value("Childcare")
@@ -433,13 +468,66 @@ def main():
             WebDriverWait(driver, args.timeout).until(
                 lambda current: len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) >= 1
             )
+            checking_id = "test-account-checking-main"
+            savings_id = "test-account-savings-main"
+            checking_card = driver.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{checking_id}"]')
+            savings_card = driver.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{savings_id}"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", checking_card)
+            checking_card.click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{checking_id}"]').get_attribute("aria-pressed") == "true"
+                and len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) == 4
+            )
+            checking_rows = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+            checking_only = all(row.get_attribute("data-account-id") == checking_id for row in checking_rows)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", savings_card)
+            savings_card.click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{savings_id}"]').get_attribute("aria-pressed") == "true"
+                and len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) == 6
+            )
+            combined_rows = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+            combined_ids = {row.get_attribute("data-account-id") for row in combined_rows}
+            multi_account_filter = combined_ids == {checking_id, savings_id}
+            if args.device in {"iphone", "pixel"}:
+                account_filter_screenshot = screenshot.with_name(screenshot.stem + "-account-filter" + screenshot.suffix)
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", driver.find_element(By.CSS_SELECTOR, '[data-testid="transaction-search"]'))
+                driver.save_screenshot(str(account_filter_screenshot))
+                transaction_filter_checks["account_filtered_phone_layout_has_no_overflow"] = driver.execute_script(
+                    "return document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
+                )
+            checking_card = driver.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{checking_id}"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", checking_card)
+            checking_card.click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{checking_id}"]').get_attribute("aria-pressed") == "false"
+                and len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) == 2
+            )
+            savings_only_rows = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+            savings_only = all(row.get_attribute("data-account-id") == savings_id for row in savings_only_rows)
+            savings_card = driver.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{savings_id}"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", savings_card)
+            savings_card.click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{savings_id}"]').get_attribute("aria-pressed") == "false"
+                and "accounts selected" not in current.find_element(By.TAG_NAME, "body").text
+            )
+            transaction_filter_checks["account_cards_toggle_and_multi_select"] = (
+                checking_only and multi_account_filter and savings_only
+            )
 
             sankey_interaction_checks = {
                 "flow_click_shows_transactions": False,
                 "node_click_shows_transactions": False,
                 "node_keyboard_selection": False,
+                "cashflow_excludes_internal_transfers": False,
+                "linked_transfers_match_across_account_types": False,
+                "reverse_transfers_render_without_cycles": False,
+                "unmatched_transfer_entries_remain_visible": False,
+                "paired_transfer_details_show_both_entries": False,
             }
             sankey_details_screenshot = screenshot.with_name(screenshot.stem + "-sankey-details" + screenshot.suffix)
+            transfer_screenshot = screenshot.with_name(screenshot.stem + "-transfers" + screenshot.suffix)
             sankey_links = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-link"]')
             sankey_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
             if sankey_links and sankey_nodes:
@@ -476,18 +564,59 @@ def main():
                     and bool(keyboard_panel.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]'))
                 )
 
-            grocery_row = next(
-                row for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
-                if "Grocery Store" in row.text
-            )
-            grocery_category = Select(grocery_row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]'))
-            grocery_category.select_by_value("Shopping")
-            WebDriverWait(driver, args.timeout).until(
-                lambda current: any(
-                    "Grocery Store" in row.text
-                    and row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == "Shopping"
-                    for row in current.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, '[data-testid="sankey-cashflow-tab"]'))
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="sankey-cashflow-tab"]').get_attribute("aria-selected") == "true"
                 )
+                sankey_interaction_checks["cashflow_excludes_internal_transfers"] = not any(
+                    node.get_attribute("data-sankey-node-name") in {"Checking", "Savings"}
+                    for node in driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                )
+
+                driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, '[data-testid="sankey-transfers-tab"]'))
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="sankey-transfers-tab"]').get_attribute("aria-selected") == "true"
+                    and len(current.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-link"]')) >= 4
+                )
+                transfer_links = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-link"]')
+                paired_counts = [int(link.get_attribute("data-paired-transfer-count") or 0) for link in transfer_links]
+                transfer_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                node_sides = {
+                    (node.get_attribute("data-sankey-node-name"), node.get_attribute("data-sankey-node-side"))
+                    for node in transfer_nodes
+                }
+                sankey_interaction_checks["linked_transfers_match_across_account_types"] = sum(paired_counts) == 3 and (
+                    ("Test Credit Union · Checking", "source") in node_sides
+                    and ("Test Bank · Checking", "destination") in node_sides
+                )
+                sankey_interaction_checks["reverse_transfers_render_without_cycles"] = (
+                    ("Savings", "source") in node_sides and ("Savings", "destination") in node_sides
+                    and all(link.is_displayed() for link in transfer_links)
+                )
+                sankey_interaction_checks["unmatched_transfer_entries_remain_visible"] = any(
+                    node.get_attribute("data-sankey-node-name") == "External / unmatched"
+                    for node in transfer_nodes
+                )
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", driver.find_element(By.CSS_SELECTOR, '[data-testid="sankey-transfers-tab"]'))
+                driver.save_screenshot(str(transfer_screenshot))
+
+                paired_link = next(link for link in transfer_links if int(link.get_attribute("data-paired-transfer-count") or 0) > 0)
+                driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", paired_link)
+                transfer_details = WebDriverWait(driver, args.timeout).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sankey-details"]'))
+                )
+                sankey_interaction_checks["paired_transfer_details_show_both_entries"] = (
+                    "counted once" in transfer_details.text
+                    and len(transfer_details.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]')) == 2
+                )
+
+            editable_row = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)[0]
+            editable_transaction_id = editable_row.get_attribute("data-transaction-id")
+            editable_category = Select(editable_row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]'))
+            editable_category.select_by_value("Shopping")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, f'{transaction_row_selector}[data-transaction-id="{editable_transaction_id}"]')
+                    .find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == "Shopping"
             )
             transaction_filter_checks["manual_category_edit_works"] = True
 
@@ -507,21 +636,21 @@ def main():
             custom_category_checks["childcare_category_available"] = "Childcare" in options
             custom_category_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="custom-category-input"]')
             custom_category_input.send_keys("Selenium Custom")
-            driver.find_element(By.CSS_SELECTOR, '[data-testid="add-custom-category"]').click()
+            driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, '[data-testid="add-custom-category"]'))
             category_selects = driver.find_elements(By.CSS_SELECTOR, '[data-testid="category-rule-select"]')
             custom_category_checks["custom_category_can_be_added"] = any(
                 option.get_attribute("value") == "Selenium Custom"
                 for select in category_selects
                 for option in select.find_elements(By.TAG_NAME, "option")
             )
-            driver.find_element(By.XPATH, "//button[normalize-space()='Use JSON']").click()
+            driver.execute_script("arguments[0].click();", driver.find_element(By.XPATH, "//button[normalize-space()='Use JSON']"))
             custom_category_in_json = driver.find_element(By.CSS_SELECTOR, '[data-testid="category-rules-json"]').get_property("value")
             custom_category_checks["custom_category_can_be_added"] = (
                 custom_category_checks["custom_category_can_be_added"]
                 and '"category": "Selenium Custom"' in custom_category_in_json
                 and '"patterns": []' in custom_category_in_json
             )
-            driver.find_element(By.XPATH, "//button[normalize-space()='Use builder']").click()
+            driver.execute_script("arguments[0].click();", driver.find_element(By.XPATH, "//button[normalize-space()='Use builder']"))
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings" + screenshot.suffix)))
 
             logs = driver.get_log("browser")
@@ -592,7 +721,9 @@ def main():
                 "recurring_screenshot": str(screenshot.with_name(screenshot.stem + "-recurring" + screenshot.suffix)),
                 "recurring_screenshot_content_ratio": round(recurring_ratio, 4),
                 "sankey_details_screenshot": str(sankey_details_screenshot),
+                "transfer_screenshot": str(transfer_screenshot) if args.device in {"iphone", "pixel"} else None,
                 "transaction_screenshot": str(transaction_screenshot) if transaction_screenshot else None,
+                "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,
                 "dark_mode_screenshot": str(dark_mode_screenshot) if dark_mode_screenshot else None,
                 "checks": checks,
                 "external_script_urls": external_script_urls,
