@@ -296,6 +296,47 @@
                         </div>
                     </section>
 
+                    <section data-testid="spending-category-section">
+                        <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <h2 class="text-xl font-semibold text-slate-800">Spending by category</h2>
+                                <p class="text-sm text-slate-500">Select a category to filter the transaction list.</p>
+                            </div>
+                            <button
+                                type="button"
+                                data-testid="spending-transfers-toggle"
+                                :aria-pressed="includeTransfersInSpendingPie"
+                                @click="includeTransfersInSpendingPie = !includeTransfersInSpendingPie"
+                                class="self-start rounded-lg border px-3 py-2 text-sm font-medium sm:self-auto"
+                                :class="includeTransfersInSpendingPie ? 'border-violet-300 bg-violet-50 text-violet-900' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'"
+                            >{{ includeTransfersInSpendingPie ? 'Transfers included' : 'Include transfers' }}</button>
+                        </div>
+                        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <p class="mb-3 text-xs text-slate-500">{{ includeTransfersInSpendingPie ? 'Transfer outflows are included.' : 'Transfers are excluded so they do not overwhelm spending categories.' }}</p>
+                            <div v-if="spendingPieCategories.length" class="grid gap-4 sm:grid-cols-[minmax(14rem,0.8fr),minmax(0,1.2fr)] sm:items-center">
+                                <div ref="spendingPieEl" data-testid="spending-pie-chart" class="mx-auto h-[240px] w-full max-w-[320px]"></div>
+                                <div class="grid grid-cols-1 gap-2 min-[440px]:grid-cols-2">
+                                    <button
+                                        v-for="item in spendingPieCategories"
+                                        :key="item.category"
+                                        type="button"
+                                        data-testid="spending-category-legend-item"
+                                        :data-category="item.category"
+                                        :aria-pressed="transactionCategoryFilter === item.category"
+                                        @click="selectSpendingCategory(item.category)"
+                                        class="flex min-h-11 min-w-0 items-center gap-2 rounded-lg border px-2 py-2 text-left text-sm"
+                                        :class="transactionCategoryFilter === item.category ? 'border-sky-500 bg-sky-50 ring-1 ring-sky-200' : 'border-slate-200 hover:bg-slate-50'"
+                                    >
+                                        <span aria-hidden="true" class="h-3 w-3 shrink-0 rounded-full" :style="{ backgroundColor: spendingCategoryColor(item.category) }"></span>
+                                        <span class="min-w-0 flex-1 truncate text-slate-700">{{ item.category }}</span>
+                                        <span class="shrink-0 font-semibold text-slate-900">{{ formatCurrency(item.total) }}</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <p v-else class="py-8 text-center text-sm text-slate-500">No spending transactions for this period and account selection.</p>
+                        </div>
+                    </section>
+
                     <section>
                         <div class="mb-3 flex items-center justify-between gap-3">
                             <div>
@@ -1116,6 +1157,7 @@
                 const transactionSearch = ref('');
                 const transactionCategoryFilter = ref('all');
                 const selectedAccountIds = ref([]);
+                const includeTransfersInSpendingPie = ref(false);
                 let financeThemeMediaQuery = null;
                 const themeColorLuminance = (color) => {
                     const value = String(color || '').trim();
@@ -1220,6 +1262,7 @@
                     last_sync_at: null,
                 });
                 const sankeyEl = ref(null);
+                const spendingPieEl = ref(null);
                 const sankeyMode = ref('cashflow');
                 const selectedSankeyDetails = ref(null);
                 const sankeyDetailsExpanded = ref(false);
@@ -1566,6 +1609,7 @@
                     await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings()]);
                     await nextTick();
                     renderSankey();
+                    renderSpendingPie();
                 };
 
                 const startIdleMonitor = () => {
@@ -1783,9 +1827,11 @@
                             if (selectedMonth.value && selectedMonth.value !== 'all' && monthKeyFromTimestamp(tx.date) !== selectedMonth.value) {
                                 return false;
                             }
-                            if (transactionCategoryFilter.value !== 'all'
-                                && (tx.category || 'Uncategorized') !== transactionCategoryFilter.value) {
-                                return false;
+                            if (transactionCategoryFilter.value !== 'all') {
+                                const categoryMatches = transactionCategoryFilter.value === 'Transfers'
+                                    ? isTransferLike(tx)
+                                    : (tx.category || 'Uncategorized') === transactionCategoryFilter.value;
+                                if (!categoryMatches) return false;
                             }
                             if (!search) return true;
                             const haystack = [
@@ -2218,6 +2264,40 @@
 
                 const transactionAccountName = (tx) => tx.account_name || tx.org || 'Account';
 
+                const spendingPiePalette = [
+                    '#0284c7', '#0f766e', '#7c3aed', '#c2410c', '#be123c', '#4d7c0f',
+                    '#a21caf', '#0369a1', '#b45309', '#4338ca', '#15803d', '#64748b',
+                ];
+                const spendingCategoryColor = (category) => {
+                    let hash = 0;
+                    for (const character of String(category || '')) {
+                        hash = ((hash * 31) + character.charCodeAt(0)) >>> 0;
+                    }
+                    return spendingPiePalette[hash % spendingPiePalette.length];
+                };
+
+                const spendingPieCategories = computed(() => {
+                    const totals = new Map();
+                    transactions.value.forEach((tx) => {
+                        if (selectedMonth.value && selectedMonth.value !== 'all'
+                            && monthKeyFromTimestamp(tx.date) !== selectedMonth.value) return;
+                        if (selectedAccountIds.value.length
+                            && !selectedAccountIds.value.includes(String(tx.account_id || ''))) return;
+                        const amount = parseFloat(tx.amount || 0);
+                        if (!Number.isFinite(amount) || amount >= 0) return;
+                        const isTransfer = isTransferLike(tx);
+                        if (isTransfer && !includeTransfersInSpendingPie.value) return;
+                        const category = isTransfer ? 'Transfers' : (tx.category || 'Uncategorized');
+                        totals.set(category, (totals.get(category) || 0) + Math.abs(amount));
+                    });
+                    return Array.from(totals, ([category, total]) => ({ category, total }))
+                        .sort((left, right) => right.total - left.total || left.category.localeCompare(right.category));
+                });
+
+                const selectSpendingCategory = (category) => {
+                    transactionCategoryFilter.value = transactionCategoryFilter.value === category ? 'all' : category;
+                };
+
                 const uniqueSankeyTransactions = (items) => {
                     const seen = new Set();
                     return (items || []).filter((tx) => {
@@ -2433,6 +2513,62 @@
 
                 const hasSankeyData = computed(() => !!(sankeyMode.value === 'transfers' ? calculateTransferSankey() : calculateSankey()));
 
+                const renderSpendingPie = () => {
+                    if (!spendingPieEl.value) return;
+                    spendingPieEl.value.innerHTML = '';
+                    const categories = spendingPieCategories.value;
+                    if (!categories.length) return;
+
+                    try {
+                        if (!window.d3 || !d3.pie || !d3.arc) {
+                            throw new Error('Pie chart library not available');
+                        }
+                        const container = spendingPieEl.value;
+                        const width = Math.max(container.clientWidth || 0, 240);
+                        const height = 240;
+                        const radius = Math.max(20, Math.min(width, height) / 2 - 4);
+                        const svg = d3.select(container)
+                            .append('svg')
+                            .attr('viewBox', [0, 0, width, height])
+                            .attr('width', '100%')
+                            .attr('height', height)
+                            .attr('role', 'group')
+                            .attr('aria-label', `Spending by category, ${categories.length} categories`)
+                            .style('max-width', '100%');
+                        const arc = d3.arc().innerRadius(0).outerRadius(radius);
+                        const pie = d3.pie().sort(null).value((item) => item.total);
+                        svg.append('g')
+                            .attr('transform', `translate(${width / 2},${height / 2})`)
+                            .selectAll('path')
+                            .data(pie(categories))
+                            .join('path')
+                            .attr('data-testid', 'spending-pie-slice')
+                            .attr('data-category', (item) => item.data.category)
+                            .attr('data-total', (item) => item.data.total)
+                            .attr('d', arc)
+                            .attr('fill', (item) => spendingCategoryColor(item.data.category))
+                            .attr('stroke', (item) => transactionCategoryFilter.value === item.data.category ? '#0f172a' : '#ffffff')
+                            .attr('stroke-width', (item) => transactionCategoryFilter.value === item.data.category ? 3 : 1.5)
+                            .attr('stroke-linejoin', 'round')
+                            .attr('role', 'button')
+                            .attr('tabindex', 0)
+                            .attr('aria-label', (item) => `${item.data.category}, ${formatCurrency(item.data.total)}. Select to filter transactions.`)
+                            .style('cursor', 'pointer')
+                            .on('click', (event, item) => selectSpendingCategory(item.data.category))
+                            .on('keydown', (event, item) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    selectSpendingCategory(item.data.category);
+                                }
+                            })
+                            .append('title')
+                            .text((item) => `${item.data.category}: ${formatCurrency(item.data.total)}`);
+                    } catch (err) {
+                        console.error('Spending pie render failed:', err);
+                        spendingPieEl.value.innerHTML = '<div class="py-8 text-center text-sm text-amber-700">Spending chart unavailable right now.</div>';
+                    }
+                };
+
                 const renderSankey = () => {
                     if (!sankeyEl.value) return;
                     sankeyEl.value.innerHTML = '';
@@ -2593,6 +2729,11 @@
                     if (view.value === 'dashboard') renderSankey();
                 });
 
+                watch([transactions, selectedMonth, selectedAccountIds, includeTransfersInSpendingPie, transactionCategoryFilter, view], async () => {
+                    await nextTick();
+                    if (view.value === 'dashboard') renderSpendingPie();
+                });
+
                 onMounted(async () => {
                     syncFinanceTheme();
                     if (window.matchMedia) {
@@ -2613,7 +2754,10 @@
                     } else {
                         loading.value = false;
                     }
-                    window.addEventListener('resize', () => renderSankey(), { passive: true });
+                    window.addEventListener('resize', () => {
+                        renderSankey();
+                        renderSpendingPie();
+                    }, { passive: true });
                 });
 
                 onUnmounted(() => {
@@ -2661,6 +2805,11 @@
                     transactionCategoryFilter,
                     selectedAccountIds,
                     toggleAccountFilter,
+                    includeTransfersInSpendingPie,
+                    spendingPieEl,
+                    spendingPieCategories,
+                    spendingCategoryColor,
+                    selectSpendingCategory,
                     transactionFilterCategoryOptions,
                     loading,
                     pinLoading,
@@ -2713,6 +2862,7 @@
                     status,
                     sankeyEl,
                     sankeyMode,
+                    renderSpendingPie,
                     hasSankeyData,
                     selectedSankeyDetails,
                     sankeyDetailsExpanded,

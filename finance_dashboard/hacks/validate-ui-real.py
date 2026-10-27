@@ -304,7 +304,7 @@ def main():
                 "const text=(app?app._instance?.render?.toString():'')||'';"
                 "return [...text.matchAll(/.{0,100}length.{0,100}/g)].map(match=>match[0]).slice(0,30);"
             )
-            dashboard_sections = ["Cash flow", "Accounts", "Recent transactions"]
+            dashboard_sections = ["Cash flow", "Spending by category", "Accounts", "Recent transactions"]
             for section in dashboard_sections:
                 wait.until(lambda current, item=section: item in current.find_element(By.TAG_NAME, "body").text)
             driver.save_screenshot(str(screenshot))
@@ -410,8 +410,16 @@ def main():
                 "account_cards_toggle_and_multi_select": False,
                 "account_filtered_phone_layout_has_no_overflow": True,
             }
+            spending_pie_checks = {
+                "transfers_excluded_by_default": False,
+                "toggle_adds_transfer_slice": False,
+                "category_slice_filters_and_reselect_clears": False,
+                "transfer_slice_filters_transfer_entries": False,
+                "phone_layout_has_no_horizontal_overflow": True,
+            }
             transaction_screenshot = None
             account_filter_screenshot = None
+            spending_pie_screenshot = None
             if args.device in {"iphone", "pixel"}:
                 rows = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
                 if rows:
@@ -515,6 +523,73 @@ def main():
             transaction_filter_checks["account_cards_toggle_and_multi_select"] = (
                 checking_only and multi_account_filter and savings_only
             )
+
+            spending_pie_section = driver.find_element(By.CSS_SELECTOR, '[data-testid="spending-category-section"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", spending_pie_section)
+            pie_slices = driver.find_elements(By.CSS_SELECTOR, '[data-testid="spending-pie-slice"]')
+            default_pie_categories = {slice_.get_attribute("data-category") for slice_ in pie_slices}
+            spending_pie_checks["transfers_excluded_by_default"] = (
+                bool(default_pie_categories)
+                and "Transfers" not in default_pie_categories
+                and driver.find_element(By.CSS_SELECTOR, '[data-testid="spending-transfers-toggle"]').get_attribute("aria-pressed") == "false"
+            )
+            if args.device in {"iphone", "pixel"}:
+                spending_pie_screenshot = screenshot.with_name(screenshot.stem + "-spending-pie" + screenshot.suffix)
+                driver.save_screenshot(str(spending_pie_screenshot))
+                spending_pie_checks["phone_layout_has_no_horizontal_overflow"] = driver.execute_script(
+                    "return document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
+                )
+
+            transfer_toggle = driver.find_element(By.CSS_SELECTOR, '[data-testid="spending-transfers-toggle"]')
+            driver.execute_script("arguments[0].click();", transfer_toggle)
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: any(
+                    slice_.get_attribute("data-category") == "Transfers"
+                    for slice_ in current.find_elements(By.CSS_SELECTOR, '[data-testid="spending-pie-slice"]')
+                )
+            )
+            spending_pie_checks["toggle_adds_transfer_slice"] = (
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="spending-transfers-toggle"]').get_attribute("aria-pressed") == "true"
+            )
+
+            transfer_slice = driver.find_element(By.CSS_SELECTOR, '[data-testid="spending-pie-slice"][data-category="Transfers"]')
+            driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", transfer_slice)
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == "Transfers"
+                and len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) > 0
+            )
+            spending_pie_checks["transfer_slice_filters_transfer_entries"] = all(
+                "Internal Transfer" in row.text
+                for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+            )
+            transfer_slice = driver.find_element(By.CSS_SELECTOR, '[data-testid="spending-pie-slice"][data-category="Transfers"]')
+            driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", transfer_slice)
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == "all"
+            )
+            driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, '[data-testid="spending-transfers-toggle"]'))
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="spending-transfers-toggle"]').get_attribute("aria-pressed") == "false"
+            )
+
+            category_to_test = "Groceries" if "Groceries" in default_pie_categories else sorted(default_pie_categories)[0]
+            category_slice = driver.find_element(By.CSS_SELECTOR, f'[data-testid="spending-pie-slice"][data-category="{category_to_test}"]')
+            driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", category_slice)
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == category_to_test
+                and len(current.find_elements(By.CSS_SELECTOR, transaction_row_selector)) > 0
+            )
+            category_rows_match = all(
+                row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == category_to_test
+                for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+            )
+            full_breakdown_remains = len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="spending-pie-slice"]')) == len(default_pie_categories)
+            category_slice = driver.find_element(By.CSS_SELECTOR, f'[data-testid="spending-pie-slice"][data-category="{category_to_test}"]')
+            driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", category_slice)
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == "all"
+            )
+            spending_pie_checks["category_slice_filters_and_reselect_clears"] = category_rows_match and full_breakdown_remains
 
             sankey_interaction_checks = {
                 "flow_click_shows_transactions": False,
@@ -679,6 +754,7 @@ def main():
                 "sankey_interactions": sankey_interaction_checks,
                 "transaction_grouping": transaction_group_checks,
                 "transaction_search_and_category_filter": transaction_filter_checks,
+                "spending_pie": spending_pie_checks,
                 "transaction_description_fits_card": transaction_description_fits_card,
                 "ha_theme_auto_detection": theme_checks,
                 "custom_categories": custom_category_checks,
@@ -701,6 +777,7 @@ def main():
                 and all(sankey_interaction_checks.values())
                 and all(transaction_group_checks.values())
                 and all(transaction_filter_checks.values())
+                and all(spending_pie_checks.values())
                 and transaction_description_fits_card
                 and all(theme_checks.values())
                 and all(custom_category_checks.values())
@@ -724,6 +801,7 @@ def main():
                 "transfer_screenshot": str(transfer_screenshot) if args.device in {"iphone", "pixel"} else None,
                 "transaction_screenshot": str(transaction_screenshot) if transaction_screenshot else None,
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,
+                "spending_pie_screenshot": str(spending_pie_screenshot) if spending_pie_screenshot else None,
                 "dark_mode_screenshot": str(dark_mode_screenshot) if dark_mode_screenshot else None,
                 "checks": checks,
                 "external_script_urls": external_script_urls,
