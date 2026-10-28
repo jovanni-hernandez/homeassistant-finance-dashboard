@@ -68,29 +68,36 @@
         </div>
     </div>
     <div id="app" class="min-h-screen">
-        <header class="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-            <div class="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:px-6 lg:px-8">
+        <div class="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
+            <div class="mx-auto flex max-w-7xl items-center gap-2 px-3 py-2 sm:gap-3 sm:px-6 lg:px-8">
                 <button
                     @click="drawerOpen = !drawerOpen"
-                    class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50"
+                    class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50 sm:h-10 sm:w-10"
                     aria-label="Open menu"
                 >
-                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg class="h-4 w-4 sm:h-5 sm:w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
                     </svg>
                 </button>
 
                 <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-3">
-                        <h1 class="truncate text-lg font-semibold sm:text-xl">Finance Dashboard</h1>
+                    <div class="flex min-w-0 items-center gap-2">
+                        <h1 class="truncate text-base font-semibold leading-tight sm:text-lg">Finance Dashboard</h1>
                         <span
-                            class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset"
+                            class="inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-medium leading-tight ring-1 ring-inset sm:px-2.5 sm:py-1 sm:text-xs"
                             :class="status.connected ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-amber-200'"
                         >
-                            <span class="mr-1.5 h-2 w-2 rounded-full" :class="status.connected ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+                            <span class="mr-1 h-1.5 w-1.5 rounded-full sm:mr-1.5 sm:h-2 sm:w-2" :class="status.connected ? 'bg-emerald-500' : 'bg-amber-500'"></span>
                             {{ status.connected ? 'Connected' : 'Not connected' }}
                         </span>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <header class="border-b border-slate-200 bg-white/90">
+            <div class="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:px-6 lg:px-8">
+                <div class="min-w-0 flex-1">
                     <div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
                         <span>{{ status.account_count ?? 0 }} accounts</span>
                         <span>{{ status.transaction_count ?? 0 }} transactions</span>

@@ -356,6 +356,18 @@ def main():
                 wait.until(lambda current, item=section: item in current.find_element(By.TAG_NAME, "body").text)
             driver.save_screenshot(str(screenshot))
             dashboard_ratio = screenshot_content_ratio(screenshot)
+            driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight)")
+            header_scroll_checks = driver.execute_script("""
+                const compactBar = document.querySelector('#app > div.sticky');
+                const detailsHeader = document.querySelector('#app > header');
+                const compactRect = compactBar?.getBoundingClientRect();
+                const detailsRect = detailsHeader?.getBoundingClientRect();
+                return {
+                    compact_bar_stays_pinned: Boolean(compactRect && Math.abs(compactRect.top) <= 1),
+                    header_details_scroll_away: Boolean(compactRect && detailsRect && detailsRect.bottom <= compactRect.bottom),
+                };
+            """)
+            driver.execute_script("window.scrollTo(0, 0)")
 
             theme_checks = {
                 "dark_ha_theme_detected": True,
@@ -882,6 +894,7 @@ def main():
                 "index_html_no_store_cache": index_html_no_store_cache,
                 "boot_screen_removed": not boot_screen_visible,
                 "dashboard_screenshot_content": dashboard_ratio >= 0.003,
+                "header_scroll_behavior": header_scroll_checks,
                 "recurring_screenshot_content": recurring_ratio >= 0.003,
                 "no_severe_browser_errors": not severe,
                 "no_vue_warnings": not vue_warnings,
@@ -907,6 +920,7 @@ def main():
                 and index_html_no_store_cache
                 and checks["boot_screen_removed"]
                 and checks["dashboard_screenshot_content"]
+                and all(header_scroll_checks.values())
                 and checks["recurring_screenshot_content"]
                 and checks["no_severe_browser_errors"]
                 and checks["no_vue_warnings"]
