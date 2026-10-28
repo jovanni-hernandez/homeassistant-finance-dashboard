@@ -240,6 +240,7 @@ def main():
                 driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
                     "source": r'''(() => {
                       const nativeFetch = window.fetch.bind(window);
+                      let injectedSourceTransaction = null;
                       window.fetch = async (...args) => {
                         const response = await nativeFetch(...args);
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
@@ -258,7 +259,26 @@ def main():
                         }
                         if (url.includes("/api/transactions")) {
                           const payload = await response.clone().json();
-                          if (payload.transactions && payload.transactions.length) {
+                          const requestUrl = new URL(url, window.location.href);
+                          const offset = Number(requestUrl.searchParams.get("offset") || 0);
+                          if (offset === 500 && injectedSourceTransaction) {
+                            const source = injectedSourceTransaction;
+                            payload.transactions = [{
+                              id: "test-rosegate-mortgage",
+                              account_id: source.account_id,
+                              account_name: source.account_name,
+                              account_nickname: source.account_nickname,
+                              org: source.org,
+                              date: source.date,
+                              amount: "-3100.00",
+                              payee: "Rosegate",
+                              description: "Mortgage transfer payment",
+                              category: "Housing",
+                              pending: false
+                            }];
+                            payload.total = 501;
+                            payload.offset = 500;
+                          } else if (offset === 0 && payload.transactions && payload.transactions.length) {
                             payload.transactions[0].description = "LONG-REFERENCE-" + "X".repeat(130) + " payment description should wrap instead of overflowing the card edge";
                             payload.transactions[0].pending = true;
                             if (payload.transactions[0].category === "Uncategorized") {
@@ -280,23 +300,25 @@ def main():
                               transfer("test-transfer-savings-checking-in", "Checking", "test-account-checking-main", 2468.02, 10),
                               transfer("test-transfer-unmatched-out", "Checking", "test-account-checking-main", -321.09, -5)
                             );
-                            if (!payload.transactions.some((tx) => tx.id === "test-mortgage-transfer")) {
-                              const source = payload.transactions[0];
+                            injectedSourceTransaction = payload.transactions[0];
+                            while (payload.transactions.length < 500) {
+                              const sequence = payload.transactions.length;
                               payload.transactions.push({
-                                id: "test-mortgage-transfer",
-                                account_id: source.account_id,
-                                account_name: source.account_name,
-                                account_nickname: source.account_nickname,
-                                org: source.org,
-                                date: source.date,
-                                amount: "-3100.00",
-                                payee: "Test Mortgage Servicer",
-                                description: "Mortgage transfer payment",
-                                category: "Housing",
+                                id: `test-pagination-filler-${sequence}`,
+                                account_id: injectedSourceTransaction.account_id,
+                                account_name: injectedSourceTransaction.account_name,
+                                account_nickname: injectedSourceTransaction.account_nickname,
+                                org: injectedSourceTransaction.org,
+                                date: now - 400 * 86400 - sequence,
+                                amount: "0.00",
+                                payee: "Pagination fixture",
+                                description: "Old zero-value test row",
+                                category: "Uncategorized",
                                 pending: false
                               });
                             }
-                            payload.total = payload.transactions.length;
+                            payload.total = 501;
+                            payload.offset = 0;
                           }
                           const headers = new Headers(response.headers);
                           headers.delete("content-length");
