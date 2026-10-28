@@ -31,6 +31,16 @@ logger = logging.getLogger("finance_dashboard")
 
 app = FastAPI(title="Finance Dashboard API")
 
+
+@app.middleware("http")
+async def prevent_stale_dashboard_html(request, call_next):
+    response = await call_next(request)
+    if request.method == "GET" and request.url.path in {"/", "/index.html"}:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 FINANCE_STDIN_MAX_BYTES = 65536
 FINANCE_AUDIT_PAGE_SIZE = 100
 _periodic_sync_stop = threading.Event()

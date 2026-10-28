@@ -164,6 +164,13 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
     return statuses
 
 
+def probe_index_cache_policy(base_url: str, headers: dict[str, str] | None = None) -> bool:
+    request = urllib.request.Request(base_url, headers={"Accept": "text/html", **(headers or {})})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        cache_control = response.headers.get("Cache-Control", "").lower()
+        return response.status == 200 and "no-store" in cache_control
+
+
 def screenshot_content_ratio(path: Path) -> float:
     image = Image.open(path).convert("L")
     values = image.tobytes()
@@ -204,6 +211,7 @@ def main():
         if app_session:
             request_headers["X-Finance-Session"] = app_session
         api_statuses = probe_api(base_url, request_headers)
+        index_html_no_store_cache = probe_index_cache_policy(base_url, request_headers)
         options = Options()
         options.binary_location = "/usr/bin/chromium"
         options.page_load_strategy = "none"
@@ -745,6 +753,7 @@ def main():
                 "dashboard_sections": {item: item in dashboard_text for item in dashboard_sections},
                 "recurring_sections": {item: item in recurring_text for item in recurring_sections},
                 "api_statuses": api_statuses,
+                "index_html_no_store_cache": index_html_no_store_cache,
                 "boot_screen_removed": not boot_screen_visible,
                 "dashboard_screenshot_content": dashboard_ratio >= 0.003,
                 "recurring_screenshot_content": recurring_ratio >= 0.003,
@@ -768,6 +777,7 @@ def main():
                 all(checks["dashboard_sections"].values())
                 and all(checks["recurring_sections"].values())
                 and all(status == 200 for status in api_statuses.values())
+                and index_html_no_store_cache
                 and checks["boot_screen_removed"]
                 and checks["dashboard_screenshot_content"]
                 and checks["recurring_screenshot_content"]
