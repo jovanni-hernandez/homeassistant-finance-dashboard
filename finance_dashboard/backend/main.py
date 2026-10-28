@@ -21,6 +21,7 @@ from database import (
     get_recurring_rules_value,
     set_category_rules_value,
     set_recurring_rules_value,
+    set_account_type,
     set_transaction_category,
 )
 import pin_auth
@@ -90,6 +91,10 @@ class CategoryRulesRequest(BaseModel):
 
 class TransactionCategoryRequest(BaseModel):
     category: str = Field(min_length=1, max_length=100)
+
+
+class AccountTypeRequest(BaseModel):
+    account_type: str = Field(min_length=1, max_length=40)
 
 
 class PinUnlockRequest(BaseModel):
@@ -460,6 +465,22 @@ def api_get_accounts():
     except Exception as e:
         logger.error(f"Failed to query accounts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/accounts/{account_id}/type", dependencies=[Depends(verify_ha_auth)])
+def api_set_account_type(account_id: str, payload: AccountTypeRequest):
+    try:
+        account = set_account_type(account_id, payload.account_type)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {"status": "success", "account": account}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update account type (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not update the account type.") from exc
 
 
 @app.get("/api/transactions", dependencies=[Depends(verify_ha_auth)])

@@ -5,6 +5,7 @@ View accounts and transactions, understand cash flow, and organize spending from
 ## Features
 
 - Account balances and cash-flow visualization.
+- Account classification for bank/cash, investments, credit cards, and loans, with net-worth totals grouped by currency.
 - Searchable, category-filterable transaction list grouped into pending and posted dates.
 - Editable transaction categories and automatic merchant rules. Manual category choices are preserved during sync.
 - Recurring-payment and subscription insights.
@@ -33,6 +34,12 @@ The six-hour schedule can make repeated requests, but it cannot make a bank or S
 ## Categories and optional AI
 
 Edit automatic rules in **Settings → Category rules**. You can add custom categories and patterns. Rules apply to uncategorized transactions; existing manual categories remain in place. Optional AI suggestions require configuring a provider and model. Review that provider's privacy terms before enabling it because transaction context may be sent to the selected service.
+
+## Account types and net worth
+
+SimpleFIN reports balances but does not define a standard account-type field. The dashboard uses strong provider metadata or clear account-name clues to suggest a type; review and choose the type in **Settings → Account types and net worth**. Ambiguous accounts stay unclassified and are excluded from net-worth totals until classified.
+
+Bank/cash and investment balances count as assets. Credit cards, loans, and other liabilities count as debts; debt balances are subtracted from assets even if the institution reports the amount owed as positive. Negative asset balances still reduce net worth. Totals are kept separate by currency; the dashboard does not convert between currencies. Imported balances are preserved when you choose an account type.
 
 ## Privacy and security
 

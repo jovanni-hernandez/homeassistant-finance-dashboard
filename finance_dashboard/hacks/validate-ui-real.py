@@ -713,6 +713,38 @@ def main():
                 "childcare_category_available": False,
                 "custom_category_can_be_added": False,
             }
+            account_type_checks = {
+                "account_type_settings_visible": False,
+                "venture_type_suggested": False,
+                "liability_type_can_be_saved": False,
+                "asset_type_can_be_saved": False,
+                "liability_balance_shows_as_debt": False,
+                "net_worth_subtracts_debt": False,
+            }
+            account_type_section = driver.find_element(By.CSS_SELECTOR, '[data-testid="account-type-settings"]')
+            account_type_checks["account_type_settings_visible"] = "Account types and net worth" in account_type_section.text
+            venture_type_row = next(
+                row for row in account_type_section.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-row"]')
+                if "Venture X" in row.text
+            )
+            account_type_checks["venture_type_suggested"] = "Suggested type: Credit card debt" in venture_type_row.text
+            venture_type_select = Select(venture_type_row.find_element(By.TAG_NAME, "select"))
+            venture_type_select.select_by_value("credit_card")
+            WebDriverWait(driver, args.timeout).until(
+                lambda _current: venture_type_row.find_element(By.TAG_NAME, "select").get_attribute("value") == "credit_card"
+            )
+            account_type_checks["liability_type_can_be_saved"] = True
+
+            checking_type_row = next(
+                row for row in account_type_section.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-row"]')
+                if "Checking" in row.text and "Navy Federal" in row.text
+            )
+            Select(checking_type_row.find_element(By.TAG_NAME, "select")).select_by_value("bank_account")
+            WebDriverWait(driver, args.timeout).until(
+                lambda _current: checking_type_row.find_element(By.TAG_NAME, "select").get_attribute("value") == "bank_account"
+            )
+            account_type_checks["asset_type_can_be_saved"] = True
+
             category_select = driver.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-select"]')
             options = [option.get_attribute("value") for option in category_select.find_elements(By.TAG_NAME, "option")]
             custom_category_checks["pets_category_available"] = "Pets" in options
@@ -735,6 +767,28 @@ def main():
             )
             driver.execute_script("arguments[0].click();", driver.find_element(By.XPATH, "//button[normalize-space()='Use builder']"))
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings" + screenshot.suffix)))
+
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="net-worth-summary"]'))
+            )
+            venture_card = next(
+                card for card in driver.find_elements(By.CSS_SELECTOR, '[data-testid="account-filter-card"]')
+                if "Venture X" in card.text
+            )
+            venture_balance = venture_card.find_element(By.CSS_SELECTOR, '[data-testid="account-balance"]')
+            account_type_checks["liability_balance_shows_as_debt"] = (
+                "-$1,250.00" in venture_balance.text
+                and "text-rose-700" in venture_balance.get_attribute("class")
+            )
+            net_worth_text = driver.find_element(By.CSS_SELECTOR, '[data-testid="net-worth-summary"]').text
+            account_type_checks["net_worth_subtracts_debt"] = (
+                "USD" in net_worth_text
+                and "$3,400.50" in net_worth_text
+                and "$1,250.00" in net_worth_text
+                and "$2,150.50" in net_worth_text
+            )
 
             logs = driver.get_log("browser")
             def redact_log(message: str) -> str:
@@ -764,6 +818,7 @@ def main():
                 "transaction_grouping": transaction_group_checks,
                 "transaction_search_and_category_filter": transaction_filter_checks,
                 "spending_pie": spending_pie_checks,
+                "account_types_and_net_worth": account_type_checks,
                 "transaction_description_fits_card": transaction_description_fits_card,
                 "ha_theme_auto_detection": theme_checks,
                 "custom_categories": custom_category_checks,
@@ -788,6 +843,7 @@ def main():
                 and all(transaction_group_checks.values())
                 and all(transaction_filter_checks.values())
                 and all(spending_pie_checks.values())
+                and all(account_type_checks.values())
                 and transaction_description_fits_card
                 and all(theme_checks.values())
                 and all(custom_category_checks.values())

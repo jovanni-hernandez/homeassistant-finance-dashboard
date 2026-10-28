@@ -1,7 +1,16 @@
 import logging
 import json
 from sqlalchemy import inspect, text
-from models import engine, SessionLocal, Base, Account, Transaction, Setting
+from models import (
+    ACCOUNT_TYPE_UNCLASSIFIED,
+    ACCOUNT_TYPE_VALUES,
+    engine,
+    SessionLocal,
+    Base,
+    Account,
+    Transaction,
+    Setting,
+)
 
 logger = logging.getLogger("finance_dashboard")
 
@@ -10,6 +19,7 @@ def init_db():
     logger.info("Initializing database tables via SQLAlchemy...")
     Base.metadata.create_all(bind=engine)
     _ensure_transaction_category_column()
+    _ensure_account_type_columns()
     logger.info("Database initialized successfully.")
 
 
@@ -20,6 +30,22 @@ def _ensure_transaction_category_column():
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE transactions ADD COLUMN category TEXT DEFAULT 'Uncategorized'"))
         logger.info("Added missing transactions.category column.")
+
+
+def _ensure_account_type_columns():
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("accounts")}
+    with engine.begin() as conn:
+        if "account_type" not in columns:
+            conn.execute(text(
+                "ALTER TABLE accounts ADD COLUMN account_type TEXT NOT NULL DEFAULT 'unclassified'"
+            ))
+            logger.info("Added accounts.account_type; existing accounts need classification.")
+        if "account_type_suggestion" not in columns:
+            conn.execute(text(
+                "ALTER TABLE accounts ADD COLUMN account_type_suggestion TEXT NOT NULL DEFAULT 'unclassified'"
+            ))
+            logger.info("Added accounts.account_type_suggestion.")
 
 
 def save_simplefin_data(data):
@@ -36,16 +62,28 @@ def save_simplefin_data(data):
                 org = name or "Account"
             balance = str(acc.get("balance", "0.00"))
             currency = acc.get("currency", "USD")
+            suggestion = str(acc.get("account_type_suggestion") or ACCOUNT_TYPE_UNCLASSIFIED)
+            if suggestion not in ACCOUNT_TYPE_VALUES:
+                suggestion = ACCOUNT_TYPE_UNCLASSIFIED
 
             db_account = db.query(Account).filter(Account.id == acc_id).first()
             if not db_account:
-                db_account = Account(id=acc_id, org=org, name=name, balance=balance, currency=currency)
+                db_account = Account(
+                    id=acc_id,
+                    org=org,
+                    name=name,
+                    balance=balance,
+                    currency=currency,
+                    account_type=ACCOUNT_TYPE_UNCLASSIFIED,
+                    account_type_suggestion=suggestion,
+                )
                 db.add(db_account)
             else:
                 db_account.org = org
                 db_account.name = name
                 db_account.balance = balance
                 db_account.currency = currency
+                db_account.account_type_suggestion = suggestion
 
             transactions = acc.get("transactions", [])
             for tx in transactions:
@@ -121,6 +159,27 @@ def get_stored_accounts():
     try:
         accounts = db.query(Account).all()
         return [acc.to_dict() for acc in accounts]
+    finally:
+        db.close()
+
+
+def set_account_type(account_id: str, account_type: str):
+    normalized_type = str(account_type or "").strip()
+    if normalized_type not in ACCOUNT_TYPE_VALUES:
+        raise ValueError("Choose a supported account type.")
+
+    db = SessionLocal()
+    try:
+        account = db.query(Account).filter(Account.id == str(account_id)).first()
+        if not account:
+            return None
+        account.account_type = normalized_type
+        db.commit()
+        return account.to_dict()
+    except Exception as e:
+        db.rollback()
+        logger.error("Error setting account type (%s).", type(e).__name__)
+        raise
     finally:
         db.close()
 

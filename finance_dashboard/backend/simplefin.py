@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
@@ -16,6 +17,7 @@ from database import (
     save_simplefin_data,
     set_setting,
 )
+from models import ACCOUNT_TYPE_UNCLASSIFIED, ACCOUNT_TYPE_VALUES
 
 logger = logging.getLogger("finance_dashboard")
 
@@ -244,6 +246,44 @@ def _decode_access_url_to_request(access_url: str):
     return base_url, (username, password)
 
 
+def suggest_account_type(account: dict):
+    """Suggest a type only when provider metadata or account naming is explicit."""
+    org_raw = account.get("org", {})
+    org_name = org_raw.get("name", "") if isinstance(org_raw, dict) else str(org_raw or "")
+    name = str(account.get("name") or account.get("title") or "")
+
+    metadata = [account.get(key) for key in ("account_type", "type", "subtype")]
+    extra = account.get("extra")
+    if isinstance(extra, dict):
+        metadata.extend(extra.get(key) for key in ("account_type", "account-type", "type", "subtype"))
+
+    def normalized(value):
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+
+    def classify(text):
+        if re.search(r"\bcredit card\b|\bcreditcard\b", text):
+            return "credit_card"
+        if re.search(r"\b(loan|mortgage|line of credit)\b", text):
+            return "loan"
+        if re.search(r"\b(investment|brokerage|retirement|401k|403b|ira|roth|portfolio)\b", text):
+            return "investment"
+        if re.search(r"\b(checking|savings|cash|deposit|bank account)\b", text):
+            return "bank_account"
+        return ACCOUNT_TYPE_UNCLASSIFIED
+
+    for value in metadata:
+        suggestion = classify(normalized(value))
+        if suggestion != ACCOUNT_TYPE_UNCLASSIFIED:
+            return suggestion
+
+    normalized_name = normalized(name)
+    normalized_org = normalized(org_name)
+    if "capital one" in normalized_org and re.search(r"\bventure\b", normalized_name):
+        return "credit_card"
+    suggestion = classify(normalized_name)
+    return suggestion if suggestion in ACCOUNT_TYPE_VALUES else ACCOUNT_TYPE_UNCLASSIFIED
+
+
 def _normalize_simplefin_payload(data: dict, rules=None):
     accounts = []
     for account in data.get("accounts", []):
@@ -290,6 +330,7 @@ def _normalize_simplefin_payload(data: dict, rules=None):
                 "name": account.get("name") or account.get("title") or "Account",
                 "balance": str(account.get("balance", "0.00")),
                 "currency": account.get("currency", "USD"),
+                "account_type_suggestion": suggest_account_type(account),
                 "transactions": normalized_transactions,
             }
         )
@@ -493,6 +534,7 @@ def fetch_and_sync_simplefin():
                 "name": "Venture X",
                 "balance": "1250.00",
                 "currency": "USD",
+                "account_type_suggestion": "credit_card",
                 "transactions": [
                     {"id": "tx1", "date": 1718500000, "amount": "-45.50", "payee": "Grocery Store", "description": "Weekly groceries", "pending": False},
                     {"id": "tx2", "date": 1718400000, "amount": "-12.00", "payee": "Coffee Shop", "description": "Latte", "pending": False},
@@ -504,6 +546,7 @@ def fetch_and_sync_simplefin():
                 "name": "L Fund 2050",
                 "balance": "125000.00",
                 "currency": "USD",
+                "account_type_suggestion": "investment",
                 "transactions": [
                     {"id": "tx3", "date": 1718000000, "amount": "500.00", "payee": "Payroll Deposit", "description": "Bi-weekly contribution", "pending": False}
                 ],
@@ -514,6 +557,7 @@ def fetch_and_sync_simplefin():
                 "name": "Checking",
                 "balance": "3400.50",
                 "currency": "USD",
+                "account_type_suggestion": "bank_account",
                 "transactions": [],
             },
             {
@@ -522,6 +566,7 @@ def fetch_and_sync_simplefin():
                 "name": "Brokerage",
                 "balance": "45200.00",
                 "currency": "USD",
+                "account_type_suggestion": "investment",
                 "transactions": [],
             },
         ]

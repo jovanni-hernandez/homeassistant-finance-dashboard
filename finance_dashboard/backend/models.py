@@ -12,6 +12,19 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+ACCOUNT_TYPE_UNCLASSIFIED = "unclassified"
+ACCOUNT_TYPE_VALUES = frozenset({
+    ACCOUNT_TYPE_UNCLASSIFIED,
+    "bank_account",
+    "investment",
+    "credit_card",
+    "loan",
+    "other_asset",
+    "other_liability",
+})
+ASSET_ACCOUNT_TYPES = frozenset({"bank_account", "investment", "other_asset"})
+LIABILITY_ACCOUNT_TYPES = frozenset({"credit_card", "loan", "other_liability"})
+
 class Setting(Base):
     __tablename__ = "settings"
     key = Column(String, primary_key=True, index=True)
@@ -33,6 +46,8 @@ class Account(Base):
     _name = Column("name", String, default="Account")
     _balance = Column("balance", String, default="0.00")
     currency = Column(String, default="USD")
+    account_type = Column(String, default=ACCOUNT_TYPE_UNCLASSIFIED, nullable=False)
+    account_type_suggestion = Column(String, default=ACCOUNT_TYPE_UNCLASSIFIED, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     transactions = relationship("Transaction", back_populates="account", cascade="all, delete-orphan")
@@ -68,6 +83,8 @@ class Account(Base):
             "name": self.name,
             "balance": self.balance,
             "currency": self.currency,
+            "account_type": self.account_type or ACCOUNT_TYPE_UNCLASSIFIED,
+            "account_type_suggestion": self.account_type_suggestion or ACCOUNT_TYPE_UNCLASSIFIED,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
 
