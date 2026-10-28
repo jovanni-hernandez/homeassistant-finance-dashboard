@@ -11,6 +11,7 @@ import requests
 from database import (
     get_account_count,
     get_category_rules_value,
+    get_stored_accounts,
     get_stored_transactions,
     get_setting,
     get_transaction_count,
@@ -28,6 +29,9 @@ SYNC_OVERLAP_DAYS = 0
 SYNC_INTERVAL_SECONDS = 6 * 60 * 60
 SYNC_MAX_BACKFILL_WINDOWS_PER_RUN = 7
 SYNC_CURSOR_SETTING_KEY = "simplefin_sync_cursor"
+ACCOUNT_BACKFILL_SETTING_KEY = "simplefin_account_backfill_state"
+ACCOUNT_BACKFILL_DAYS = 30
+ACCOUNT_BACKFILL_BATCH_WINDOWS = 7
 SYNC_WINDOW_SECONDS = (SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS) * 24 * 60 * 60
 
 DEFAULT_CATEGORY_RULES = [
@@ -401,6 +405,37 @@ def _get_sync_cursor(now_timestamp: int):
     return cursor
 
 
+def _load_account_backfill_state():
+    raw = get_setting(ACCOUNT_BACKFILL_SETTING_KEY)
+    if not raw:
+        return {}
+    try:
+        state = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning("Could not parse new-account backfill state; starting a fresh queue.")
+        return {}
+
+    if not isinstance(state, dict):
+        return {}
+
+    normalized = {}
+    for account_id, progress in state.items():
+        if not isinstance(progress, dict):
+            continue
+        try:
+            cursor = int(progress["cursor"])
+            end = int(progress["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= cursor < end:
+            normalized[str(account_id)] = {"cursor": cursor, "end": end}
+    return normalized
+
+
+def _save_account_backfill_state(state):
+    set_setting(ACCOUNT_BACKFILL_SETTING_KEY, json.dumps(state, sort_keys=True))
+
+
 def fetch_and_sync_simplefin():
     """Fetch normalized financial data from SimpleFIN and persist to DB."""
     access_url = get_simplefin_token()
@@ -412,6 +447,12 @@ def fetch_and_sync_simplefin():
             cursor = _get_sync_cursor(now_timestamp)
             simplefin_errors = []
             rules = _load_category_rules()
+            known_account_ids = {
+                str(account.get("id"))
+                for account in get_stored_accounts()
+                if account.get("id") is not None
+            }
+            account_backfill_state = _load_account_backfill_state()
             previous_latest_timestamp = _stored_latest_transaction_timestamp()
             previous_latest_date = (
                 datetime.fromtimestamp(previous_latest_timestamp, timezone.utc).date().isoformat()
@@ -421,6 +462,34 @@ def fetch_and_sync_simplefin():
 
             incoming_transactions_by_id = {}
             backfill_windows = 0
+
+            def save_normalized_payload(normalized):
+                discovered_new_account = False
+                account_backfill_end = max(0, now_timestamp - SYNC_WINDOW_SECONDS)
+                account_backfill_start = max(
+                    0,
+                    now_timestamp - ACCOUNT_BACKFILL_DAYS * SYNC_WINDOW_SECONDS,
+                )
+                for account in normalized.get("accounts", []):
+                    account_id = str(account.get("id"))
+                    if account_id in known_account_ids:
+                        continue
+                    known_account_ids.add(account_id)
+                    if account_id not in account_backfill_state and account_backfill_start < account_backfill_end:
+                        account_backfill_state[account_id] = {
+                            "cursor": account_backfill_start,
+                            "end": account_backfill_end,
+                        }
+                        discovered_new_account = True
+
+                if discovered_new_account:
+                    _save_account_backfill_state(account_backfill_state)
+
+                for account in normalized.get("accounts", []):
+                    for transaction in account.get("transactions", []):
+                        incoming_transactions_by_id[str(transaction.get("id"))] = transaction
+                save_simplefin_data(normalized)
+
             while cursor < backfill_limit and backfill_windows < SYNC_MAX_BACKFILL_WINDOWS_PER_RUN:
                 window_end = min(cursor + SYNC_WINDOW_SECONDS, backfill_limit)
                 payload = _fetch_simplefin_payload(access_url, start_ts=cursor, end_ts=window_end)
@@ -431,10 +500,7 @@ def fetch_and_sync_simplefin():
                         )
 
                 normalized = _normalize_simplefin_payload(payload, rules)
-                for account in normalized.get("accounts", []):
-                    for transaction in account.get("transactions", []):
-                        incoming_transactions_by_id[str(transaction.get("id"))] = transaction
-                save_simplefin_data(normalized)
+                save_normalized_payload(normalized)
 
                 cursor = window_end
                 set_setting(SYNC_CURSOR_SETTING_KEY, str(cursor))
@@ -457,14 +523,60 @@ def fetch_and_sync_simplefin():
                         payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)]
                     )
             normalized = _normalize_simplefin_payload(payload, rules)
-            for account in normalized.get("accounts", []):
-                for transaction in account.get("transactions", []):
-                    incoming_transactions_by_id[str(transaction.get("id"))] = transaction
-            save_simplefin_data(normalized)
+            save_normalized_payload(normalized)
 
             if not backfill_pending:
                 cursor = now_timestamp
                 set_setting(SYNC_CURSOR_SETTING_KEY, str(cursor))
+
+            account_backfill_windows = 0
+            while account_backfill_state:
+                batch_windows = 0
+                while account_backfill_state and batch_windows < ACCOUNT_BACKFILL_BATCH_WINDOWS:
+                    account_id = min(
+                        account_backfill_state,
+                        key=lambda key: (
+                            account_backfill_state[key]["cursor"],
+                            account_backfill_state[key]["end"],
+                            key,
+                        ),
+                    )
+                    cursor = account_backfill_state[account_id]["cursor"]
+                    window_end = min(
+                        cursor + SYNC_WINDOW_SECONDS,
+                        account_backfill_state[account_id]["end"],
+                    )
+                    group = [
+                        key for key, progress in account_backfill_state.items()
+                        if progress["cursor"] == cursor and progress["end"] == account_backfill_state[account_id]["end"]
+                    ]
+
+                    payload = _fetch_simplefin_payload(access_url, start_ts=cursor, end_ts=window_end)
+                    for key in ("errlist", "errors"):
+                        if payload.get(key):
+                            simplefin_errors.extend(
+                                payload.get(key) if isinstance(payload.get(key), list) else [payload.get(key)]
+                            )
+                    normalized = _normalize_simplefin_payload(payload, rules)
+                    save_normalized_payload(normalized)
+
+                    for queued_account_id in group:
+                        progress = account_backfill_state.get(queued_account_id)
+                        if not progress:
+                            continue
+                        if window_end >= progress["end"]:
+                            account_backfill_state.pop(queued_account_id, None)
+                        else:
+                            progress["cursor"] = window_end
+                    _save_account_backfill_state(account_backfill_state)
+                    account_backfill_windows += 1
+                    batch_windows += 1
+
+            account_backfill_pending = bool(account_backfill_state)
+            account_backfill_remaining_days = sum(
+                (progress["end"] - progress["cursor"] + SYNC_WINDOW_SECONDS - 1) // SYNC_WINDOW_SECONDS
+                for progress in account_backfill_state.values()
+            )
 
             incoming_transactions = list(incoming_transactions_by_id.values())
             incoming_count, newest_incoming_timestamp, newest_incoming_date = _transaction_date_summary(
@@ -474,7 +586,7 @@ def fetch_and_sync_simplefin():
                 previous_latest_timestamp is None or newest_incoming_timestamp > previous_latest_timestamp
             )
 
-            total_windows = backfill_windows + 1
+            total_windows = backfill_windows + 1 + account_backfill_windows
             message = (
                 f"SimpleFIN request completed in {total_windows} window(s), each no longer than "
                 f"{SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS} day."
@@ -495,6 +607,16 @@ def fetch_and_sync_simplefin():
                 message += (
                     f" Historical backfill is incomplete: about {remaining_backfill_days} day(s) remain; "
                     "it will continue on the next sync."
+                )
+            if account_backfill_windows:
+                message += (
+                    f" New-account history completed {account_backfill_windows} additional one-day "
+                    "window(s) in seven-request batches."
+                )
+            if account_backfill_pending:
+                message += (
+                    f" New-account history backfill is incomplete: about {account_backfill_remaining_days} "
+                    "account-day window(s) remain; it will resume on the next sync."
                 )
 
             _record_sync_state("success", message)
@@ -520,12 +642,22 @@ def fetch_and_sync_simplefin():
                 "sync_windows": total_windows,
                 "backfill_pending": backfill_pending,
                 "backfill_remaining_days": remaining_backfill_days,
+                "account_backfill_pending": account_backfill_pending,
+                "account_backfill_remaining_days": account_backfill_remaining_days,
+                "account_backfill_windows": account_backfill_windows,
                 "warnings": simplefin_errors,
             }
         except Exception as e:
             logger.error(f"Error fetching SimpleFIN data: {e}")
-            _record_sync_state("error", f"Sync failed: {e}")
-            return {"status": "error", "message": str(e)}
+            message = f"Sync failed: {e}"
+            saved_backfills = locals().get("account_backfill_state", {})
+            if saved_backfills:
+                message += (
+                    f" New-account backfill progress is saved for {len(saved_backfills)} account(s) "
+                    "and will resume on the next sync."
+                )
+            _record_sync_state("error", message)
+            return {"status": "error", "message": message}
 
     logger.warning("No SimpleFIN access URL found. Seeding mock data.")
     mock_data = {

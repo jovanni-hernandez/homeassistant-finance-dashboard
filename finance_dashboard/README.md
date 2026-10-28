@@ -27,8 +27,9 @@ After connecting, the dashboard displays the last sync time, status, account cou
 1. **Connect:** The dashboard sends the SimpleFIN setup token to SimpleFIN to claim an access token. The access token is stored in the add-on's persistent settings; it is not meant to be pasted into support requests or logs.
 2. **Fetch in bounded windows:** Sync requests are limited to one day or less to stay within SimpleFIN's date-range limit. A rolling recent-day request also catches transactions that post late.
 3. **Backfill gaps:** The add-on remembers its last successfully saved sync cursor. When it detects missed time, it fetches consecutive one-day windows, saves each before advancing the cursor, and processes up to seven backfill windows per run. Longer gaps resume on the next six-hour sync.
-4. **Store and categorize:** Normalized accounts and transactions are saved in the add-on's local SQLite database. Merchant rules categorize uncategorized transactions; a category you selected manually is preserved.
-5. **Display:** The dashboard reads the stored data to render balances, cash flow, grouped transactions, and recurring-payment insights. It shows the newest transaction date returned by SimpleFIN and whether that date advanced.
+4. **Backfill new accounts:** When a newly linked account is first detected, the current rolling-day request plus consecutive one-day requests cover its preceding 30 days. The older windows run immediately in batches of seven requests; progress is saved after each successful window so an interruption can resume later.
+5. **Store and categorize:** Normalized accounts and transactions are saved in the add-on's local SQLite database. Merchant rules categorize uncategorized transactions; a category you selected manually is preserved.
+6. **Display:** The dashboard reads the stored data to render balances, cash flow, grouped transactions, and recurring-payment insights. It shows the newest transaction date returned by SimpleFIN and whether that date advanced.
 
 The six-hour schedule can make repeated requests, but it cannot make a bank or SimpleFIN provide transactions that are not present in their response. A sync can complete successfully while the newest transaction date stays unchanged; the dashboard reports that as **Freshness NOT verified**.
 

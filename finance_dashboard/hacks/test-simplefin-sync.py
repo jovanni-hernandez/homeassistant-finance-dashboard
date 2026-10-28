@@ -71,6 +71,27 @@ class SimpleFinSyncTests(unittest.TestCase):
             }]
         }
 
+    def new_account_payload(self, start_ts, account_ids=("new-account",)):
+        return {
+            "accounts": [
+                {
+                    "id": account_id,
+                    "org": {"name": "New Bank"},
+                    "name": f"Checking {account_id}",
+                    "balance": "100.00",
+                    "currency": "USD",
+                    "transactions": [{
+                        "id": f"{account_id}-{start_ts}",
+                        "date": start_ts + 1,
+                        "amount": "-1.00",
+                        "payee": "Test merchant",
+                        "description": "Daily test transaction",
+                    }],
+                }
+                for account_id in account_ids
+            ]
+        }
+
     def test_sync_reports_no_newer_date_when_provider_returns_stale_data(self):
         previous_timestamp = 1_700_000_000
         self.seed_latest_transaction(previous_timestamp)
@@ -106,9 +127,14 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         self.assertEqual(result["incoming_transaction_count"], 0)
         self.assertIsNone(result["latest_incoming_transaction_date"])
+        self.assertEqual(result["account_backfill_windows"], 29)
         self.assertIn("Freshness NOT verified: SimpleFIN returned no transactions", result["message"])
 
     def test_sync_requests_exactly_one_day(self):
+        now_timestamp = int(simplefin.datetime.now(simplefin.timezone.utc).timestamp())
+        self.seed_latest_transaction(now_timestamp - simplefin.SYNC_WINDOW_SECONDS)
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(now_timestamp))
+
         with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as fetch:
             simplefin.fetch_and_sync_simplefin()
 
@@ -116,9 +142,92 @@ class SimpleFinSyncTests(unittest.TestCase):
         end_timestamp = fetch.call_args.kwargs["end_ts"]
         self.assertEqual(end_timestamp - start_timestamp, 24 * 60 * 60)
 
+    def test_new_accounts_get_30_days_in_one_sync_for_each_discovered_account(self):
+        day = simplefin.SYNC_WINDOW_SECONDS
+        account_ids = ("new-checking", "new-savings")
+
+        def fetch_window(_access_url, start_ts, end_ts):
+            self.assertEqual(end_ts - start_ts, day)
+            return self.new_account_payload(start_ts, account_ids)
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", side_effect=fetch_window) as fetch:
+            result = simplefin.fetch_and_sync_simplefin()
+
+        calls = fetch.call_args_list
+        self.assertEqual(len(calls), simplefin.ACCOUNT_BACKFILL_DAYS)
+        self.assertEqual(result["account_backfill_windows"], 29)
+        self.assertEqual(result["sync_windows"], 30)
+        self.assertFalse(result["account_backfill_pending"])
+        self.assertEqual(result["account_backfill_remaining_days"], 0)
+        self.assertEqual(get_setting(simplefin.ACCOUNT_BACKFILL_SETTING_KEY), "{}")
+
+        rolling_call = calls[0].kwargs
+        account_backfill_calls = [call.kwargs for call in calls[1:]]
+        self.assertEqual(account_backfill_calls[0]["start_ts"], rolling_call["start_ts"] - 29 * day)
+        self.assertEqual(account_backfill_calls[-1]["end_ts"], rolling_call["start_ts"])
+        for previous, following in zip(account_backfill_calls, account_backfill_calls[1:]):
+            self.assertEqual(previous["end_ts"], following["start_ts"])
+
+        db = SessionLocal()
+        try:
+            self.assertEqual(db.query(Account).count(), len(account_ids))
+            self.assertEqual(db.query(Transaction).count(), 30 * len(account_ids))
+        finally:
+            db.close()
+
+    def test_existing_accounts_do_not_trigger_account_backfill(self):
+        now_timestamp = int(simplefin.datetime.now(simplefin.timezone.utc).timestamp())
+        self.seed_latest_transaction(now_timestamp - simplefin.SYNC_WINDOW_SECONDS)
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(now_timestamp))
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as fetch:
+            result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(result["account_backfill_windows"], 0)
+        self.assertFalse(result["account_backfill_pending"])
+
+    def test_new_account_backfill_progress_resumes_after_request_failure(self):
+        calls = 0
+
+        def fail_after_three_backfill_windows(_access_url, start_ts, end_ts):
+            nonlocal calls
+            calls += 1
+            if calls == 5:
+                raise RuntimeError("simulated SimpleFIN interruption")
+            return self.new_account_payload(start_ts)
+
+        with patch.object(
+            simplefin,
+            "_fetch_simplefin_payload",
+            side_effect=fail_after_three_backfill_windows,
+        ):
+            failed_result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertEqual(failed_result["status"], "error")
+        self.assertIn("progress is saved", failed_result["message"])
+        saved_state = simplefin._load_account_backfill_state()
+        self.assertIn("new-account", saved_state)
+        saved_cursor = saved_state["new-account"]["cursor"]
+
+        with patch.object(
+            simplefin,
+            "_fetch_simplefin_payload",
+            side_effect=lambda _access_url, start_ts, end_ts: self.new_account_payload(start_ts),
+        ) as fetch:
+            resumed_result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertEqual(resumed_result["status"], "success")
+        self.assertEqual(resumed_result["account_backfill_windows"], 26)
+        self.assertFalse(resumed_result["account_backfill_pending"])
+        self.assertEqual(get_setting(simplefin.ACCOUNT_BACKFILL_SETTING_KEY), "{}")
+        resumed_windows = [call.kwargs for call in fetch.call_args_list[1:]]
+        self.assertEqual(resumed_windows[0]["start_ts"], saved_cursor)
+
     def test_sync_backfills_missed_days_with_contiguous_one_day_windows(self):
         now_timestamp = int(simplefin.datetime.now(simplefin.timezone.utc).timestamp())
         cursor = now_timestamp - (3 * simplefin.SYNC_WINDOW_SECONDS) - 3600
+        self.seed_latest_transaction(cursor)
         set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(cursor))
 
         with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as fetch:
@@ -140,6 +249,7 @@ class SimpleFinSyncTests(unittest.TestCase):
     def test_long_backfill_is_bounded_and_resumes_from_saved_cursor(self):
         now_timestamp = int(simplefin.datetime.now(simplefin.timezone.utc).timestamp())
         cursor = now_timestamp - (12 * simplefin.SYNC_WINDOW_SECONDS)
+        self.seed_latest_transaction(cursor)
         set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(cursor))
 
         with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as fetch:
