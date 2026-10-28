@@ -178,6 +178,76 @@ def screenshot_content_ratio(path: Path) -> float:
     return sum(value < 245 for value in values) / max(1, len(values))
 
 
+def sankey_mobile_layout_metrics(driver) -> dict:
+    return driver.execute_script("""
+        const container = document.querySelector('[data-testid="sankey-chart"]');
+        const svg = container?.querySelector('svg');
+        if (!container || !svg) return { ready: false };
+        const labels = Array.from(svg.querySelectorAll('[data-testid="sankey-node"] text'));
+        const boxes = labels.map((element) => {
+            const box = element.getBBox();
+            return {
+                element,
+                x: box.x,
+                y: box.y,
+                right: box.x + box.width,
+                bottom: box.y + box.height,
+            };
+        });
+        let labelOverlaps = 0;
+        for (let i = 0; i < boxes.length; i += 1) {
+            for (let j = i + 1; j < boxes.length; j += 1) {
+                const a = boxes[i];
+                const b = boxes[j];
+                if (Math.min(a.right, b.right) - Math.max(a.x, b.x) > 1
+                    && Math.min(a.bottom, b.bottom) - Math.max(a.y, b.y) > 1) labelOverlaps += 1;
+            }
+        }
+        const viewBox = svg.viewBox.baseVal;
+        const clippedLabels = boxes.filter((box) => (
+            box.x < -1 || box.y < -1 || box.right > viewBox.width + 1 || box.bottom > viewBox.height + 1
+        )).length;
+        const rightmostLabel = labels.reduce((rightmost, candidate) => (
+            !rightmost || candidate.getBBox().x + candidate.getBBox().width
+                > rightmost.getBBox().x + rightmost.getBBox().width
+                ? candidate : rightmost
+        ), null);
+        const originalScrollLeft = container.scrollLeft;
+        container.scrollLeft = container.scrollWidth;
+        const containerRect = container.getBoundingClientRect();
+        const rightmostRect = rightmostLabel?.getBoundingClientRect();
+        const rightmostLabelReachable = !!rightmostRect
+            && rightmostRect.left < containerRect.right
+            && rightmostRect.right > containerRect.left;
+        container.scrollLeft = originalScrollLeft;
+        const nodeRects = Array.from(svg.querySelectorAll('[data-testid="sankey-node"] rect'));
+        let labelNodeOverlaps = 0;
+        boxes.forEach((box) => {
+            const ownNode = box.element.closest('[data-testid="sankey-node"]');
+            nodeRects.forEach((rect) => {
+                if (rect.closest('[data-testid="sankey-node"]') === ownNode) return;
+                const other = rect.getBBox();
+                if (Math.min(box.right, other.x + other.width) - Math.max(box.x, other.x) > 1
+                    && Math.min(box.bottom, other.y + other.height) - Math.max(box.y, other.y) > 1) labelNodeOverlaps += 1;
+            });
+        });
+        return {
+            ready: labels.length > 0,
+            containerWidth: container.clientWidth,
+            containerHeight: container.clientHeight,
+            scrollWidth: container.scrollWidth,
+            svgWidth: viewBox.width,
+            svgHeight: viewBox.height,
+            renderedSvgHeight: svg.getBoundingClientRect().height,
+            labelCount: labels.length,
+            labelOverlaps,
+            labelNodeOverlaps,
+            clippedLabels,
+            rightmostLabelReachable,
+        };
+    """)
+
+
 def main():
     args = parse_args()
     screenshot_base = Path(args.screenshot)
@@ -653,6 +723,39 @@ def main():
             )
             spending_pie_checks["category_slice_filters_and_reselect_clears"] = category_rows_match and full_breakdown_remains
 
+            sankey_layout_checks = {
+                "cashflow_has_readable_mobile_width": True,
+                "cashflow_right_labels_reachable_by_swipe": True,
+                "cashflow_labels_do_not_overlap_or_clip": True,
+                "cashflow_container_matches_svg_height": True,
+                "transfers_has_readable_mobile_width": True,
+                "transfers_right_labels_reachable_by_swipe": True,
+                "transfers_labels_do_not_overlap_or_clip": True,
+                "transfers_container_matches_svg_height": True,
+            }
+            sankey_mobile_measurements = {"cashflow": None, "transfers": None}
+            if args.device in {"iphone", "pixel"}:
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: sankey_mobile_layout_metrics(current).get("ready")
+                )
+                cashflow_metrics = sankey_mobile_layout_metrics(driver)
+                sankey_mobile_measurements["cashflow"] = cashflow_metrics
+                sankey_layout_checks["cashflow_has_readable_mobile_width"] = (
+                    cashflow_metrics["svgWidth"] >= 640
+                    and cashflow_metrics["scrollWidth"] > cashflow_metrics["containerWidth"] + 1
+                )
+                sankey_layout_checks["cashflow_right_labels_reachable_by_swipe"] = cashflow_metrics[
+                    "rightmostLabelReachable"
+                ]
+                sankey_layout_checks["cashflow_labels_do_not_overlap_or_clip"] = (
+                    cashflow_metrics["labelOverlaps"] == 0
+                    and cashflow_metrics["labelNodeOverlaps"] == 0
+                    and cashflow_metrics["clippedLabels"] == 0
+                )
+                sankey_layout_checks["cashflow_container_matches_svg_height"] = abs(
+                    cashflow_metrics["containerHeight"] - cashflow_metrics["renderedSvgHeight"]
+                ) <= 1
+
             sankey_interaction_checks = {
                 "flow_click_shows_transactions": False,
                 "node_click_shows_transactions": False,
@@ -719,6 +822,30 @@ def main():
                     lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="sankey-transfers-tab"]').get_attribute("aria-selected") == "true"
                     and len(current.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-link"]')) >= 4
                 )
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: any(
+                        node.get_attribute("data-sankey-node-name") == "External / unmatched"
+                        for node in current.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                    )
+                )
+                if args.device in {"iphone", "pixel"}:
+                    transfer_layout_metrics = sankey_mobile_layout_metrics(driver)
+                    sankey_mobile_measurements["transfers"] = transfer_layout_metrics
+                    sankey_layout_checks["transfers_has_readable_mobile_width"] = (
+                        transfer_layout_metrics["svgWidth"] >= 640
+                        and transfer_layout_metrics["scrollWidth"] > transfer_layout_metrics["containerWidth"] + 1
+                    )
+                    sankey_layout_checks["transfers_right_labels_reachable_by_swipe"] = transfer_layout_metrics[
+                        "rightmostLabelReachable"
+                    ]
+                    sankey_layout_checks["transfers_labels_do_not_overlap_or_clip"] = (
+                        transfer_layout_metrics["labelOverlaps"] == 0
+                        and transfer_layout_metrics["labelNodeOverlaps"] == 0
+                        and transfer_layout_metrics["clippedLabels"] == 0
+                    )
+                    sankey_layout_checks["transfers_container_matches_svg_height"] = abs(
+                        transfer_layout_metrics["containerHeight"] - transfer_layout_metrics["renderedSvgHeight"]
+                    ) <= 1
                 transfer_links = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-link"]')
                 paired_counts = [int(link.get_attribute("data-paired-transfer-count") or 0) for link in transfer_links]
                 transfer_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
@@ -1011,6 +1138,8 @@ def main():
                 "no_vue_warnings": not vue_warnings,
                 "recurring_quick_filters": filter_checks,
                 "sankey_interactions": sankey_interaction_checks,
+                "sankey_mobile_layout": sankey_layout_checks,
+                "sankey_mobile_measurements": sankey_mobile_measurements,
                 "transaction_grouping": transaction_group_checks,
                 "transaction_search_and_category_filter": transaction_filter_checks,
                 "spending_pie": spending_pie_checks,
@@ -1038,6 +1167,7 @@ def main():
                 and checks["no_vue_warnings"]
                 and all(filter_checks.values())
                 and all(sankey_interaction_checks.values())
+                and all(sankey_layout_checks.values())
                 and all(transaction_group_checks.values())
                 and all(transaction_filter_checks.values())
                 and all(spending_pie_checks.values())
