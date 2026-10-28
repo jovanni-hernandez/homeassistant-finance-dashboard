@@ -17,6 +17,10 @@ from database import (
     init_db,
     get_stored_accounts,
     get_stored_transactions,
+    get_manual_assets,
+    create_manual_asset,
+    update_manual_asset,
+    delete_manual_asset,
     get_category_rules_value,
     get_recurring_rules_value,
     set_category_rules_value,
@@ -101,6 +105,12 @@ class AccountTypeRequest(BaseModel):
 
 class AccountNicknameRequest(BaseModel):
     nickname: str = Field(max_length=80)
+
+
+class ManualAssetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    value: str = Field(min_length=1, max_length=50)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
 
 
 class PinUnlockRequest(BaseModel):
@@ -471,6 +481,56 @@ def api_get_accounts():
     except Exception as e:
         logger.error(f"Failed to query accounts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/manual-assets", dependencies=[Depends(verify_ha_auth)])
+def api_get_manual_assets():
+    try:
+        return {"assets": get_manual_assets()}
+    except Exception as exc:
+        logger.error("Failed to query manual assets (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not load manual assets.") from exc
+
+
+@app.post("/api/manual-assets", dependencies=[Depends(verify_ha_auth)])
+def api_create_manual_asset(payload: ManualAssetRequest):
+    try:
+        asset = create_manual_asset(payload.name, payload.value, payload.currency)
+        return {"status": "success", "asset": asset}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Failed to create manual asset (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not create the manual asset.") from exc
+
+
+@app.put("/api/manual-assets/{asset_id}", dependencies=[Depends(verify_ha_auth)])
+def api_update_manual_asset(asset_id: str, payload: ManualAssetRequest):
+    try:
+        asset = update_manual_asset(asset_id, payload.name, payload.value, payload.currency)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Manual asset not found")
+        return {"status": "success", "asset": asset}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update manual asset (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not update the manual asset.") from exc
+
+
+@app.delete("/api/manual-assets/{asset_id}", dependencies=[Depends(verify_ha_auth)])
+def api_delete_manual_asset(asset_id: str):
+    try:
+        if not delete_manual_asset(asset_id):
+            raise HTTPException(status_code=404, detail="Manual asset not found")
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to delete manual asset (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not remove the manual asset.") from exc
 
 
 @app.put("/api/accounts/{account_id}/type", dependencies=[Depends(verify_ha_auth)])

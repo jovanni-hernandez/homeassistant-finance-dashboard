@@ -6,6 +6,7 @@ View accounts and transactions, understand cash flow, and organize spending from
 
 - Account balances and cash-flow visualization across the full stored transaction history, loaded in pages.
 - Account classification for bank/cash, investments, credit cards, and loans, with net-worth totals grouped by currency.
+- Manual current-value assets for property and other items SimpleFIN does not cover, managed from a separate Assets menu and included in net worth.
 - Searchable, category-filterable transaction list grouped into pending and posted dates.
 - Editable transaction categories and automatic merchant rules. Manual category choices are preserved during sync.
 - Recurring-payment and subscription insights.
@@ -44,6 +45,8 @@ SimpleFIN reports balances but does not define a standard account-type field. Th
 Bank/cash and investment balances count as assets. Credit cards, loans, and other liabilities count as debts; debt balances are subtracted from assets even if the institution reports the amount owed as positive. Negative asset balances still reduce net worth. Totals are kept separate by currency; the dashboard does not convert between currencies. Imported balances are preserved when you choose an account type.
 
 You can set an optional nickname for each account in the same settings section. Nicknames are saved locally, retained during sync, and used in transaction details and cash-flow views; the bank-provided account name remains available in settings.
+
+Use the **Assets** menu to add, edit, or remove manual assets such as a home. Each entry has a name, current value, and currency. Values are stored separately from SimpleFIN accounts, included in net worth for their currency, and excluded from transaction and cash-flow views. A mortgage is tracked separately as a liability if you want it included in net worth. Manual assets store a current value only; they do not keep valuation history.
 
 ## Privacy and security
 

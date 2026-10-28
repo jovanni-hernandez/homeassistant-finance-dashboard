@@ -22,6 +22,7 @@ These instructions apply to the Home Assistant Finance Dashboard add-on in this 
 - Treat sync freshness as separate from HTTP success. Report returned transaction count, newest returned date, whether the stored date advanced, and any incomplete backfill.
 - Keep every SimpleFIN request at or below 24 hours. Persist the global sync cursor only after a window's response has been saved successfully. Limit global history backfill to seven sequential windows per run. When a new account is discovered, backfill its preceding 30 days in the same sync using sequential one-day windows grouped in batches of seven; persist per-account progress after each successful window and resume if interrupted.
 - Account type is separate from balance sign. Preserve the raw signed balance; net worth adds classified assets and subtracts the absolute balance of classified liabilities. Apply only high-confidence metadata/name suggestions automatically; keep ambiguous accounts unclassified and exclude them from net worth. Mark user-chosen types as manual and never overwrite them on sync.
+- Keep manual asset records in their own persistent table, separate from SimpleFIN accounts and transactions. Include their current value in net worth by currency, but never include them in transaction filtering, Sankey, or sync updates.
 - If Supervisor or host logs show storage I/O/media errors, do not retry image builds or filesystem repairs blindly. Preserve data and report the evidence first.
 
 ## Development and tests

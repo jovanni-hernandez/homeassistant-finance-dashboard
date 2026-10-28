@@ -102,6 +102,44 @@ class Account(Base):
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
 
+
+class ManualAsset(Base):
+    __tablename__ = "manual_assets"
+
+    id = Column(String, primary_key=True, index=True)
+    _name = Column("name", String, default="Asset")
+    _value = Column("value", String, default="0.00")
+    currency = Column(String, default="USD")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def name(self):
+        return decrypt_value(self._name)
+
+    @name.setter
+    def name(self, value):
+        self._name = encrypt_value(value)
+
+    @property
+    def value(self):
+        return decrypt_value(self._value)
+
+    @value.setter
+    def value(self, value):
+        self._value = encrypt_value(value)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "value": self.value,
+            "currency": self.currency or "USD",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class Transaction(Base):
     __tablename__ = "transactions"
 

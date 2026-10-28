@@ -174,6 +174,16 @@
                         <span class="font-medium">Dashboard</span>
                     </button>
                     <button
+                        @click="setView('assets')"
+                        class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
+                        :class="view === 'assets' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
+                    >
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 10.5L12 3l9 7.5M5.5 9v11h13V9M9 20v-6h6v6" />
+                        </svg>
+                        <span class="font-medium">Assets</span>
+                    </button>
+                    <button
                         @click="setView('settings')"
                         class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
                         :class="view === 'settings' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
@@ -358,7 +368,7 @@
                                 <span class="text-xs text-slate-500">Assets minus debts · grouped by currency</span>
                             </div>
                             <div v-if="netWorthByCurrency.length" class="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                                <div v-for="summary in netWorthByCurrency" :key="summary.currency" data-testid="net-worth-currency" :data-currency="summary.currency" class="rounded-lg bg-slate-50 px-3 py-2">
+                                <div v-for="summary in netWorthByCurrency" :key="summary.currency" data-testid="net-worth-currency" :data-currency="summary.currency" :data-assets-total="summary.assets" :data-net-worth-total="summary.netWorth" class="rounded-lg bg-slate-50 px-3 py-2">
                                     <div class="flex items-baseline justify-between gap-2">
                                         <span class="text-xs font-medium text-slate-600">{{ summary.currency }}</span>
                                         <strong class="text-sm" :class="summary.netWorth < 0 ? 'text-rose-700' : 'text-slate-900'">{{ formatCurrency(summary.netWorth, summary.currency) }}</strong>
@@ -676,6 +686,64 @@
                         </div>
                     </div>
                 </div>
+
+                <section v-else-if="view === 'assets'" data-testid="manual-assets-view" class="space-y-6">
+                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div>
+                            <h2 class="text-xl font-semibold text-slate-800">Manual assets</h2>
+                            <p class="mt-1 text-sm text-slate-500">Track values SimpleFIN does not provide, such as your home. These values count toward net worth by currency but are not part of transactions or cash-flow charts.</p>
+                        </div>
+
+                        <div v-if="manualAssetMessage" data-testid="manual-asset-message" class="mt-4 rounded-lg border px-4 py-3 text-sm" :class="manualAssetError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">
+                            {{ manualAssetMessage }}
+                        </div>
+
+                        <form data-testid="manual-asset-form" @submit.prevent="saveManualAsset" class="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                            <h3 class="text-base font-semibold text-slate-800">{{ editingManualAssetId ? 'Edit asset' : 'Add an asset' }}</h3>
+                            <div class="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr),minmax(9rem,0.7fr),minmax(6rem,0.4fr)]">
+                                <label class="block min-w-0 text-sm font-medium text-slate-700">
+                                    Asset name
+                                    <input v-model="manualAssetName" data-testid="manual-asset-name" type="text" maxlength="100" required placeholder="e.g. Home" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                                </label>
+                                <label class="block min-w-0 text-sm font-medium text-slate-700">
+                                    Current value
+                                    <input v-model="manualAssetValue" data-testid="manual-asset-value" type="number" min="0" step="any" required inputmode="decimal" placeholder="0.00" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                                </label>
+                                <label class="block min-w-0 text-sm font-medium text-slate-700">
+                                    Currency
+                                    <input v-model="manualAssetCurrency" data-testid="manual-asset-currency" type="text" maxlength="3" minlength="3" pattern="[A-Za-z]{3}" required aria-describedby="manual-asset-currency-help" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm uppercase shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                                </label>
+                            </div>
+                            <p id="manual-asset-currency-help" class="mt-2 text-xs text-slate-500">Use a three-letter currency code, such as USD. No currency conversion is applied.</p>
+                            <div class="mt-4 flex flex-col gap-2 sm:flex-row">
+                                <button type="submit" data-testid="manual-asset-save" :disabled="savingManualAsset" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60">
+                                    {{ savingManualAsset ? 'Saving…' : (editingManualAssetId ? 'Save changes' : 'Add asset') }}
+                                </button>
+                                <button v-if="editingManualAssetId" type="button" @click="resetManualAssetForm" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel edit</button>
+                            </div>
+                        </form>
+
+                        <div class="mt-5">
+                            <h3 class="text-base font-semibold text-slate-800">Your assets</h3>
+                            <div v-if="manualAssets.length" class="mt-3 divide-y divide-slate-200 rounded-xl border border-slate-200">
+                                <article v-for="asset in manualAssets" :key="asset.id" data-testid="manual-asset-row" :data-asset-id="asset.id" class="flex min-w-0 flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                                    <div class="min-w-0">
+                                        <h4 class="break-words text-sm font-semibold text-slate-900">{{ asset.name }}</h4>
+                                        <p class="mt-1 text-xs text-slate-500">Manual value · {{ asset.currency }} · Updated {{ formatDateTime(asset.updated_at) }}</p>
+                                    </div>
+                                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+                                        <strong class="text-base text-slate-900 sm:text-right">{{ formatCurrency(asset.value, asset.currency) }}</strong>
+                                        <div class="flex gap-2">
+                                            <button type="button" :aria-label="`Edit ${asset.name}`" @click="editManualAsset(asset)" class="min-h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 sm:flex-none">Edit</button>
+                                            <button type="button" :aria-label="`Remove ${asset.name}`" @click="removeManualAsset(asset)" class="min-h-10 flex-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100 sm:flex-none">Remove</button>
+                                        </div>
+                                    </div>
+                                </article>
+                            </div>
+                            <div v-else data-testid="manual-assets-empty" class="mt-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">No manual assets yet. Add one above to include it in net worth.</div>
+                        </div>
+                    </div>
+                </section>
 
                 <section v-else-if="view === 'settings'" class="space-y-6">
                     <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -1170,6 +1238,14 @@
                 const nowTick = ref(Date.now());
                 const accounts = ref([]);
                 const transactions = ref([]);
+                const manualAssets = ref([]);
+                const manualAssetName = ref('');
+                const manualAssetValue = ref('');
+                const manualAssetCurrency = ref('USD');
+                const editingManualAssetId = ref('');
+                const savingManualAsset = ref(false);
+                const manualAssetMessage = ref('');
+                const manualAssetError = ref(false);
                 const recurringItems = ref([]);
                 const recurringSummary = ref({ subscription_count: 0, recurring_bill_count: 0, recurring_income_count: 0, other_count: 0 });
                 const recurringGeneratedAt = ref(null);
@@ -2022,6 +2098,85 @@
                     }
                 };
 
+                const resetManualAssetForm = () => {
+                    editingManualAssetId.value = '';
+                    manualAssetName.value = '';
+                    manualAssetValue.value = '';
+                    manualAssetCurrency.value = 'USD';
+                    manualAssetMessage.value = '';
+                    manualAssetError.value = false;
+                };
+
+                const editManualAsset = (asset) => {
+                    editingManualAssetId.value = String(asset.id);
+                    manualAssetName.value = asset.name || '';
+                    manualAssetValue.value = String(asset.value ?? '');
+                    manualAssetCurrency.value = asset.currency || 'USD';
+                    manualAssetMessage.value = '';
+                    manualAssetError.value = false;
+                };
+
+                const saveManualAsset = async () => {
+                    savingManualAsset.value = true;
+                    manualAssetMessage.value = '';
+                    manualAssetError.value = false;
+                    const assetId = editingManualAssetId.value;
+                    const payload = {
+                        name: manualAssetName.value.trim(),
+                        value: String(manualAssetValue.value).trim(),
+                        currency: manualAssetCurrency.value.trim().toUpperCase(),
+                    };
+                    try {
+                        const response = await apiFetch(
+                            assetId ? `/api/manual-assets/${encodeURIComponent(assetId)}` : '/api/manual-assets',
+                            {
+                                method: assetId ? 'PUT' : 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                                body: JSON.stringify(payload),
+                            },
+                        );
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || data.message || `Failed to save asset (${response.status})`);
+                        if (assetId) {
+                            manualAssets.value = manualAssets.value.map((asset) => (
+                                String(asset.id) === assetId ? data.asset : asset
+                            ));
+                        } else if (data.asset) {
+                            manualAssets.value = [...manualAssets.value, data.asset];
+                        }
+                        resetManualAssetForm();
+                        manualAssetMessage.value = assetId ? 'Asset updated.' : 'Asset added.';
+                    } catch (err) {
+                        manualAssetError.value = true;
+                        manualAssetMessage.value = err.message;
+                    } finally {
+                        savingManualAsset.value = false;
+                    }
+                };
+
+                const removeManualAsset = async (asset) => {
+                    if (!window.confirm(`Remove ${asset.name} from your manual assets?`)) return;
+                    savingManualAsset.value = true;
+                    manualAssetMessage.value = '';
+                    manualAssetError.value = false;
+                    try {
+                        const response = await apiFetch(`/api/manual-assets/${encodeURIComponent(asset.id)}`, {
+                            method: 'DELETE',
+                            headers: { 'Accept': 'application/json' },
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || data.message || `Failed to remove asset (${response.status})`);
+                        manualAssets.value = manualAssets.value.filter((item) => String(item.id) !== String(asset.id));
+                        if (String(editingManualAssetId.value) === String(asset.id)) resetManualAssetForm();
+                        manualAssetMessage.value = 'Asset removed.';
+                    } catch (err) {
+                        manualAssetError.value = true;
+                        manualAssetMessage.value = err.message;
+                    } finally {
+                        savingManualAsset.value = false;
+                    }
+                };
+
                 const displayedTransactionGroups = computed(() => {
                     const pendingTransactions = [];
                     const postedByDate = new Map();
@@ -2074,6 +2229,7 @@
                 const setView = (nextView) => {
                     view.value = nextView;
                     drawerOpen.value = false;
+                    if (nextView === 'assets') window.scrollTo(0, 0);
                 };
 
                 const fetchStatus = async () => {
@@ -2107,18 +2263,23 @@
 
                 const fetchData = async () => {
                     try {
-                        const [accRes, allTransactions] = await Promise.all([
+                        const [accRes, allTransactions, manualAssetsRes] = await Promise.all([
                             apiFetch('/api/accounts'),
                             fetchAllTransactions(),
+                            apiFetch('/api/manual-assets'),
                         ]);
 
                         if (!accRes.ok) {
                             throw new Error(`Failed to fetch accounts: ${accRes.status}`);
                         }
+                        if (!manualAssetsRes.ok) {
+                            throw new Error(`Failed to fetch manual assets: ${manualAssetsRes.status}`);
+                        }
 
-                        const accData = await accRes.json();
+                        const [accData, manualAssetsData] = await Promise.all([accRes.json(), manualAssetsRes.json()]);
                         accounts.value = accData.accounts || [];
                         transactions.value = allTransactions;
+                        manualAssets.value = manualAssetsData.assets || [];
                         error.value = null;
                     } catch (err) {
                         error.value = err.message;
@@ -2483,6 +2644,16 @@
                             total.liabilities += Math.abs(balance);
                             total.classifiedCount += 1;
                         }
+                    });
+                    manualAssets.value.forEach((asset) => {
+                        const currency = asset.currency || 'USD';
+                        if (!totals.has(currency)) {
+                            totals.set(currency, { currency, assets: 0, liabilities: 0, classifiedCount: 0 });
+                        }
+                        const total = totals.get(currency);
+                        const value = Number.parseFloat(asset.value || 0);
+                        total.assets += Number.isFinite(value) ? value : 0;
+                        total.classifiedCount += 1;
                     });
                     return Array.from(totals.values())
                         .filter((total) => total.classifiedCount > 0)
@@ -3000,6 +3171,7 @@
                     drawerOpen,
                     accounts,
                     transactions,
+                    manualAssets,
                     recurringItems,
                     recurringSummary,
                     recurringGeneratedAt,
@@ -3093,6 +3265,13 @@
                     accountNicknameMessage,
                     accountNicknameError,
                     savingAccountNicknameId,
+                    manualAssetName,
+                    manualAssetValue,
+                    manualAssetCurrency,
+                    editingManualAssetId,
+                    savingManualAsset,
+                    manualAssetMessage,
+                    manualAssetError,
                     accountTypeLabel,
                     accountTypeSuggestionLabel,
                     displayAccountBalance,
@@ -3128,6 +3307,10 @@
                     saveAiSettings,
                     updateAccountType,
                     updateAccountNickname,
+                    saveManualAsset,
+                    resetManualAssetForm,
+                    editManualAsset,
+                    removeManualAsset,
                     buildCategoryDefaults,
                     buildAiCategoryDefaults,
                     openRecurringEdit,

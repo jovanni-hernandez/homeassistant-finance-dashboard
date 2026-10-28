@@ -1,5 +1,8 @@
 import logging
 import json
+import re
+from decimal import Decimal, InvalidOperation
+from uuid import uuid4
 from sqlalchemy import inspect, text
 from models import (
     ACCOUNT_TYPE_UNCLASSIFIED,
@@ -10,6 +13,7 @@ from models import (
     SessionLocal,
     Base,
     Account,
+    ManualAsset,
     Transaction,
     Setting,
 )
@@ -215,6 +219,100 @@ def set_account_nickname(account_id: str, nickname: str):
     except Exception as e:
         db.rollback()
         logger.error("Error setting account nickname (%s).", type(e).__name__)
+        raise
+    finally:
+        db.close()
+
+
+def _normalize_manual_asset(name: str, value: str, currency: str):
+    normalized_name = str(name or "").strip()
+    if not normalized_name or len(normalized_name) > 100:
+        raise ValueError("Asset name must contain 1 to 100 characters.")
+
+    try:
+        normalized_value = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("Asset value must be a valid number.") from exc
+    if not normalized_value.is_finite() or normalized_value < 0:
+        raise ValueError("Asset value must be a non-negative number.")
+    if normalized_value != 0 and normalized_value.adjusted() > 30:
+        raise ValueError("Asset value is too large.")
+    if normalized_value.as_tuple().exponent < -18:
+        raise ValueError("Asset value has too many decimal places.")
+    value_string = format(normalized_value, "f")
+    if len(value_string) > 40:
+        raise ValueError("Asset value is too large.")
+
+    normalized_currency = str(currency or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", normalized_currency):
+        raise ValueError("Currency must be a three-letter code, such as USD.")
+
+    return normalized_name, value_string, normalized_currency
+
+
+def get_manual_assets():
+    db = SessionLocal()
+    try:
+        return [asset.to_dict() for asset in db.query(ManualAsset).order_by(ManualAsset.created_at.asc()).all()]
+    finally:
+        db.close()
+
+
+def create_manual_asset(name: str, value: str, currency: str = "USD"):
+    normalized_name, normalized_value, normalized_currency = _normalize_manual_asset(name, value, currency)
+    db = SessionLocal()
+    try:
+        asset = ManualAsset(
+            id=str(uuid4()),
+            name=normalized_name,
+            value=normalized_value,
+            currency=normalized_currency,
+        )
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+        return asset.to_dict()
+    except Exception as exc:
+        db.rollback()
+        logger.error("Error creating manual asset (%s).", type(exc).__name__)
+        raise
+    finally:
+        db.close()
+
+
+def update_manual_asset(asset_id: str, name: str, value: str, currency: str = "USD"):
+    normalized_name, normalized_value, normalized_currency = _normalize_manual_asset(name, value, currency)
+    db = SessionLocal()
+    try:
+        asset = db.query(ManualAsset).filter(ManualAsset.id == str(asset_id)).first()
+        if not asset:
+            return None
+        asset.name = normalized_name
+        asset.value = normalized_value
+        asset.currency = normalized_currency
+        db.commit()
+        db.refresh(asset)
+        return asset.to_dict()
+    except Exception as exc:
+        db.rollback()
+        logger.error("Error updating manual asset (%s).", type(exc).__name__)
+        raise
+    finally:
+        db.close()
+
+
+def delete_manual_asset(asset_id: str):
+    db = SessionLocal()
+    try:
+        asset = db.query(ManualAsset).filter(ManualAsset.id == str(asset_id)).first()
+        if not asset:
+            return False
+        db.delete(asset)
+        db.commit()
+        return True
+    except Exception as exc:
+        db.rollback()
+        logger.error("Error deleting manual asset (%s).", type(exc).__name__)
         raise
     finally:
         db.close()

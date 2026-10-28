@@ -141,6 +141,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/status",
         "api/pin/status",
         "api/accounts",
+        "api/manual-assets",
         "api/transactions",
         "api/category-rules",
         "api/recurring-rules",
@@ -874,6 +875,116 @@ def main():
                 and "$172,350.50" in net_worth_text
             )
 
+            assets_screenshot = None
+            if test_mode == "real-fastapi-isolated-db":
+                manual_asset_checks = {
+                    "sidebar_assets_menu_opens_manager": False,
+                    "assets_view_opens_at_top": False,
+                    "empty_state_is_clear": False,
+                    "asset_can_be_added": False,
+                    "asset_can_be_edited": False,
+                    "asset_value_updates_net_worth": False,
+                    "asset_can_be_removed": False,
+                    "net_worth_reverts_after_removal": False,
+                    "manual_assets_do_not_clutter_dashboard": False,
+                    "manual_assets_excluded_from_transactions_and_sankey": False,
+                    "assets_page_no_horizontal_overflow": True,
+                }
+                baseline_asset_card = driver.find_element(
+                    By.CSS_SELECTOR,
+                    '[data-testid="net-worth-currency"][data-currency="USD"]',
+                )
+                baseline_asset_total = float(baseline_asset_card.get_attribute("data-assets-total"))
+
+                driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+                assets_menu_button = wait.until(
+                    EC.element_to_be_clickable((By.XPATH, "//button[.//span[text()='Assets']]"))
+                )
+                assets_menu_button.click()
+                assets_view = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="manual-assets-view"]')))
+                manual_asset_checks["sidebar_assets_menu_opens_manager"] = "Manual assets" in assets_view.text
+                manual_asset_checks["assets_view_opens_at_top"] = driver.execute_script("return window.scrollY === 0")
+                manual_asset_checks["empty_state_is_clear"] = bool(
+                    driver.find_elements(By.CSS_SELECTOR, '[data-testid="manual-assets-empty"]')
+                )
+                assets_screenshot = screenshot.with_name(screenshot.stem + "-assets" + screenshot.suffix)
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-name"]').send_keys("Selenium Home")
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-value"]').send_keys("300000")
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-currency"]').clear()
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-currency"]').send_keys("USD")
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-save"]').click()
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: len(current.find_elements(By.CSS_SELECTOR, '[data-testid="manual-asset-row"]')) == 1
+                )
+                manual_asset_checks["asset_can_be_added"] = (
+                    "Selenium Home" in driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-row"]').text
+                    and "$300,000.00" in driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-row"]').text
+                )
+                driver.save_screenshot(str(assets_screenshot))
+                manual_asset_checks["assets_page_no_horizontal_overflow"] = not driver.execute_script(
+                    "return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1"
+                )
+
+                driver.find_element(By.CSS_SELECTOR, '[aria-label="Edit Selenium Home"]').click()
+                value_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-value"]')
+                value_input.clear()
+                value_input.send_keys("325000")
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-save"]').click()
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: "$325,000.00" in current.find_element(By.CSS_SELECTOR, '[data-testid="manual-asset-row"]').text
+                )
+                manual_asset_checks["asset_can_be_edited"] = True
+
+                driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+                driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
+                WebDriverWait(driver, args.timeout).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="net-worth-summary"]'))
+                )
+                updated_asset_card = driver.find_element(
+                    By.CSS_SELECTOR,
+                    '[data-testid="net-worth-currency"][data-currency="USD"]',
+                )
+                updated_asset_total = float(updated_asset_card.get_attribute("data-assets-total"))
+                manual_asset_checks["asset_value_updates_net_worth"] = abs(
+                    updated_asset_total - baseline_asset_total - 325000
+                ) < 0.02
+                manual_asset_checks["manual_assets_do_not_clutter_dashboard"] = not driver.find_elements(
+                    By.CSS_SELECTOR,
+                    '[data-testid="manual-asset-row"]',
+                )
+                manual_asset_checks["manual_assets_excluded_from_transactions_and_sankey"] = (
+                    all("Selenium Home" not in row.text for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector))
+                    and all(
+                        "Selenium Home" not in (node.get_attribute("data-sankey-node-name") or "")
+                        for node in driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                    )
+                )
+
+                driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+                driver.find_element(By.XPATH, "//button[.//span[text()='Assets']]").click()
+                driver.find_element(By.CSS_SELECTOR, '[aria-label="Remove Selenium Home"]').click()
+                WebDriverWait(driver, args.timeout).until(EC.alert_is_present()).accept()
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: bool(current.find_elements(By.CSS_SELECTOR, '[data-testid="manual-assets-empty"]'))
+                )
+                manual_asset_checks["asset_can_be_removed"] = True
+
+                driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+                driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
+                WebDriverWait(driver, args.timeout).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="net-worth-summary"]'))
+                )
+                final_asset_card = driver.find_element(
+                    By.CSS_SELECTOR,
+                    '[data-testid="net-worth-currency"][data-currency="USD"]',
+                )
+                final_asset_total = float(final_asset_card.get_attribute("data-assets-total"))
+                manual_asset_checks["net_worth_reverts_after_removal"] = abs(
+                    final_asset_total - baseline_asset_total
+                ) < 0.02
+            else:
+                manual_asset_checks = {"live_asset_mutation_skipped": True}
+
             logs = driver.get_log("browser")
             def redact_log(message: str) -> str:
                 if ingress_entry:
@@ -904,6 +1015,7 @@ def main():
                 "transaction_search_and_category_filter": transaction_filter_checks,
                 "spending_pie": spending_pie_checks,
                 "account_types_and_net_worth": account_type_checks,
+                "manual_assets": manual_asset_checks,
                 "transaction_description_fits_card": transaction_description_fits_card,
                 "ha_theme_auto_detection": theme_checks,
                 "custom_categories": custom_category_checks,
@@ -930,6 +1042,7 @@ def main():
                 and all(transaction_filter_checks.values())
                 and all(spending_pie_checks.values())
                 and all(account_type_checks.values())
+                and all(manual_asset_checks.values())
                 and transaction_description_fits_card
                 and all(theme_checks.values())
                 and all(custom_category_checks.values())
@@ -955,6 +1068,7 @@ def main():
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,
                 "spending_pie_screenshot": str(spending_pie_screenshot) if spending_pie_screenshot else None,
                 "dark_mode_screenshot": str(dark_mode_screenshot) if dark_mode_screenshot else None,
+                "assets_screenshot": str(assets_screenshot) if assets_screenshot else None,
                 "checks": checks,
                 "external_script_urls": external_script_urls,
                 "severe_browser_errors": severe,
