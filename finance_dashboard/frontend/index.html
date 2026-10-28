@@ -372,7 +372,7 @@
                                 data-testid="account-filter-card"
                                 :data-account-id="account.id"
                                 :aria-pressed="selectedAccountIds.includes(String(account.id))"
-                                :aria-label="`Filter transactions by ${account.name} at ${account.org}${selectedAccountIds.includes(String(account.id)) ? ', selected' : ''}`"
+                                :aria-label="`Filter transactions by ${account.nickname || account.name} at ${account.org}${selectedAccountIds.includes(String(account.id)) ? ', selected' : ''}`"
                                 @click="toggleAccountFilter(account.id)"
                                 class="min-w-0 cursor-pointer rounded-xl border bg-white p-2.5 text-left shadow-sm transition sm:p-3"
                                 :class="selectedAccountIds.includes(String(account.id)) ? 'border-sky-500 ring-2 ring-sky-200' : 'border-slate-200 hover:border-sky-300'"
@@ -380,7 +380,7 @@
                                 <div class="flex min-w-0 items-start justify-between gap-2">
                                     <div class="min-w-0 flex-1">
                                         <div class="truncate text-[10px] uppercase tracking-wide text-slate-500">{{ account.org }}</div>
-                                        <div class="mt-0.5 truncate text-sm font-semibold text-slate-900">{{ account.name }}</div>
+                                        <div class="mt-0.5 truncate text-sm font-semibold text-slate-900">{{ account.nickname || account.name }}</div>
                                     </div>
                                     <div data-testid="account-balance" class="shrink-0 whitespace-nowrap text-right text-sm font-bold" :class="accountBalanceClass(account)">{{ displayAccountBalance(account) }}</div>
                                 </div>
@@ -758,19 +758,38 @@
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                             <div>
                                 <h3 class="text-lg font-semibold text-slate-800">Account types and net worth</h3>
-                                <p class="mt-1 text-sm text-slate-500">SimpleFIN does not standardize account types. Review suggestions, then classify assets and debts; unclassified accounts are excluded from net worth.</p>
+                                <p class="mt-1 text-sm text-slate-500">SimpleFIN does not standardize account types. Clear account clues are classified automatically; review ambiguous accounts. Manual choices always win.</p>
                             </div>
                         </div>
                         <div v-if="accountTypeMessage" class="mt-3 rounded-lg border px-3 py-2 text-sm" :class="accountTypeError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">
                             {{ accountTypeMessage }}
                         </div>
+                        <div v-if="accountNicknameMessage" class="mt-3 rounded-lg border px-3 py-2 text-sm" :class="accountNicknameError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">
+                            {{ accountNicknameMessage }}
+                        </div>
                         <div class="mt-4 divide-y divide-slate-200 rounded-xl border border-slate-200">
-                            <div v-for="account in accounts" :key="account.id" data-testid="account-type-row" :data-account-id="account.id" class="grid min-w-0 gap-2 p-3 sm:grid-cols-[minmax(0,1fr),minmax(11rem,auto)] sm:items-center sm:px-4">
+                            <div v-for="account in accounts" :key="account.id" data-testid="account-type-row" :data-account-id="account.id" class="grid min-w-0 gap-2 p-3 sm:grid-cols-[minmax(0,1fr),minmax(9rem,0.8fr),minmax(11rem,auto)] sm:items-center sm:px-4">
                                 <div class="min-w-0">
-                                    <div class="truncate text-sm font-medium text-slate-800">{{ account.name }}</div>
-                                    <div class="truncate text-xs text-slate-500">{{ account.org }} · Current balance {{ displayAccountBalance(account) }}</div>
-                                    <div v-if="account.account_type_suggestion !== 'unclassified'" class="mt-1 text-xs text-amber-700">Suggested type: {{ accountTypeSuggestionLabel(account) }} · Review before including in net worth.</div>
+                                    <div class="truncate text-sm font-medium text-slate-800">{{ account.nickname || account.name }}</div>
+                                    <div v-if="account.nickname" class="truncate text-xs text-slate-500">{{ account.org }} · {{ account.name }}</div>
+                                    <div v-else class="truncate text-xs text-slate-500">{{ account.org }}</div>
+                                    <div class="mt-0.5 text-xs text-slate-500">Current balance {{ displayAccountBalance(account) }}</div>
+                                    <div v-if="account.account_type_source === 'auto' && account.account_type !== 'unclassified'" class="mt-1 text-xs text-slate-500">Auto-classified as {{ accountTypeLabel(account.account_type) }}.</div>
+                                    <div v-else-if="account.account_type_suggestion !== 'unclassified'" class="mt-1 text-xs text-amber-700">Suggested type: {{ accountTypeSuggestionLabel(account) }} · Choose to include in net worth.</div>
                                 </div>
+                                <label class="min-w-0">
+                                    <span class="sr-only">Nickname for {{ account.name }}</span>
+                                    <input
+                                        :value="account.nickname || ''"
+                                        :data-testid="`account-nickname-input-${account.id}`"
+                                        :aria-label="`Nickname for ${account.name}`"
+                                        maxlength="80"
+                                        placeholder="Optional nickname"
+                                        :disabled="savingAccountNicknameId === String(account.id)"
+                                        @change="updateAccountNickname(account.id, $event.target.value)"
+                                        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:opacity-60"
+                                    />
+                                </label>
                                 <label class="min-w-0">
                                     <span class="sr-only">Account type for {{ account.name }}</span>
                                     <select
@@ -1215,6 +1234,9 @@
                 const accountTypeMessage = ref('');
                 const accountTypeError = ref(false);
                 const savingAccountTypeId = ref('');
+                const accountNicknameMessage = ref('');
+                const accountNicknameError = ref(false);
+                const savingAccountNicknameId = ref('');
                 const selectedMonth = ref('');
                 const monthSelectionTouched = ref(false);
                 const visibleTransactionLimit = ref(15);
@@ -1961,6 +1983,38 @@
                     }
                 };
 
+                const updateAccountNickname = async (accountId, nickname) => {
+                    const accountKey = String(accountId);
+                    savingAccountNicknameId.value = accountKey;
+                    accountNicknameMessage.value = '';
+                    accountNicknameError.value = false;
+                    try {
+                        const response = await apiFetch(`/api/accounts/${encodeURIComponent(accountKey)}/nickname`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify({ nickname }),
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || data.message || `Failed to save nickname (${response.status})`);
+                        if (data.account) {
+                            accounts.value = accounts.value.map((account) => (
+                                String(account.id) === accountKey ? data.account : account
+                            ));
+                            transactions.value = transactions.value.map((transaction) => (
+                                String(transaction.account_id) === accountKey
+                                    ? { ...transaction, account_nickname: data.account.nickname || '' }
+                                    : transaction
+                            ));
+                        }
+                        accountNicknameMessage.value = 'Account nickname saved.';
+                    } catch (err) {
+                        accountNicknameError.value = true;
+                        accountNicknameMessage.value = err.message;
+                    } finally {
+                        savingAccountNicknameId.value = '';
+                    }
+                };
+
                 const displayedTransactionGroups = computed(() => {
                     const pendingTransactions = [];
                     const postedByDate = new Map();
@@ -2025,21 +2079,39 @@
                     }
                 };
 
+                const fetchAllTransactions = async () => {
+                    const pageSize = 500;
+                    const allTransactions = [];
+                    let offset = 0;
+                    let expectedTotal = null;
+                    while (expectedTotal === null || offset < expectedTotal) {
+                        const response = await apiFetch(`/api/transactions?limit=${pageSize}&offset=${offset}`);
+                        if (!response.ok) throw new Error(`Failed to fetch transactions: ${response.status}`);
+                        const data = await response.json();
+                        const page = Array.isArray(data.transactions) ? data.transactions : [];
+                        allTransactions.push(...page);
+                        const total = Number(data.total);
+                        expectedTotal = Number.isFinite(total) && total >= 0 ? total : null;
+                        offset += page.length;
+                        if (!page.length || (expectedTotal === null && page.length < pageSize)) break;
+                    }
+                    return allTransactions;
+                };
+
                 const fetchData = async () => {
                     try {
-                        const [accRes, txRes] = await Promise.all([
+                        const [accRes, allTransactions] = await Promise.all([
                             apiFetch('/api/accounts'),
-                            apiFetch('/api/transactions'),
+                            fetchAllTransactions(),
                         ]);
 
-                        if (!accRes.ok || !txRes.ok) {
-                            throw new Error(`Failed to fetch from DB: accounts ${accRes.status}, transactions ${txRes.status}`);
+                        if (!accRes.ok) {
+                            throw new Error(`Failed to fetch accounts: ${accRes.status}`);
                         }
 
                         const accData = await accRes.json();
-                        const txData = await txRes.json();
                         accounts.value = accData.accounts || [];
-                        transactions.value = txData.transactions || [];
+                        transactions.value = allTransactions;
                         error.value = null;
                     } catch (err) {
                         error.value = err.message;
@@ -2351,7 +2423,11 @@
                 };
 
                 const isTransferLike = (tx) => {
-                    const haystack = `${tx.payee || ''} ${tx.description || ''} ${tx.category || ''}`.toLowerCase();
+                    const explicitCategory = String(tx.category || '').trim().toLocaleLowerCase();
+                    if (explicitCategory && explicitCategory !== 'uncategorized') {
+                        return /\btransfers?\b/.test(explicitCategory);
+                    }
+                    const haystack = `${tx.payee || ''} ${tx.description || ''}`.toLowerCase();
                     return [
                         'transfer',
                         'zelle',
@@ -2365,7 +2441,7 @@
                     ].some((pattern) => haystack.includes(pattern));
                 };
 
-                const transactionAccountName = (tx) => tx.account_name || tx.org || 'Account';
+                const transactionAccountName = (tx) => tx.account_nickname || tx.account_name || tx.org || 'Account';
                 const accountTypeLabel = (type) => accountTypeLabels[type] || accountTypeLabels.unclassified;
                 const accountTypeSuggestionLabel = (account) => accountTypeLabel(account?.account_type_suggestion);
                 const numericAccountBalance = (account) => {
@@ -3007,6 +3083,9 @@
                     accountTypeMessage,
                     accountTypeError,
                     savingAccountTypeId,
+                    accountNicknameMessage,
+                    accountNicknameError,
+                    savingAccountNicknameId,
                     accountTypeLabel,
                     accountTypeSuggestionLabel,
                     displayAccountBalance,
@@ -3041,6 +3120,7 @@
                     saveCategoryRules,
                     saveAiSettings,
                     updateAccountType,
+                    updateAccountNickname,
                     buildCategoryDefaults,
                     buildAiCategoryDefaults,
                     openRecurringEdit,

@@ -13,7 +13,7 @@ DEFAULT_CATEGORY_RULES = [
     {"category": "Pets", "patterns": ["aspca pet insurance", "banfield", "pet insurance", "veterinary", "vet clinic", "pet hospital", "petco", "petsmart", "chewy"]},
     {"category": "Childcare", "patterns": ["ivymount school", "childcare", "child care", "daycare", "day care", "aftercare", "babysitter", "preschool"]},
     {"category": "Dining", "patterns": ["restaurant", "coffee", "cafe", "mcdonald", "chipotle", "starbucks", "doordash", "uber eats", "ubereats", "grubhub", "pizza"]},
-    {"category": "Housing", "patterns": ["rent", "mortgage", "property", "hoa", "landlord", "apartment"]},
+    {"category": "Housing", "patterns": ["rent", "mortgage", "property", "hoa", "landlord", "apartment", "rosegate"]},
     {"category": "Utilities", "patterns": ["electric", "water", "natural gas", "internet", "phone", "utility", "spectrum", "verizon", "xfinity", "att"]},
     {"category": "Transport", "patterns": ["gas station", "fuel", "uber", "lyft", "parking", "toll", "metro", "transit", "shell", "chevron", "exxon"]},
     {"category": "Shopping", "patterns": ["amazon", "target", "costco", "shopping", "store", "walmart", "best buy", "ebay"]},
@@ -39,6 +39,8 @@ def detect_category(text: str, amount: float, existing: str | None) -> str:
         return existing
 
     haystack = normalize(text)
+    if "rosegate" in haystack:
+        return "Housing"
     for category, words in [(item["category"], item["patterns"]) for item in DEFAULT_CATEGORY_RULES]:
         if any(word in haystack for word in words):
             return category

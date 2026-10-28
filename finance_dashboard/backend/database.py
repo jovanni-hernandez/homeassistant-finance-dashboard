@@ -3,6 +3,8 @@ import json
 from sqlalchemy import inspect, text
 from models import (
     ACCOUNT_TYPE_UNCLASSIFIED,
+    ACCOUNT_TYPE_SOURCE_AUTO,
+    ACCOUNT_TYPE_SOURCE_MANUAL,
     ACCOUNT_TYPE_VALUES,
     engine,
     SessionLocal,
@@ -46,6 +48,14 @@ def _ensure_account_type_columns():
                 "ALTER TABLE accounts ADD COLUMN account_type_suggestion TEXT NOT NULL DEFAULT 'unclassified'"
             ))
             logger.info("Added accounts.account_type_suggestion.")
+        if "account_type_source" not in columns:
+            conn.execute(text(
+                "ALTER TABLE accounts ADD COLUMN account_type_source TEXT NOT NULL DEFAULT 'auto'"
+            ))
+            logger.info("Added accounts.account_type_source.")
+        if "nickname" not in columns:
+            conn.execute(text("ALTER TABLE accounts ADD COLUMN nickname TEXT NOT NULL DEFAULT ''"))
+            logger.info("Added accounts.nickname.")
 
 
 def save_simplefin_data(data):
@@ -74,8 +84,9 @@ def save_simplefin_data(data):
                     name=name,
                     balance=balance,
                     currency=currency,
-                    account_type=ACCOUNT_TYPE_UNCLASSIFIED,
+                    account_type=suggestion,
                     account_type_suggestion=suggestion,
+                    account_type_source=ACCOUNT_TYPE_SOURCE_AUTO,
                 )
                 db.add(db_account)
             else:
@@ -84,6 +95,9 @@ def save_simplefin_data(data):
                 db_account.balance = balance
                 db_account.currency = currency
                 db_account.account_type_suggestion = suggestion
+                if db_account.account_type_source != ACCOUNT_TYPE_SOURCE_MANUAL:
+                    db_account.account_type = suggestion
+                    db_account.account_type_source = ACCOUNT_TYPE_SOURCE_AUTO
 
             transactions = acc.get("transactions", [])
             for tx in transactions:
@@ -174,6 +188,7 @@ def set_account_type(account_id: str, account_type: str):
         if not account:
             return None
         account.account_type = normalized_type
+        account.account_type_source = ACCOUNT_TYPE_SOURCE_MANUAL
         db.commit()
         return account.to_dict()
     except Exception as e:
@@ -184,10 +199,31 @@ def set_account_type(account_id: str, account_type: str):
         db.close()
 
 
-def get_stored_transactions(limit=100):
+def set_account_nickname(account_id: str, nickname: str):
+    normalized_nickname = str(nickname or "").strip()
+    if len(normalized_nickname) > 80:
+        raise ValueError("Account nickname must be 80 characters or fewer.")
+
     db = SessionLocal()
     try:
-        transactions = db.query(Transaction).order_by(Transaction.date.desc()).limit(limit).all()
+        account = db.query(Account).filter(Account.id == str(account_id)).first()
+        if not account:
+            return None
+        account.nickname = normalized_nickname
+        db.commit()
+        return account.to_dict()
+    except Exception as e:
+        db.rollback()
+        logger.error("Error setting account nickname (%s).", type(e).__name__)
+        raise
+    finally:
+        db.close()
+
+
+def get_stored_transactions(limit=500, offset=0):
+    db = SessionLocal()
+    try:
+        transactions = db.query(Transaction).order_by(Transaction.date.desc()).offset(offset).limit(limit).all()
         return [tx.to_dict() for tx in transactions]
     finally:
         db.close()

@@ -25,7 +25,8 @@ os.chdir(BACKEND)
 
 import database  # noqa: E402
 import simplefin  # noqa: E402
-from database import init_db, save_simplefin_data, set_account_type  # noqa: E402
+import category_analysis  # noqa: E402
+from database import init_db, save_simplefin_data, set_account_nickname, set_account_type  # noqa: E402
 from models import Account, SessionLocal, Setting, Transaction  # noqa: E402
 
 init_db()
@@ -50,7 +51,21 @@ class AccountTypeTests(unittest.TestCase):
         self.assertEqual(simplefin.suggest_account_type({"name": "IRA Brokerage"}), "investment")
         self.assertEqual(simplefin.suggest_account_type({"name": "Mortgage Loan"}), "loan")
         self.assertEqual(simplefin.suggest_account_type({"name": "Checking"}), "bank_account")
+        self.assertEqual(simplefin.suggest_account_type({"name": "Low Checkings"}), "bank_account")
         self.assertEqual(simplefin.suggest_account_type({"name": "Mystery", "balance": "-4000.00"}), "unclassified")
+
+    def test_rosegate_is_classified_as_housing_even_with_transfer_wording(self):
+        self.assertEqual(
+            simplefin.categorize_transaction({
+                "payee": "Rosegate",
+                "description": "Monthly mortgage transfer payment",
+            }),
+            "Housing",
+        )
+        self.assertEqual(
+            category_analysis.detect_category("Rosegate monthly mortgage transfer", -3100, "Uncategorized"),
+            "Housing",
+        )
 
     def test_classification_migrates_old_accounts_and_manual_type_survives_sync(self):
         legacy_db = Path(TEST_DATA.name) / "legacy.sqlite"
@@ -67,9 +82,9 @@ class AccountTypeTests(unittest.TestCase):
                 database._ensure_account_type_columns()
             with legacy_engine.connect() as connection:
                 row = connection.execute(text(
-                    "SELECT account_type, account_type_suggestion FROM accounts WHERE id = 'old'"
+                    "SELECT account_type, account_type_suggestion, account_type_source, nickname FROM accounts WHERE id = 'old'"
                 )).one()
-            self.assertEqual(tuple(row), ("unclassified", "unclassified"))
+            self.assertEqual(tuple(row), ("unclassified", "unclassified", "auto", ""))
         finally:
             legacy_engine.dispose()
 
@@ -85,12 +100,14 @@ class AccountTypeTests(unittest.TestCase):
         db = SessionLocal()
         try:
             account = db.query(Account).filter(Account.id == "venture").one()
-            self.assertEqual(account.account_type, "unclassified")
+            self.assertEqual(account.account_type, "credit_card")
             self.assertEqual(account.account_type_suggestion, "credit_card")
+            self.assertEqual(account.account_type_source, "auto")
         finally:
             db.close()
 
         set_account_type("venture", "credit_card")
+        set_account_nickname("venture", "Travel card")
         save_simplefin_data({"accounts": [{
             "id": "venture",
             "org": {"name": "Capital One"},
@@ -104,7 +121,27 @@ class AccountTypeTests(unittest.TestCase):
         try:
             account = db.query(Account).filter(Account.id == "venture").one()
             self.assertEqual(account.account_type, "credit_card")
+            self.assertEqual(account.account_type_source, "manual")
+            self.assertEqual(account.nickname, "Travel card")
             self.assertEqual(account.balance, "3900.00")
+        finally:
+            db.close()
+
+    def test_account_nickname_can_be_cleared(self):
+        save_simplefin_data({"accounts": [{
+            "id": "checking",
+            "org": {"name": "Bank"},
+            "name": "Checking",
+            "balance": "10.00",
+            "currency": "USD",
+            "transactions": [],
+        }]})
+        set_account_nickname("checking", "Bills account")
+        set_account_nickname("checking", "")
+        db = SessionLocal()
+        try:
+            account = db.query(Account).filter(Account.id == "checking").one()
+            self.assertEqual(account.nickname, "")
         finally:
             db.close()
 

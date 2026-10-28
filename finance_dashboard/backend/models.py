@@ -13,6 +13,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 ACCOUNT_TYPE_UNCLASSIFIED = "unclassified"
+ACCOUNT_TYPE_SOURCE_AUTO = "auto"
+ACCOUNT_TYPE_SOURCE_MANUAL = "manual"
 ACCOUNT_TYPE_VALUES = frozenset({
     ACCOUNT_TYPE_UNCLASSIFIED,
     "bank_account",
@@ -44,10 +46,12 @@ class Account(Base):
     id = Column(String, primary_key=True, index=True)
     _org = Column("org", String, default="Unknown")
     _name = Column("name", String, default="Account")
+    _nickname = Column("nickname", String, default="")
     _balance = Column("balance", String, default="0.00")
     currency = Column(String, default="USD")
     account_type = Column(String, default=ACCOUNT_TYPE_UNCLASSIFIED, nullable=False)
     account_type_suggestion = Column(String, default=ACCOUNT_TYPE_UNCLASSIFIED, nullable=False)
+    account_type_source = Column(String, default=ACCOUNT_TYPE_SOURCE_AUTO, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     transactions = relationship("Transaction", back_populates="account", cascade="all, delete-orphan")
@@ -69,6 +73,14 @@ class Account(Base):
         self._name = encrypt_value(value)
 
     @property
+    def nickname(self):
+        return decrypt_value(self._nickname)
+
+    @nickname.setter
+    def nickname(self, value):
+        self._nickname = encrypt_value(value)
+
+    @property
     def balance(self):
         return decrypt_value(self._balance)
 
@@ -81,10 +93,12 @@ class Account(Base):
             "id": self.id,
             "org": self.org if self.org and self.org.strip().lower() != "unknown" else (self.name or "Account"),
             "name": self.name,
+            "nickname": self.nickname or "",
             "balance": self.balance,
             "currency": self.currency,
             "account_type": self.account_type or ACCOUNT_TYPE_UNCLASSIFIED,
             "account_type_suggestion": self.account_type_suggestion or ACCOUNT_TYPE_UNCLASSIFIED,
+            "account_type_source": self.account_type_source or ACCOUNT_TYPE_SOURCE_AUTO,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None
         }
 
@@ -140,6 +154,7 @@ class Transaction(Base):
             "id": self.id,
             "account_id": self.account_id,
             "account_name": account_name,
+            "account_nickname": self.account.nickname if self.account else "",
             "org": self.account.org if self.account and self.account.org and self.account.org.strip().lower() != "unknown" else account_name,
             "date": self.date,
             "amount": self.amount,

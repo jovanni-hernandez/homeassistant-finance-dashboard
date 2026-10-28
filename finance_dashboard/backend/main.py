@@ -22,6 +22,8 @@ from database import (
     set_category_rules_value,
     set_recurring_rules_value,
     set_account_type,
+    set_account_nickname,
+    get_transaction_count,
     set_transaction_category,
 )
 import pin_auth
@@ -95,6 +97,10 @@ class TransactionCategoryRequest(BaseModel):
 
 class AccountTypeRequest(BaseModel):
     account_type: str = Field(min_length=1, max_length=40)
+
+
+class AccountNicknameRequest(BaseModel):
+    nickname: str = Field(max_length=80)
 
 
 class PinUnlockRequest(BaseModel):
@@ -483,11 +489,32 @@ def api_set_account_type(account_id: str, payload: AccountTypeRequest):
         raise HTTPException(status_code=400, detail="Could not update the account type.") from exc
 
 
+@app.put("/api/accounts/{account_id}/nickname", dependencies=[Depends(verify_ha_auth)])
+def api_set_account_nickname(account_id: str, payload: AccountNicknameRequest):
+    try:
+        account = set_account_nickname(account_id, payload.nickname)
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return {"status": "success", "account": account}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update account nickname (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not update the account nickname.") from exc
+
+
 @app.get("/api/transactions", dependencies=[Depends(verify_ha_auth)])
-def api_get_transactions(limit: int = Query(default=100, ge=1, le=500)):
+def api_get_transactions(limit: int = Query(default=500, ge=1, le=500), offset: int = Query(default=0, ge=0)):
     """Retrieve financial transactions from primary database."""
     try:
-        return {"transactions": get_stored_transactions(limit=limit)}
+        return {
+            "transactions": get_stored_transactions(limit=limit, offset=offset),
+            "total": get_transaction_count(),
+            "limit": limit,
+            "offset": offset,
+        }
     except Exception as e:
         logger.error(f"Failed to query transactions: {e}")
         raise HTTPException(status_code=500, detail=str(e))

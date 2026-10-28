@@ -280,6 +280,23 @@ def main():
                               transfer("test-transfer-savings-checking-in", "Checking", "test-account-checking-main", 2468.02, 10),
                               transfer("test-transfer-unmatched-out", "Checking", "test-account-checking-main", -321.09, -5)
                             );
+                            if (!payload.transactions.some((tx) => tx.id === "test-mortgage-transfer")) {
+                              const source = payload.transactions[0];
+                              payload.transactions.push({
+                                id: "test-mortgage-transfer",
+                                account_id: source.account_id,
+                                account_name: source.account_name,
+                                account_nickname: source.account_nickname,
+                                org: source.org,
+                                date: source.date,
+                                amount: "-3100.00",
+                                payee: "Test Mortgage Servicer",
+                                description: "Mortgage transfer payment",
+                                category: "Housing",
+                                pending: false
+                              });
+                            }
+                            payload.total = payload.transactions.length;
                           }
                           const headers = new Headers(response.headers);
                           headers.delete("content-length");
@@ -424,6 +441,7 @@ def main():
                 "category_slice_filters_and_reselect_clears": False,
                 "transfer_slice_filters_transfer_entries": False,
                 "phone_layout_has_no_horizontal_overflow": True,
+                "mortgage_payment_in_housing_slice": False,
             }
             transaction_screenshot = None
             account_filter_screenshot = None
@@ -541,6 +559,7 @@ def main():
                 and "Transfers" not in default_pie_categories
                 and driver.find_element(By.CSS_SELECTOR, '[data-testid="spending-transfers-toggle"]').get_attribute("aria-pressed") == "false"
             )
+            spending_pie_checks["mortgage_payment_in_housing_slice"] = "Housing" in default_pie_categories
             if args.device in {"iphone", "pixel"}:
                 spending_pie_screenshot = screenshot.with_name(screenshot.stem + "-spending-pie" + screenshot.suffix)
                 driver.save_screenshot(str(spending_pie_screenshot))
@@ -608,11 +627,15 @@ def main():
                 "reverse_transfers_render_without_cycles": False,
                 "unmatched_transfer_entries_remain_visible": False,
                 "paired_transfer_details_show_both_entries": False,
+                "mortgage_payment_in_cashflow_sankey": False,
             }
             sankey_details_screenshot = screenshot.with_name(screenshot.stem + "-sankey-details" + screenshot.suffix)
             transfer_screenshot = screenshot.with_name(screenshot.stem + "-transfers" + screenshot.suffix)
             sankey_links = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-link"]')
             sankey_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+            sankey_interaction_checks["mortgage_payment_in_cashflow_sankey"] = any(
+                node.get_attribute("data-sankey-node-name") == "Housing" for node in sankey_nodes
+            )
             if sankey_links and sankey_nodes:
                 driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", sankey_links[0])
                 details_panel = WebDriverWait(driver, args.timeout).until(
@@ -715,9 +738,10 @@ def main():
             }
             account_type_checks = {
                 "account_type_settings_visible": False,
-                "venture_type_suggested": False,
+                "venture_auto_classified": False,
                 "liability_type_can_be_saved": False,
                 "asset_type_can_be_saved": False,
+                "nickname_saves_and_updates_account_name": False,
                 "liability_balance_shows_as_debt": False,
                 "net_worth_subtracts_debt": False,
             }
@@ -727,8 +751,16 @@ def main():
                 row for row in account_type_section.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-row"]')
                 if "Venture X" in row.text
             )
-            account_type_checks["venture_type_suggested"] = "Suggested type: Credit card debt" in venture_type_row.text
+            venture_account_id = venture_type_row.get_attribute("data-account-id")
             venture_type_select = Select(venture_type_row.find_element(By.TAG_NAME, "select"))
+            account_type_checks["venture_auto_classified"] = (
+                "Auto-classified as Credit card debt" in venture_type_row.text
+                and venture_type_select.first_selected_option.get_attribute("value") == "credit_card"
+            )
+            venture_type_select.select_by_value("other_liability")
+            WebDriverWait(driver, args.timeout).until(
+                lambda _current: venture_type_row.find_element(By.TAG_NAME, "select").get_attribute("value") == "other_liability"
+            )
             venture_type_select.select_by_value("credit_card")
             WebDriverWait(driver, args.timeout).until(
                 lambda _current: venture_type_row.find_element(By.TAG_NAME, "select").get_attribute("value") == "credit_card"
@@ -739,11 +771,24 @@ def main():
                 row for row in account_type_section.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-row"]')
                 if "Checking" in row.text and "Navy Federal" in row.text
             )
-            Select(checking_type_row.find_element(By.TAG_NAME, "select")).select_by_value("bank_account")
+            checking_type_select = Select(checking_type_row.find_element(By.TAG_NAME, "select"))
+            checking_type_select.select_by_value("other_asset")
+            WebDriverWait(driver, args.timeout).until(
+                lambda _current: checking_type_row.find_element(By.TAG_NAME, "select").get_attribute("value") == "other_asset"
+            )
+            checking_type_select.select_by_value("bank_account")
             WebDriverWait(driver, args.timeout).until(
                 lambda _current: checking_type_row.find_element(By.TAG_NAME, "select").get_attribute("value") == "bank_account"
             )
             account_type_checks["asset_type_can_be_saved"] = True
+
+            venture_type_row = driver.find_element(By.CSS_SELECTOR, f'[data-testid="account-type-row"][data-account-id="{venture_account_id}"]')
+            nickname_input = venture_type_row.find_element(By.CSS_SELECTOR, f'[data-testid="account-nickname-input-{venture_account_id}"]')
+            driver.execute_script("const input=arguments[0], value=arguments[1]; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(input, value); input.dispatchEvent(new Event('change', {bubbles:true}));", nickname_input, "Travel Card")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: "Travel Card" in current.find_element(By.CSS_SELECTOR, f'[data-testid="account-type-row"][data-account-id="{venture_account_id}"]').text
+            )
+            account_type_checks["nickname_saves_and_updates_account_name"] = True
 
             category_select = driver.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-select"]')
             options = [option.get_attribute("value") for option in category_select.find_elements(By.TAG_NAME, "option")]
@@ -773,21 +818,26 @@ def main():
             WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="net-worth-summary"]'))
             )
-            venture_card = next(
-                card for card in driver.find_elements(By.CSS_SELECTOR, '[data-testid="account-filter-card"]')
-                if "Venture X" in card.text
-            )
+            venture_card = driver.find_element(By.CSS_SELECTOR, f'[data-testid="account-filter-card"][data-account-id="{venture_account_id}"]')
             venture_balance = venture_card.find_element(By.CSS_SELECTOR, '[data-testid="account-balance"]')
             account_type_checks["liability_balance_shows_as_debt"] = (
                 "-$1,250.00" in venture_balance.text
                 and "text-rose-700" in venture_balance.get_attribute("class")
             )
+            grocery_row = next(
+                row for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                if "Grocery Store" in row.text
+            )
+            account_type_checks["nickname_saves_and_updates_account_name"] = (
+                account_type_checks["nickname_saves_and_updates_account_name"]
+                and "Travel Card" in grocery_row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-account"]').text
+            )
             net_worth_text = driver.find_element(By.CSS_SELECTOR, '[data-testid="net-worth-summary"]').text
             account_type_checks["net_worth_subtracts_debt"] = (
                 "USD" in net_worth_text
-                and "$3,400.50" in net_worth_text
                 and "$1,250.00" in net_worth_text
-                and "$2,150.50" in net_worth_text
+                and "$173,600.50" in net_worth_text
+                and "$172,350.50" in net_worth_text
             )
 
             logs = driver.get_log("browser")
