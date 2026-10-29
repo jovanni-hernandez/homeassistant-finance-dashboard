@@ -18,7 +18,12 @@ from ai_assistant import (
     list_provider_models,
     update_ai_settings,
 )
-from ai_chat import AIChatError, create_goal_chat_response, preview_chat_message
+from ai_chat import (
+    AIChatError,
+    AIProviderRequestError,
+    create_goal_chat_response,
+    prepare_goal_chat_preview,
+)
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
 from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
@@ -142,16 +147,16 @@ class FinancialGoalRequest(BaseModel):
     inflation_percent: str | None = Field(default=None, max_length=12)
 
 
-class AIChatPreviewRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=2000)
-
-
 class AIChatMessageRequest(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1, max_length=4000)
 
 
 class AIChatRequest(BaseModel):
+    preview_id: str = Field(min_length=32, max_length=64)
+
+
+class AIChatPreviewRequest(BaseModel):
     messages: list[AIChatMessageRequest] = Field(min_length=1, max_length=20)
 
 
@@ -769,7 +774,7 @@ def api_set_ai_settings(payload: AiSettingsRequest):
 @app.post("/api/ai/chat/preview", dependencies=[Depends(verify_ha_auth)])
 def api_preview_ai_chat_message(payload: AIChatPreviewRequest):
     try:
-        return preview_chat_message(payload.message)
+        return prepare_goal_chat_preview([message.dict() for message in payload.messages])
     except AIChatError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -780,7 +785,9 @@ def api_preview_ai_chat_message(payload: AIChatPreviewRequest):
 @app.post("/api/ai/chat", dependencies=[Depends(verify_ha_auth)])
 def api_ai_chat(payload: AIChatRequest):
     try:
-        return create_goal_chat_response([message.dict() for message in payload.messages])
+        return create_goal_chat_response(payload.preview_id)
+    except AIProviderRequestError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except AIChatError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

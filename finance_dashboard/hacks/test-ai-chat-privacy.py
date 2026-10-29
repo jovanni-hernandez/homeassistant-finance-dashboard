@@ -146,13 +146,23 @@ class AIChatPrivacyTests(unittest.TestCase):
             )))])
 
         before = len(get_goals(get_stored_accounts(), get_manual_assets()))
+        conversation = [{
+            "role": "user",
+            "content": "Help me use Primary Checking 123456789 to build a Groceries emergency fund of $10000.",
+        }]
+        preview = ai_chat.prepare_goal_chat_preview(conversation)
+        preview_payload = json.dumps(preview["messages"])
+        self.assertIn(ai_chat.CHAT_SYSTEM_PROMPT, preview["messages"][0]["content"])
+        self.assertIn("monthly_activity", preview_payload)
+        self.assertIn("balances_by_currency_and_account_type", preview_payload)
+        for private_value in self.private_names + ["checking-123456789", "retirement-987654321", "Private cafe note"]:
+            self.assertNotIn(private_value, preview_payload)
+
         with patch.object(ai_chat, "_completion", side_effect=fake_completion):
-            result = ai_chat.create_goal_chat_response([{
-                "role": "user",
-                "content": "Help me use Primary Checking 123456789 to build a Groceries emergency fund of $10000.",
-            }])
+            result = ai_chat.create_goal_chat_response(preview["preview_id"])
 
         provider_payload = json.dumps(captured["messages"])
+        self.assertEqual(captured["messages"], preview["messages"])
         for private_value in self.private_names + ["checking-123456789", "retirement-987654321", "Coffee Merchant Example", "Private cafe note"]:
             self.assertNotIn(private_value, provider_payload)
         self.assertIn("Groceries", provider_payload)
@@ -162,11 +172,27 @@ class AIChatPrivacyTests(unittest.TestCase):
         self.assertNotIn("account_ids", result["goal_draft"])
         self.assertEqual(len(get_goals(get_stored_accounts(), get_manual_assets())), before)
 
+    def test_provider_failure_gives_safe_actionable_error_and_logs_no_chat_content(self):
+        class ProviderFailure(Exception):
+            status_code = 400
+
+        private_message = "Use Primary Checking for my private plan"
+        preview = ai_chat.prepare_goal_chat_preview([{"role": "user", "content": private_message}])
+        with patch.object(ai_chat, "_completion", side_effect=ProviderFailure("raw provider response containing credentials")):
+            with self.assertLogs("finance_dashboard", level="WARNING") as captured_logs:
+                with self.assertRaises(ai_chat.AIProviderRequestError) as raised:
+                    ai_chat.create_goal_chat_response(preview["preview_id"])
+
+        self.assertIn("selected model is available", str(raised.exception))
+        self.assertNotIn(private_message, str(raised.exception))
+        self.assertNotIn("raw provider response containing credentials", "\n".join(captured_logs.output))
+        self.assertNotIn(private_message, "\n".join(captured_logs.output))
+
     def test_disabled_ai_does_not_call_provider(self):
         set_setting(AI_ENABLED_KEY, "false")
         with patch.object(ai_chat, "_completion") as completion:
             with self.assertRaisesRegex(ai_chat.AIChatError, "Enable AI assistance"):
-                ai_chat.create_goal_chat_response([{"role": "user", "content": "Help me set a goal."}])
+                ai_chat.prepare_goal_chat_preview([{"role": "user", "content": "Help me set a goal."}])
         completion.assert_not_called()
 
 

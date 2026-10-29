@@ -432,7 +432,21 @@ def main():
                       let injectedSourceTransaction = null;
                       window.fetch = async (...args) => {
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
+                        if (url.endsWith("/api/ai/chat/preview")) {
+                          const body = JSON.parse(args[1]?.body || "{}");
+                          const conversation = (body.messages || []).map((message) => ({
+                            role: message.role,
+                            content: message.content.replace(/Travel Card/gi, "[redacted]").replace(/123456789/g, "[redacted number]")
+                          }));
+                          const messages = [
+                            {role: "system", content: "You help with goals. Sanitized aggregate financial snapshot (JSON): " + JSON.stringify({monthly_activity: [{currency: "USD", spending_by_category: [{category: "Groceries", amount: 500}]}]})},
+                            ...conversation
+                          ];
+                          window.__testAiChatPreviewId = "test-preview-capability-1234567890abcdef";
+                          return new Response(JSON.stringify({preview_id: window.__testAiChatPreviewId, provider: "openai", model: "gpt-4o-mini", messages, redaction_count: 2}), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
                         if (url.endsWith("/api/ai/chat")) {
+                          window.__testAiChatSentPreviewId = JSON.parse(args[1]?.body || "{}").preview_id;
                           return new Response(JSON.stringify({
                             reply: "A savings goal draft can help turn that target into a plan.",
                             goal_draft: {goal_type: "savings", name: "Emergency fund", target_amount: "10000", target_date: "2030-12-31"}
@@ -1551,7 +1565,9 @@ def main():
 
             ai_chat_checks = {
                 "assistant_is_embedded_in_goals": False,
+                "preview_shows_system_prompt_and_financial_context": False,
                 "sanitized_preview_removes_known_identifiers": False,
+                "send_uses_the_reviewed_preview": False,
                 "sanitized_chat_can_be_sent": False,
                 "goal_draft_opens_review_form": False,
                 "draft_requires_user_save": False,
@@ -1567,10 +1583,21 @@ def main():
             ai_chat_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-message"]')
             ai_chat_input.send_keys("Help me plan with Travel Card 123456789 for Groceries and about $500 monthly.")
             driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-preview-button"]').click()
-            sanitized_chat_element = WebDriverWait(driver, args.timeout).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="chat-sanitized-message"]'))
+            system_preview = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="chat-system-preview"]'))
             )
+            driver.find_element(By.XPATH, "//details[.//summary[contains(., 'Conversation')]]/summary").click()
+            sanitized_chat_element = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="chat-conversation-preview"]'))
+            )
+            system_preview_text = system_preview.text
             sanitized_chat_message = sanitized_chat_element.text
+            ai_chat_checks["preview_shows_system_prompt_and_financial_context"] = (
+                "You help with goals" in system_preview_text
+                and "monthly_activity" in system_preview_text
+                and "Groceries" in system_preview_text
+                and "System instructions" in driver.find_element(By.CSS_SELECTOR, '[data-testid="chat-provider-payload"]').text
+            )
             ai_chat_checks["sanitized_preview_removes_known_identifiers"] = (
                 "Travel Card" not in sanitized_chat_message
                 and "123456789" not in sanitized_chat_message
@@ -1581,6 +1608,13 @@ def main():
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sanitized_chat_element)
             driver.save_screenshot(str(ai_chat_screenshot))
             driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-send-button"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.execute_script("return !!window.__testAiChatSentPreviewId")
+            )
+            ai_chat_checks["send_uses_the_reviewed_preview"] = (
+                driver.execute_script("return window.__testAiChatSentPreviewId")
+                == driver.execute_script("return window.__testAiChatPreviewId")
+            )
             assistant_message = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="ai-chat-assistant-message"]'))
             )

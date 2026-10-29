@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import secrets
+import threading
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -16,6 +20,11 @@ from recurring_analysis import _is_transfer_like
 MAX_CHAT_MESSAGE_LENGTH = 2000
 MAX_CHAT_HISTORY_MESSAGE_LENGTH = 4000
 MAX_CHAT_HISTORY = 20
+CHAT_PREVIEW_TTL_SECONDS = 300
+CHAT_PREVIEW_LIMIT = 64
+_pending_chat_previews = {}
+_pending_chat_previews_lock = threading.Lock()
+logger = logging.getLogger("finance_dashboard")
 CHAT_SYSTEM_PROMPT = """You help the user think through financial goals using a minimized financial snapshot.
 The snapshot contains aggregate balances grouped by currency and account type, monthly income and category spending totals, and unnamed goal summaries. It contains no account names, account IDs, merchant names, or transaction descriptions. Never ask for account names, account numbers, or other identifying details.
 
@@ -28,6 +37,14 @@ Include only relevant fields. Never include account IDs or account names in a dr
 
 class AIChatError(ValueError):
     pass
+
+
+class AIProviderRequestError(AIChatError):
+    """A provider failure with a safe user-facing explanation."""
+
+    def __init__(self, message: str, *, provider_status: int | None = None):
+        super().__init__(message)
+        self.provider_status = provider_status
 
 
 def _value(item, key, default=None):
@@ -282,6 +299,102 @@ def preview_chat_message(message: str) -> dict:
     }
 
 
+def _prepare_goal_chat_payload(messages: list[dict]) -> dict:
+    if not isinstance(messages, list) or not messages or len(messages) > MAX_CHAT_HISTORY:
+        raise AIChatError(f"Send between 1 and {MAX_CHAT_HISTORY} chat messages.")
+    accounts, manual_assets, goals, sensitive_terms = _load_chat_data()
+    safe_messages = []
+    redaction_count = 0
+    total_chars = 0
+    for item in messages:
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            raise AIChatError("Chat history contains an unsupported message.")
+        content = item.get("content")
+        max_length = MAX_CHAT_MESSAGE_LENGTH if item.get("role") == "user" else MAX_CHAT_HISTORY_MESSAGE_LENGTH
+        if not isinstance(content, str) or len(content) > max_length:
+            raise AIChatError("A chat message is too long.")
+        total_chars += len(content)
+        sanitized, count = sanitize_message(content, sensitive_terms, max_length=max_length)
+        redaction_count += count
+        safe_messages.append({"role": item["role"], "content": sanitized})
+    if total_chars > 16000:
+        raise AIChatError("This conversation is too long. Start a new chat to continue.")
+    if safe_messages[-1]["role"] != "user":
+        raise AIChatError("Send a user message to continue the chat.")
+
+    settings = get_ai_settings()
+    if not settings["enabled"]:
+        raise AIChatError("Enable AI assistance in AI settings before starting a chat.")
+    provider = settings["provider"]
+    if not _provider_key(provider):
+        raise AIChatError(f"No API key is saved for the selected provider ({provider}).")
+
+    context = build_sanitized_financial_context(
+        accounts,
+        manual_assets,
+        goals,
+        _recent_transactions(date.today()),
+    )
+    system_content = (
+        CHAT_SYSTEM_PROMPT
+        + "\n\nSanitized aggregate financial snapshot (JSON):\n"
+        + json.dumps(context, separators=(",", ":"), ensure_ascii=False)
+    )
+    provider_messages = [{"role": "system", "content": system_content}, *safe_messages]
+    return {
+        "provider": provider,
+        "model": settings["model"],
+        "messages": provider_messages,
+        "redaction_count": redaction_count,
+    }
+
+
+def _store_chat_preview(prepared: dict) -> str:
+    now = time.monotonic()
+    preview_id = secrets.token_urlsafe(32)
+    with _pending_chat_previews_lock:
+        expired = [
+            key for key, item in _pending_chat_previews.items()
+            if item["expires_at"] <= now
+        ]
+        for key in expired:
+            _pending_chat_previews.pop(key, None)
+        while len(_pending_chat_previews) >= CHAT_PREVIEW_LIMIT:
+            oldest = next(iter(_pending_chat_previews))
+            _pending_chat_previews.pop(oldest, None)
+        _pending_chat_previews[preview_id] = {
+            **prepared,
+            "expires_at": now + CHAT_PREVIEW_TTL_SECONDS,
+        }
+    return preview_id
+
+
+def prepare_goal_chat_preview(messages: list[dict]) -> dict:
+    """Return the exact sanitized provider messages and a short-lived send token."""
+    prepared = _prepare_goal_chat_payload(messages)
+    preview_id = _store_chat_preview(prepared)
+    return {
+        "preview_id": preview_id,
+        "provider": prepared["provider"],
+        "model": prepared["model"],
+        "messages": prepared["messages"],
+        "redaction_count": prepared["redaction_count"],
+        "notice": "This is the exact prompt and sanitized conversation that will be sent. The API key is not included in this preview.",
+    }
+
+
+def _get_pending_chat_preview(preview_id: str) -> dict:
+    now = time.monotonic()
+    with _pending_chat_previews_lock:
+        prepared = _pending_chat_previews.get(preview_id)
+        if not prepared:
+            raise AIChatError("This preview is no longer available. Preview the message again before sending.")
+        if prepared["expires_at"] <= now:
+            _pending_chat_previews.pop(preview_id, None)
+            raise AIChatError("This preview expired. Preview the message again before sending.")
+        return prepared
+
+
 def _validate_goal_draft(candidate, sensitive_terms):
     if not isinstance(candidate, dict):
         return None
@@ -353,64 +466,76 @@ def _completion(model: str, api_key: str, messages: list[dict]):
     )
 
 
-def create_goal_chat_response(messages: list[dict]) -> dict:
-    if not isinstance(messages, list) or not messages or len(messages) > MAX_CHAT_HISTORY:
-        raise AIChatError(f"Send between 1 and {MAX_CHAT_HISTORY} chat messages.")
-    accounts, manual_assets, goals, sensitive_terms = _load_chat_data()
-    safe_messages = []
-    redaction_count = 0
-    total_chars = 0
-    for item in messages:
-        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
-            raise AIChatError("Chat history contains an unsupported message.")
-        content = item.get("content")
-        max_length = MAX_CHAT_MESSAGE_LENGTH if item.get("role") == "user" else MAX_CHAT_HISTORY_MESSAGE_LENGTH
-        if not isinstance(content, str) or len(content) > max_length:
-            raise AIChatError("A chat message is too long.")
-        total_chars += len(content)
-        sanitized, count = sanitize_message(content, sensitive_terms, max_length=max_length)
-        redaction_count += count
-        safe_messages.append({"role": item["role"], "content": sanitized})
-    if total_chars > 16000:
-        raise AIChatError("This conversation is too long. Start a new chat to continue.")
-    if safe_messages[-1]["role"] != "user":
-        raise AIChatError("Send a user message to continue the chat.")
+def _provider_status_code(exc: Exception) -> int | None:
+    candidates = [
+        getattr(exc, "status_code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ]
+    for candidate in candidates:
+        try:
+            status = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= status <= 599:
+            return status
+    return None
 
+
+def _safe_provider_error(provider: str, status: int | None) -> str:
+    provider_name = {"openai": "OpenAI", "claude": "Anthropic", "gemini": "Google Gemini"}.get(provider, "AI provider")
+    if status in {400, 404}:
+        return f"{provider_name} rejected the request (HTTP {status}). Check that the selected model is available to this API key and supports chat."
+    if status in {401, 403}:
+        return f"{provider_name} rejected the API key or its permissions (HTTP {status}). Check the key and model access."
+    if status == 429:
+        return f"{provider_name} rate limit or quota reached (HTTP 429). Check your provider usage and try again later."
+    if status is not None and status >= 500:
+        return f"{provider_name} is temporarily unavailable (HTTP {status}). Try again later."
+    if status is not None:
+        return f"The {provider_name} request failed (HTTP {status}). Check the provider and model settings."
+    return f"Could not reach {provider_name}. Check your connection and provider status, then try again."
+
+
+def create_goal_chat_response(preview_id: str) -> dict:
+    prepared = _get_pending_chat_preview(preview_id)
     settings = get_ai_settings()
     if not settings["enabled"]:
         raise AIChatError("Enable AI assistance in AI settings before starting a chat.")
-    provider = settings["provider"]
-    api_key = _provider_key(provider)
+    if settings["provider"] != prepared["provider"] or settings["model"] != prepared["model"]:
+        raise AIChatError("AI settings changed after this preview. Preview the message again before sending.")
+    api_key = _provider_key(prepared["provider"])
     if not api_key:
-        raise AIChatError(f"No API key is saved for the selected provider ({provider}).")
+        raise AIChatError(f"No API key is saved for the selected provider ({prepared['provider']}).")
 
-    context = build_sanitized_financial_context(
-        accounts,
-        manual_assets,
-        goals,
-        _recent_transactions(date.today()),
-    )
-    system_content = (
-        CHAT_SYSTEM_PROMPT
-        + "\n\nSanitized aggregate financial snapshot (JSON):\n"
-        + json.dumps(context, separators=(",", ":"), ensure_ascii=False)
-    )
-    provider_messages = [{"role": "system", "content": system_content}, *safe_messages]
     try:
-        response = _completion(settings["model"], api_key, provider_messages)
+        response = _completion(prepared["model"], api_key, prepared["messages"])
         response_text = response.choices[0].message.content or ""
         if not isinstance(response_text, str):
             response_text = str(response_text)
     except Exception as exc:
-        raise AIChatError("The AI provider request failed. No chat content was written to app logs.") from exc
+        status = _provider_status_code(exc)
+        logger.warning(
+            "AI provider request failed (provider=%s, status=%s, error_type=%s). Chat content and credentials were not logged.",
+            prepared["provider"],
+            status if status is not None else "unknown",
+            type(exc).__name__,
+        )
+        raise AIProviderRequestError(
+            _safe_provider_error(prepared["provider"], status),
+            provider_status=status,
+        ) from None
 
+    sensitive_terms = _load_chat_data()[3]
     reply, goal_draft, response_redactions = _extract_goal_draft(response_text, sensitive_terms)
     reply, output_redactions = sanitize_message(reply, sensitive_terms, max_length=MAX_CHAT_HISTORY_MESSAGE_LENGTH)
+    with _pending_chat_previews_lock:
+        _pending_chat_previews.pop(preview_id, None)
+    conversation_messages = prepared["messages"][1:]
     return {
         "reply": reply,
         "goal_draft": goal_draft,
-        "provider": provider,
-        "model": settings["model"],
-        "redaction_count": redaction_count + response_redactions + output_redactions,
-        "user_message": safe_messages[-1]["content"],
+        "provider": prepared["provider"],
+        "model": prepared["model"],
+        "redaction_count": prepared["redaction_count"] + response_redactions + output_redactions,
+        "user_message": conversation_messages[-1]["content"],
     }

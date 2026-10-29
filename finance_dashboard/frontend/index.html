@@ -1036,7 +1036,7 @@
                             <div class="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-950">
                                 <div class="font-semibold">What is shared</div>
                                 <p class="mt-1">The provider receives 12-month monthly totals by category and currency, balances grouped by account type and currency, and unnamed goal summaries. Account and institution names, IDs, manual-asset and goal names, and transaction payees/descriptions are not included.</p>
-                                <p class="mt-1">Your typed message is checked against known local identifiers and long account-like numbers. Review the sanitized text before sending; unknown names may not be detected. The selected AI provider receives the sanitized message and aggregate summary under its own data-retention terms. This chat is kept only in this browser session.</p>
+                                <p class="mt-1">Your conversation is checked against known local identifiers and long account-like numbers. Review the complete request—including system instructions, aggregate snapshot, and sanitized conversation—before sending; unknown names may not be detected. The selected AI provider receives that request under its own data-retention terms. The exact preview is held in app memory for up to five minutes so sending uses what you reviewed; chat history remains browser-session-only.</p>
                             </div>
                             <div v-if="!aiChatReady" data-testid="ai-chat-setup-notice" class="mt-4 space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                                 <p>Enable AI assistance and configure a key for the selected provider in AI settings to start a chat.</p>
@@ -1065,14 +1065,21 @@
                             <textarea id="ai-chat-message" data-testid="ai-chat-message" v-model="chatMessageDraft" @input="clearAIChatPreview" maxlength="2000" rows="3" placeholder="Describe what you’re aiming for—avoid adding names the local filter may not know." class="mt-2 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"></textarea>
                             <div class="mt-2 flex flex-col gap-2 sm:items-start sm:justify-between">
                                 <span class="text-xs text-slate-500">{{ chatMessageDraft.length }}/2000 characters · {{ aiSettingsProvider }} · {{ aiSettingsModel }}</span>
-                                <button type="submit" data-testid="ai-chat-preview-button" :disabled="chatPreviewLoading || !chatMessageDraft.trim()" class="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{{ chatPreviewLoading ? 'Checking…' : 'Preview sanitized message' }}</button>
+                                <button type="submit" data-testid="ai-chat-preview-button" :disabled="chatPreviewLoading || chatSending || !chatMessageDraft.trim()" class="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{{ chatPreviewLoading ? 'Building preview…' : 'Preview everything sent' }}</button>
                             </div>
-                            <div v-if="chatPreviewMessage" data-testid="chat-sanitized-preview" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
-                                <div class="text-sm font-semibold text-amber-950">Review before sending</div>
-                                <p class="mt-1 text-xs text-amber-900">{{ chatPreviewRedactionCount ? `${chatPreviewRedactionCount} known identifier(s) redacted.` : 'No known saved identifiers were found.' }} Unknown names may still be present.</p>
-                                <pre data-testid="chat-sanitized-message" class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-sm text-slate-800">{{ chatPreviewMessage }}</pre>
+                            <div v-if="chatPreviewId" data-testid="chat-sanitized-preview" class="mt-4 space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                                <div>
+                                    <div class="text-sm font-semibold text-amber-950">Review the complete provider request</div>
+                                    <p class="mt-1 text-xs leading-5 text-amber-900">{{ chatPreviewProvider }} · {{ chatPreviewModel }}. {{ chatPreviewRedactionCount ? `${chatPreviewRedactionCount} known identifier(s) redacted.` : 'No known saved identifiers were found.' }} Unknown names may still be present. This includes the system instructions, aggregate financial snapshot, and sanitized conversation that will be sent. The API key is never included in this preview.</p>
+                                </div>
+                                <div class="space-y-2" data-testid="chat-provider-payload">
+                                    <details v-for="(message, index) in chatPreviewMessages" :key="index" :open="message.role === 'system'" class="overflow-hidden rounded-lg border border-amber-200 bg-white">
+                                        <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-slate-800">{{ message.role === 'system' ? 'System instructions + financial snapshot' : `Conversation · ${message.role}` }}</summary>
+                                        <pre :data-testid="message.role === 'system' ? 'chat-system-preview' : 'chat-conversation-preview'" class="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-slate-100 px-3 py-3 text-xs leading-5 text-slate-700">{{ message.content }}</pre>
+                                    </details>
+                                </div>
                                 <div class="mt-3 flex flex-col gap-2">
-                                    <button type="button" data-testid="ai-chat-send-button" @click="sendAIChatMessage" :disabled="chatSending || !aiChatReady" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">{{ chatSending ? 'Sending…' : `Send sanitized message to ${aiSettingsProvider}` }}</button>
+                                    <button type="button" data-testid="ai-chat-send-button" @click="sendAIChatMessage" :disabled="chatSending || !aiChatReady" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">{{ chatSending ? 'Sending…' : `Send this request to ${chatPreviewProvider}` }}</button>
                                     <button type="button" @click="clearAIChatPreview" :disabled="chatSending" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
                                 </div>
                             </div>
@@ -1697,7 +1704,10 @@
                 })[aiSettingsProvider.value] || '');
                 const chatMessages = ref([]);
                 const chatMessageDraft = ref('');
-                const chatPreviewMessage = ref('');
+                const chatPreviewId = ref('');
+                const chatPreviewMessages = ref([]);
+                const chatPreviewProvider = ref('');
+                const chatPreviewModel = ref('');
                 const chatPreviewRedactionCount = ref(0);
                 const chatPreviewLoading = ref(false);
                 const chatSending = ref(false);
@@ -2081,7 +2091,10 @@
                         clearLoadedData();
                         chatMessages.value = [];
                         chatMessageDraft.value = '';
-                        chatPreviewMessage.value = '';
+                        chatPreviewId.value = '';
+                        chatPreviewMessages.value = [];
+                        chatPreviewProvider.value = '';
+                        chatPreviewModel.value = '';
                         chatPreviewRedactionCount.value = 0;
                         loading.value = false;
                     }
@@ -2816,7 +2829,10 @@
                 };
 
                 const clearAIChatPreview = () => {
-                    chatPreviewMessage.value = '';
+                    chatPreviewId.value = '';
+                    chatPreviewMessages.value = [];
+                    chatPreviewProvider.value = '';
+                    chatPreviewModel.value = '';
                     chatPreviewRedactionCount.value = 0;
                     chatError.value = '';
                 };
@@ -2825,15 +2841,24 @@
                     if (!chatMessageDraft.value.trim() || chatPreviewLoading.value || chatSending.value) return;
                     chatPreviewLoading.value = true;
                     chatError.value = '';
+                    clearAIChatPreview();
+                    chatPreviewLoading.value = true;
+                    const conversation = [
+                        ...chatMessages.value.slice(-18).map(({ role, content }) => ({ role, content })),
+                        { role: 'user', content: chatMessageDraft.value },
+                    ];
                     try {
                         const response = await apiFetch('/api/ai/chat/preview', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                            body: JSON.stringify({ message: chatMessageDraft.value }),
+                            body: JSON.stringify({ messages: conversation }),
                         });
                         const data = await response.json().catch(() => ({}));
-                        if (!response.ok) throw new Error(data.detail || 'Could not prepare a sanitized preview.');
-                        chatPreviewMessage.value = data.sanitized_message || '';
+                        if (!response.ok) throw new Error(data.detail || 'Could not prepare the complete provider preview.');
+                        chatPreviewId.value = data.preview_id || '';
+                        chatPreviewMessages.value = Array.isArray(data.messages) ? data.messages : [];
+                        chatPreviewProvider.value = data.provider || aiSettingsProvider.value;
+                        chatPreviewModel.value = data.model || aiSettingsModel.value;
                         chatPreviewRedactionCount.value = Number(data.redaction_count || 0);
                     } catch (err) {
                         chatError.value = err.message;
@@ -2843,18 +2868,15 @@
                 };
 
                 const sendAIChatMessage = async () => {
-                    if (!chatPreviewMessage.value || !aiChatReady.value || chatSending.value) return;
+                    if (!chatPreviewId.value || !aiChatReady.value || chatSending.value) return;
                     chatSending.value = true;
                     chatError.value = '';
-                    const conversation = [
-                        ...chatMessages.value.slice(-18).map(({ role, content }) => ({ role, content })),
-                        { role: 'user', content: chatPreviewMessage.value },
-                    ];
+                    const conversation = chatPreviewMessages.value.slice(1).map(({ role, content }) => ({ role, content }));
                     try {
                         const response = await apiFetch('/api/ai/chat', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                            body: JSON.stringify({ messages: conversation }),
+                            body: JSON.stringify({ preview_id: chatPreviewId.value }),
                         });
                         const data = await response.json().catch(() => ({}));
                         if (!response.ok) throw new Error(data.detail || 'The AI chat request failed.');
@@ -4268,7 +4290,10 @@
                     aiChatReady,
                     chatMessages,
                     chatMessageDraft,
-                    chatPreviewMessage,
+                    chatPreviewId,
+                    chatPreviewMessages,
+                    chatPreviewProvider,
+                    chatPreviewModel,
                     chatPreviewRedactionCount,
                     chatPreviewLoading,
                     chatSending,
