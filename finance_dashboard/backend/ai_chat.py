@@ -462,7 +462,14 @@ def _extract_goal_draft(response_text: str, sensitive_terms: list[str]):
     return reply, None, 0
 
 
-def _completion(model: str, api_key: str, messages: list[dict], *, omit_temperature: bool = False):
+def _completion(
+    model: str,
+    api_key: str,
+    messages: list[dict],
+    *,
+    omit_temperature: bool = False,
+    reasoning_effort: str | None = None,
+):
     from litellm import completion
 
     request = {
@@ -473,6 +480,8 @@ def _completion(model: str, api_key: str, messages: list[dict], *, omit_temperat
     }
     if not omit_temperature:
         request["temperature"] = 0.2
+    if reasoning_effort:
+        request["reasoning_effort"] = reasoning_effort
     return completion(**request)
 
 
@@ -617,19 +626,36 @@ def create_goal_chat_response(preview_id: str) -> dict:
             )
             temperature_retry_attempted = True
             attempt = 2
+            retry_options = {"omit_temperature": True}
+            if prepared["provider"] == "openai":
+                retry_options["reasoning_effort"] = "none"
             response = _completion(
-                prepared["model"], api_key, prepared["messages"], omit_temperature=True,
+                prepared["model"], api_key, prepared["messages"], **retry_options,
             )
         response_text = response.choices[0].message.content or ""
         if not isinstance(response_text, str):
             response_text = str(response_text)
+        choice = response.choices[0]
+        message = choice.message
+        usage = getattr(response, "usage", None)
+        if hasattr(usage, "model_dump"):
+            usage = usage.model_dump()
+        elif usage is not None and not isinstance(usage, (dict, list, str, int, float, bool)):
+            usage = str(usage)
+        finish_reason = getattr(choice, "finish_reason", None)
         log_ai_exchange(
             event="goal_provider_response",
             provider=prepared["provider"],
             model=prepared["model"],
             request=prepared["messages"],
             api_key=api_key,
-            response={"content": response_text},
+            response={
+                "content": response_text,
+                "finish_reason": finish_reason,
+                "usage": usage,
+                "refusal": getattr(message, "refusal", None),
+                "tool_calls": getattr(message, "tool_calls", None),
+            },
             status=200,
             attempt=attempt,
         )
@@ -661,6 +687,19 @@ def create_goal_chat_response(preview_id: str) -> dict:
             safe_message,
             provider_status=status,
         ) from None
+
+    if not response_text.strip():
+        logger.warning(
+            "AI provider returned an empty assistant message (provider=%s, model=%s, finish_reason=%s, attempt=%s).",
+            prepared["provider"],
+            prepared["model"],
+            finish_reason or "unknown",
+            attempt,
+        )
+        raise AIProviderRequestError(
+            f"{prepared['provider'].title()} completed the request but returned no text (finish reason: {finish_reason or 'unknown'}). Try another available model or shorten the request.",
+            provider_status=200,
+        )
 
     sensitive_terms = _load_chat_data()[3]
     reply, goal_draft, response_redactions = _extract_goal_draft(response_text, sensitive_terms)

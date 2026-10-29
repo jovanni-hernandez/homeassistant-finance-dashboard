@@ -201,8 +201,8 @@ class AIChatPrivacyTests(unittest.TestCase):
 
         calls = []
 
-        def fake_completion(model, api_key, messages, *, omit_temperature=False):
-            calls.append(omit_temperature)
+        def fake_completion(model, api_key, messages, *, omit_temperature=False, reasoning_effort=None):
+            calls.append((omit_temperature, reasoning_effort))
             if not omit_temperature:
                 raise UnsupportedParamsError("Unsupported parameter: 'temperature'")
             return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="A savings plan can start with your target and timeline."))])
@@ -211,8 +211,18 @@ class AIChatPrivacyTests(unittest.TestCase):
         with patch.object(ai_chat, "_completion", side_effect=fake_completion):
             result = ai_chat.create_goal_chat_response(preview["preview_id"])
 
-        self.assertEqual(calls, [False, True])
+        self.assertEqual(calls, [(False, None), (True, "none")])
         self.assertIn("savings plan", result["reply"])
+
+    def test_empty_provider_content_is_reported_as_failure_not_success(self):
+        preview = ai_chat.prepare_goal_chat_preview([{"role": "user", "content": "Help me plan."}])
+        empty_response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=""), finish_reason="length")],
+            usage={"completion_tokens": 700},
+        )
+        with patch.object(ai_chat, "_completion", return_value=empty_response):
+            with self.assertRaisesRegex(ai_chat.AIProviderRequestError, "returned no text.*length"):
+                ai_chat.create_goal_chat_response(preview["preview_id"])
 
     def test_custom_goal_prompt_is_used_in_the_reviewed_provider_payload(self):
         custom_prompt = "Use a concise, supportive tone and ask for missing assumptions."
