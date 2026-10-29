@@ -1239,9 +1239,19 @@ def main():
             )
 
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
-            driver.find_element(By.XPATH, "//button[.//span[text()='Settings']]").click()
-            WebDriverWait(driver, args.timeout).until(lambda current: "Settings" in current.find_element(By.TAG_NAME, "body").text)
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="settings-nav-general"]').click()
+            WebDriverWait(driver, args.timeout).until(lambda current: "General settings" in current.find_element(By.TAG_NAME, "body").text)
             settings_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+            settings_navigation_checks = {
+                "general_page_has_general_panels_only": (
+                    bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-settings"]'))
+                    and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="category-management-settings"]')
+                    and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-settings"]')
+                ),
+                "categories_page_has_category_panel_only": False,
+                "ai_page_has_ai_panel_only": False,
+                "settings_menu_has_three_entries": False,
+            }
 
             custom_category_checks = {
                 "pets_category_available": False,
@@ -1302,6 +1312,25 @@ def main():
             )
             account_type_checks["nickname_saves_and_updates_account_name"] = True
 
+            driver.execute_script("window.scrollTo(0, 0)")
+            driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-general" + screenshot.suffix)))
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            settings_navigation_checks["settings_menu_has_three_entries"] = all(
+                driver.find_elements(By.CSS_SELECTOR, f'[data-testid="{test_id}"]')
+                for test_id in ("settings-nav-general", "settings-nav-categories", "settings-nav-ai")
+            )
+            driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-menu" + screenshot.suffix)))
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="settings-nav-categories"]').click()
+            category_management = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="category-management-settings"]'))
+            )
+            settings_navigation_checks["categories_page_has_category_panel_only"] = (
+                "Category rules" in category_management.text
+                and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-settings"]')
+                and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-settings"]')
+            )
+            settings_overflow = settings_overflow or driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+
             category_select = driver.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-select"]')
             options = [option.get_attribute("value") for option in category_select.find_elements(By.TAG_NAME, "option")]
             custom_category_checks["pets_category_available"] = "Pets" in options
@@ -1323,7 +1352,22 @@ def main():
                 and '"patterns": []' in custom_category_in_json
             )
             driver.execute_script("arguments[0].click();", driver.find_element(By.XPATH, "//button[normalize-space()='Use builder']"))
-            driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings" + screenshot.suffix)))
+            driver.execute_script("window.scrollTo(0, 0)")
+            driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-categories" + screenshot.suffix)))
+
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="settings-nav-ai"]').click()
+            ai_settings_panel = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="ai-settings"]'))
+            )
+            settings_navigation_checks["ai_page_has_ai_panel_only"] = (
+                "AI assistance" in ai_settings_panel.text
+                and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="category-management-settings"]')
+                and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-settings"]')
+            )
+            settings_overflow = settings_overflow or driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+            driver.execute_script("window.scrollTo(0, 0)")
+            driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-ai" + screenshot.suffix)))
 
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
@@ -1497,6 +1541,7 @@ def main():
                 "transaction_search_and_category_filter": transaction_filter_checks,
                 "spending_pie": spending_pie_checks,
                 "account_types_and_net_worth": account_type_checks,
+                "settings_navigation": settings_navigation_checks,
                 "manual_assets": manual_asset_checks,
                 "transaction_description_fits_card": transaction_description_fits_card,
                 "ha_theme_auto_detection": theme_checks,
@@ -1527,6 +1572,7 @@ def main():
                 and all(transaction_filter_checks.values())
                 and all(spending_pie_checks.values())
                 and all(account_type_checks.values())
+                and all(settings_navigation_checks.values())
                 and all(manual_asset_checks.values())
                 and transaction_description_fits_card
                 and all(theme_checks.values())
@@ -1552,6 +1598,9 @@ def main():
                 "transaction_screenshot": str(transaction_screenshot) if transaction_screenshot else None,
                 "category_rule_prompt_screenshot": str(category_rule_prompt_screenshot) if category_rule_prompt_screenshot else None,
                 "category_rule_existing_prompt_screenshot": str(category_rule_existing_prompt_screenshot) if category_rule_existing_prompt_screenshot else None,
+                "general_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-general" + screenshot.suffix)),
+                "category_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-categories" + screenshot.suffix)),
+                "ai_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-ai" + screenshot.suffix)),
                 "sankey_filtered_screenshot": str(sankey_filtered_screenshot) if sankey_filtered_screenshot else None,
                 "sankey_restored_screenshot": str(sankey_restored_screenshot) if sankey_restored_screenshot else None,
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,

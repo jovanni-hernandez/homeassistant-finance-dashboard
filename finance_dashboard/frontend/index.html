@@ -183,17 +183,39 @@
                         </svg>
                         <span class="font-medium">Assets</span>
                     </button>
+                    <div class="border-t border-slate-200 pt-3">
+                        <div class="px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Settings</div>
                     <button
-                        @click="setView('settings')"
+                        data-testid="settings-nav-general"
+                        @click="setView('settings-general')"
                         class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
-                        :class="view === 'settings' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
+                        :class="view === 'settings-general' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
                     >
                         <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.591 1.066c1.527-.91 3.31.873 2.4 2.4a1.724 1.724 0 001.065 2.591c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.591c.91 1.527-.873 3.31-2.4 2.4a1.724 1.724 0 00-2.591 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.591-1.066c-1.527.91-3.31-.873-2.4-2.4a1.724 1.724 0 00-1.065-2.591c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.591c-.91-1.527.873-3.31 2.4-2.4.958.571 2.222.066 2.591-1.065z" />
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                         </svg>
-                        <span class="font-medium">Settings</span>
+                        <span class="font-medium">General settings</span>
                     </button>
+                    <div class="space-y-1 border-b border-slate-200 pb-3 pl-5">
+                        <button
+                            data-testid="settings-nav-categories"
+                            @click="setView('settings-categories')"
+                            class="flex w-full items-center rounded-lg px-4 py-2.5 text-left text-sm transition"
+                            :class="view === 'settings-categories' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
+                        >
+                            <span class="font-medium">Categories</span>
+                        </button>
+                        <button
+                            data-testid="settings-nav-ai"
+                            @click="setView('settings-ai')"
+                            class="flex w-full items-center rounded-lg px-4 py-2.5 text-left text-sm transition"
+                            :class="view === 'settings-ai' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
+                        >
+                            <span class="font-medium">AI</span>
+                        </button>
+                    </div>
+                    </div>
                     <button
                         @click="setView('recurring')"
                         class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
@@ -792,20 +814,20 @@
                     </div>
                 </section>
 
-                <section v-else-if="view === 'settings'" class="space-y-6">
+                <section v-else-if="['settings-general', 'settings-categories', 'settings-ai'].includes(view)" class="space-y-6">
                     <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                             <div>
-                                <h2 class="text-xl font-semibold text-slate-800">Settings</h2>
-                                <p class="mt-1 text-sm text-slate-500">Connection management, sync tools, and status.</p>
+                                <h2 class="text-xl font-semibold text-slate-800">{{ view === 'settings-general' ? 'General settings' : view === 'settings-categories' ? 'Categories' : 'AI' }}</h2>
+                                <p class="mt-1 text-sm text-slate-500">{{ view === 'settings-general' ? 'Connection management, account classification, and security.' : view === 'settings-categories' ? 'Manage categories and the rules that assign them to transactions.' : 'Configure AI providers for category assistance and future AI features.' }}</p>
                             </div>
-                            <button @click="syncData" :disabled="syncing" class="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60">
+                            <button v-if="view === 'settings-general'" @click="syncData" :disabled="syncing" class="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60">
                                 {{ syncing ? 'Syncing…' : 'Run sync now' }}
                             </button>
                         </div>
                     </div>
 
-                    <div class="grid gap-6 lg:grid-cols-2">
+                    <div v-if="view === 'settings-general'" class="grid gap-6 lg:grid-cols-2">
                         <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                             <h3 class="text-lg font-semibold text-slate-800">Connection status</h3>
                             <div class="mt-4 rounded-xl border p-4" :class="status.connected ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'">
@@ -876,7 +898,7 @@
                         </div>
                     </div>
 
-                    <section data-testid="account-type-settings" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                    <section v-if="view === 'settings-general'" data-testid="account-type-settings" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                             <div>
                                 <h3 class="text-lg font-semibold text-slate-800">Account types and net worth</h3>
@@ -930,7 +952,7 @@
                         </div>
                     </section>
 
-                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                    <div v-if="view === 'settings-categories'" data-testid="category-management-settings" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div>
                                 <h3 class="text-lg font-semibold text-slate-800">Category rules</h3>
@@ -1097,7 +1119,7 @@
                         </div>
                     </div>
 
-                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                    <div v-if="view === 'settings-ai'" data-testid="ai-settings" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div>
                                 <h3 class="text-lg font-semibold text-slate-800">AI assistance</h3>
@@ -1156,7 +1178,7 @@
                         </div>
                     </div>
 
-                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                    <div v-if="view === 'settings-general'" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div>
                                 <h3 class="text-lg font-semibold text-slate-800">PIN security</h3>
@@ -2279,7 +2301,7 @@
                 const setView = (nextView) => {
                     view.value = nextView;
                     drawerOpen.value = false;
-                    if (nextView === 'assets') window.scrollTo(0, 0);
+                    if (nextView === 'assets' || nextView.startsWith('settings-')) window.scrollTo(0, 0);
                 };
 
                 const fetchStatus = async () => {
