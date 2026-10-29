@@ -185,17 +185,6 @@
                         <span class="font-medium">Goals</span>
                     </button>
                     <button
-                        data-testid="ai-chat-nav"
-                        @click="setView('ai-chat')"
-                        class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
-                        :class="view === 'ai-chat' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
-                    >
-                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M8 10h8M8 14h5m-8 7 1.5-4.5A8 8 0 1119 16l-5 1.5L5 21z" />
-                        </svg>
-                        <span class="font-medium">AI chat</span>
-                    </button>
-                    <button
                         @click="setView('assets')"
                         class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
                         :class="view === 'assets' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
@@ -861,66 +850,16 @@
                     </div>
                 </section>
 
-                <section v-else-if="view === 'ai-chat'" data-testid="ai-chat-page" class="mx-auto max-w-4xl space-y-4">
-                    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                        <h2 class="text-xl font-semibold text-slate-800">AI goal planner</h2>
-                        <p class="mt-1 text-sm text-slate-500">Talk through options for savings, debt payoff, or retirement using a minimized summary of your finances.</p>
-                        <div class="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-950">
-                            <div class="font-semibold">What is shared</div>
-                            <p class="mt-1">The provider receives 12-month monthly totals by category and currency, balances grouped by account type and currency, and unnamed goal summaries. Account and institution names, IDs, manual-asset and goal names, and transaction payees/descriptions are not included.</p>
-                            <p class="mt-1">Your typed message is checked against known local identifiers and long account-like numbers. Review the sanitized text before sending; unknown names may not be detected. The selected AI provider receives the sanitized message and aggregate summary under its own data-retention terms. This chat is kept only in this browser session.</p>
-                        </div>
-                        <div v-if="!aiChatReady" data-testid="ai-chat-setup-notice" class="mt-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
-                            <span>Enable AI assistance and configure a key for the selected provider in AI settings to start a chat.</span>
-                            <button type="button" @click="setView('settings-ai')" class="min-h-10 shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium hover:bg-amber-100">Open AI settings</button>
-                        </div>
-                    </div>
-
-                    <div class="min-h-64 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-5" aria-live="polite">
-                        <div v-if="!chatMessages.length" data-testid="ai-chat-welcome" class="rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
-                            You can ask questions like “What monthly savings pace would get me to a six-month emergency fund?” or “What information do I need to set a debt payoff date?” I can suggest a goal draft, but you choose its sources and save it yourself.
-                        </div>
-                        <article v-for="(message, index) in chatMessages" :key="index" :data-testid="message.role === 'user' ? 'ai-chat-user-message' : 'ai-chat-assistant-message'" class="max-w-[94%] rounded-2xl border p-3 text-sm sm:p-4" :class="message.role === 'user' ? 'ml-auto border-sky-200 bg-sky-50 text-slate-800' : 'border-slate-200 bg-white text-slate-700'">
-                            <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ message.role === 'user' ? 'You · sanitized' : 'Goal planner' }}</div>
-                            <p class="whitespace-pre-wrap break-words leading-6">{{ message.content }}</p>
-                            <div v-if="message.goal_draft" data-testid="ai-chat-goal-draft" class="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3">
-                                <div class="text-sm font-semibold text-violet-950">Suggested goal draft</div>
-                                <p class="mt-1 text-xs text-violet-900">{{ goalTypeLabel(message.goal_draft.goal_type) }}<span v-if="message.goal_draft.name"> · {{ message.goal_draft.name }}</span><span v-if="message.goal_draft.target_amount"> · {{ message.goal_draft.target_amount }}</span></p>
-                                <p class="mt-1 text-xs text-violet-800">No account source is attached. You’ll select sources and review every field before saving.</p>
-                                <button type="button" data-testid="ai-chat-review-goal-draft" @click="reviewAIChatGoalDraft(message.goal_draft)" class="mt-3 min-h-10 rounded-lg bg-violet-700 px-3 py-2 text-sm font-medium text-white hover:bg-violet-800">Review in Goals</button>
-                            </div>
-                        </article>
-                    </div>
-
-                    <form data-testid="ai-chat-composer" @submit.prevent="previewAIChatMessage" class="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
-                        <label for="ai-chat-message" class="block text-sm font-medium text-slate-700">Message</label>
-                        <textarea id="ai-chat-message" data-testid="ai-chat-message" v-model="chatMessageDraft" @input="clearAIChatPreview" maxlength="2000" rows="3" placeholder="Describe what you’re aiming for—avoid adding names the local filter may not know." class="mt-2 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"></textarea>
-                        <div class="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                            <span class="text-xs text-slate-500">{{ chatMessageDraft.length }}/2000 characters · provider: {{ aiSettingsProvider }} · {{ aiSettingsModel }}</span>
-                            <button type="submit" data-testid="ai-chat-preview-button" :disabled="chatPreviewLoading || !chatMessageDraft.trim()" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{{ chatPreviewLoading ? 'Checking…' : 'Preview sanitized message' }}</button>
-                        </div>
-
-                        <div v-if="chatPreviewMessage" data-testid="chat-sanitized-preview" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
-                            <div class="text-sm font-semibold text-amber-950">Review before sending</div>
-                            <p class="mt-1 text-xs text-amber-900">{{ chatPreviewRedactionCount ? `${chatPreviewRedactionCount} known identifier(s) redacted.` : 'No known saved identifiers were found.' }} Unknown names may still be present.</p>
-                            <pre data-testid="chat-sanitized-message" class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-sm text-slate-800">{{ chatPreviewMessage }}</pre>
-                            <div class="mt-3 flex flex-col gap-2 sm:flex-row">
-                                <button type="button" data-testid="ai-chat-send-button" @click="sendAIChatMessage" :disabled="chatSending || !aiChatReady" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">{{ chatSending ? 'Sending…' : `Send sanitized message to ${aiSettingsProvider}` }}</button>
-                                <button type="button" @click="clearAIChatPreview" :disabled="chatSending" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-                            </div>
-                        </div>
-                        <div v-if="chatError" data-testid="ai-chat-error" role="alert" class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{{ chatError }}</div>
-                    </form>
-                </section>
-
                 <section v-else-if="view === 'goals'" data-testid="goals-page" class="space-y-6">
+                    <div class="grid gap-6 lg:grid-cols-[minmax(0,1.15fr),minmax(20rem,0.85fr)]">
+                    <div class="min-w-0 space-y-6">
                     <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div>
                                 <h2 class="text-xl font-semibold text-slate-800">Financial goals</h2>
                                 <p class="mt-1 text-sm text-slate-500">Choose what you’re working toward. Progress uses only the accounts and assets you select.</p>
                             </div>
-                            <button data-testid="goal-add-button" type="button" @click="openNewGoalForm" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700">Add a goal</button>
+                            <button v-if="!goalFormOpen" data-testid="goal-add-button" type="button" @click="openNewGoalForm" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700">Add a goal</button>
                         </div>
                     </div>
 
@@ -1087,8 +1026,59 @@
                     </div>
                     <div v-else-if="!goalFormOpen" data-testid="goals-empty" class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
                         <h3 class="text-base font-semibold text-slate-800">Your goals start here</h3>
-                        <p class="mt-2 text-sm text-slate-500">Set a savings target, a debt payoff date, or a retirement goal to see progress on your dashboard.</p>
-                        <button type="button" @click="openNewGoalForm" class="mt-4 rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700">Create your first goal</button>
+                        <p class="mt-2 text-sm text-slate-500">Use Add a goal to set a savings target, debt payoff date, or retirement goal. Or talk with the AI planner to work through a draft.</p>
+                    </div>
+                    </div>
+                    <aside data-testid="ai-goal-assistant" class="min-w-0 space-y-4">
+                        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                            <h2 class="text-xl font-semibold text-slate-800">AI goal planner</h2>
+                            <p class="mt-1 text-sm text-slate-500">Talk through options for savings, debt payoff, or retirement.</p>
+                            <div class="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-950">
+                                <div class="font-semibold">What is shared</div>
+                                <p class="mt-1">The provider receives 12-month monthly totals by category and currency, balances grouped by account type and currency, and unnamed goal summaries. Account and institution names, IDs, manual-asset and goal names, and transaction payees/descriptions are not included.</p>
+                                <p class="mt-1">Your typed message is checked against known local identifiers and long account-like numbers. Review the sanitized text before sending; unknown names may not be detected. The selected AI provider receives the sanitized message and aggregate summary under its own data-retention terms. This chat is kept only in this browser session.</p>
+                            </div>
+                            <div v-if="!aiChatReady" data-testid="ai-chat-setup-notice" class="mt-4 space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                                <p>Enable AI assistance and configure a key for the selected provider in AI settings to start a chat.</p>
+                                <button type="button" @click="setView('settings-ai')" class="min-h-10 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium hover:bg-amber-100">Open AI settings</button>
+                            </div>
+                        </div>
+
+                        <div class="min-h-48 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4" aria-live="polite">
+                            <div v-if="!chatMessages.length" data-testid="ai-chat-welcome" class="rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
+                                Ask about a savings pace, a debt payoff date, or what assumptions you need for retirement. I can suggest a draft; you choose its sources and save it yourself.
+                            </div>
+                            <article v-for="(message, index) in chatMessages" :key="index" :data-testid="message.role === 'user' ? 'ai-chat-user-message' : 'ai-chat-assistant-message'" class="max-w-[96%] rounded-2xl border p-3 text-sm" :class="message.role === 'user' ? 'ml-auto border-sky-200 bg-sky-50 text-slate-800' : 'border-slate-200 bg-white text-slate-700'">
+                                <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ message.role === 'user' ? 'You · sanitized' : 'Goal planner' }}</div>
+                                <p class="whitespace-pre-wrap break-words leading-6">{{ message.content }}</p>
+                                <div v-if="message.goal_draft" data-testid="ai-chat-goal-draft" class="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3">
+                                    <div class="text-sm font-semibold text-violet-950">Suggested goal draft</div>
+                                    <p class="mt-1 text-xs text-violet-900">{{ goalTypeLabel(message.goal_draft.goal_type) }}<span v-if="message.goal_draft.name"> · {{ message.goal_draft.name }}</span><span v-if="message.goal_draft.target_amount"> · {{ message.goal_draft.target_amount }}</span></p>
+                                    <p class="mt-1 text-xs text-violet-800">No account source is attached. You’ll select sources and review every field before saving.</p>
+                                    <button type="button" data-testid="ai-chat-review-goal-draft" @click="reviewAIChatGoalDraft(message.goal_draft)" class="mt-3 min-h-10 rounded-lg bg-violet-700 px-3 py-2 text-sm font-medium text-white hover:bg-violet-800">Review in form</button>
+                                </div>
+                            </article>
+                        </div>
+
+                        <form data-testid="ai-chat-composer" @submit.prevent="previewAIChatMessage" class="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+                            <label for="ai-chat-message" class="block text-sm font-medium text-slate-700">Message</label>
+                            <textarea id="ai-chat-message" data-testid="ai-chat-message" v-model="chatMessageDraft" @input="clearAIChatPreview" maxlength="2000" rows="3" placeholder="Describe what you’re aiming for—avoid adding names the local filter may not know." class="mt-2 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"></textarea>
+                            <div class="mt-2 flex flex-col gap-2 sm:items-start sm:justify-between">
+                                <span class="text-xs text-slate-500">{{ chatMessageDraft.length }}/2000 characters · {{ aiSettingsProvider }} · {{ aiSettingsModel }}</span>
+                                <button type="submit" data-testid="ai-chat-preview-button" :disabled="chatPreviewLoading || !chatMessageDraft.trim()" class="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{{ chatPreviewLoading ? 'Checking…' : 'Preview sanitized message' }}</button>
+                            </div>
+                            <div v-if="chatPreviewMessage" data-testid="chat-sanitized-preview" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                                <div class="text-sm font-semibold text-amber-950">Review before sending</div>
+                                <p class="mt-1 text-xs text-amber-900">{{ chatPreviewRedactionCount ? `${chatPreviewRedactionCount} known identifier(s) redacted.` : 'No known saved identifiers were found.' }} Unknown names may still be present.</p>
+                                <pre data-testid="chat-sanitized-message" class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-sm text-slate-800">{{ chatPreviewMessage }}</pre>
+                                <div class="mt-3 flex flex-col gap-2">
+                                    <button type="button" data-testid="ai-chat-send-button" @click="sendAIChatMessage" :disabled="chatSending || !aiChatReady" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">{{ chatSending ? 'Sending…' : `Send sanitized message to ${aiSettingsProvider}` }}</button>
+                                    <button type="button" @click="clearAIChatPreview" :disabled="chatSending" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+                                </div>
+                            </div>
+                            <div v-if="chatError" data-testid="ai-chat-error" role="alert" class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{{ chatError }}</div>
+                        </form>
+                    </aside>
                     </div>
                 </section>
 

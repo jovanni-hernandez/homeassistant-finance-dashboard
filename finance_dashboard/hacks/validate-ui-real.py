@@ -1387,6 +1387,8 @@ def main():
 
             goal_checks = {
                 "goals_page_opens": False,
+                "one_goal_creation_entry_point": False,
+                "add_button_hides_during_creation": False,
                 "debt_goal_fields_visible": False,
                 "retirement_goal_fields_visible": False,
                 "savings_goal_can_be_created": False,
@@ -1400,7 +1402,15 @@ def main():
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goals-page"]'))
             )
             goal_checks["goals_page_opens"] = "Financial goals" in goals_page.text
+            goal_checks["one_goal_creation_entry_point"] = (
+                len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-add-button"]')) == 1
+                and not driver.find_elements(By.XPATH, "//button[normalize-space()='Create your first goal']")
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-goal-assistant"]'))
+            )
             driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]').click()
+            goal_checks["add_button_hides_during_creation"] = not driver.find_elements(
+                By.CSS_SELECTOR, '[data-testid="goal-add-button"]'
+            )
             goal_form_screenshot = screenshot.with_name(screenshot.stem + "-goal-form" + screenshot.suffix)
             driver.execute_script("window.scrollTo(0, 0)")
             driver.save_screenshot(str(goal_form_screenshot))
@@ -1478,18 +1488,20 @@ def main():
             goals_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
 
             ai_chat_checks = {
-                "chat_page_opens": False,
+                "assistant_is_embedded_in_goals": False,
                 "sanitized_preview_removes_known_identifiers": False,
                 "sanitized_chat_can_be_sent": False,
                 "goal_draft_opens_review_form": False,
                 "draft_requires_user_save": False,
             }
-            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
-            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-nav"]').click()
-            ai_chat_page = WebDriverWait(driver, args.timeout).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="ai-chat-page"]'))
+            goals_page = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goals-page"]'))
             )
-            ai_chat_checks["chat_page_opens"] = "AI goal planner" in ai_chat_page.text
+            ai_chat_checks["assistant_is_embedded_in_goals"] = (
+                "AI goal planner" in goals_page.text
+                and bool(goals_page.find_elements(By.CSS_SELECTOR, '[data-testid="ai-goal-assistant"]'))
+                and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-chat-nav"]')
+            )
             ai_chat_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-message"]')
             ai_chat_input.send_keys("Help me plan with Travel Card 123456789 for Groceries and about $500 monthly.")
             driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-preview-button"]').click()
