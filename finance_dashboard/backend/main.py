@@ -24,6 +24,7 @@ from ai_chat import (
     create_goal_chat_response,
     prepare_goal_chat_preview,
 )
+from ai_prompts import AIPromptValidationError, get_ai_prompt_settings, save_ai_system_prompt
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
 from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
@@ -198,6 +199,11 @@ class AiSettingsRequest(BaseModel):
 class AiModelsRequest(BaseModel):
     provider: str
     api_key: str | None = Field(default=None, max_length=4096)
+
+
+class AiPromptRequest(BaseModel):
+    prompt: str | None = Field(default=None, max_length=12000)
+    reset_to_default: bool = False
 
 
 @app.on_event("startup")
@@ -752,6 +758,26 @@ def api_list_ai_models(payload: AiModelsRequest):
     except Exception as exc:
         logger.error("AI model discovery failed (%s).", type(exc).__name__)
         raise HTTPException(status_code=502, detail="Could not retrieve models from the selected provider.") from exc
+
+
+@app.get("/api/ai/prompts", dependencies=[Depends(verify_ha_auth)])
+def api_get_ai_prompts():
+    return get_ai_prompt_settings()
+
+
+@app.post("/api/ai/prompts/{prompt_id}", dependencies=[Depends(verify_ha_auth)])
+def api_set_ai_prompt(prompt_id: str, payload: AiPromptRequest):
+    try:
+        if payload.reset_to_default and payload.prompt is not None:
+            raise AIPromptValidationError("Choose either a custom prompt or Reset to default.")
+        prompt = save_ai_system_prompt(
+            prompt_id,
+            payload.prompt,
+            reset_to_default=payload.reset_to_default,
+        )
+        return {"status": "success", "prompt_id": prompt_id, **prompt}
+    except AIPromptValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/ai/settings", dependencies=[Depends(verify_ha_auth)])

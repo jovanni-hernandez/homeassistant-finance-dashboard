@@ -5,6 +5,7 @@ import requests
 
 from category_analysis import generate_category_analysis
 from database import get_setting, set_setting
+from ai_prompts import get_ai_system_prompt
 
 logger = logging.getLogger("finance_dashboard")
 
@@ -221,14 +222,7 @@ def build_ai_category_defaults(top_n: int = 25, min_count: int = 2):
     except Exception as exc:
         raise RuntimeError(f"LiteLLM is not available: {exc}")
 
-    system_prompt = (
-        "You are a finance categorization assistant.\n"
-        "Return ONLY valid JSON as an array of objects.\n"
-        "Each object must look like {\"category\": \"Name\", \"patterns\": [\"pattern1\", \"pattern2\"]}.\n"
-        "Use concise merchant/payee patterns that are likely to match future transactions.\n"
-        "Prefer exact merchant names, common abbreviations, and stable keyword fragments.\n"
-        "Do not add commentary, markdown, or code fences."
-    )
+    system_prompt = get_ai_system_prompt("category_rules")
 
     user_prompt = json.dumps(
         {

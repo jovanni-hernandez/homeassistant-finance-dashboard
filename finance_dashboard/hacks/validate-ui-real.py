@@ -172,6 +172,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/recurring-payments",
         "api/pin/settings",
         "api/ai/settings",
+        "api/ai/prompts",
     ]
     statuses = {}
     for endpoint in endpoints:
@@ -1414,6 +1415,9 @@ def main():
                 "saved_key_loads_model_choices": False,
                 "new_key_loads_provider_models": False,
                 "save_uses_selected_provider_and_model": False,
+                "both_system_prompts_are_visible": False,
+                "goal_prompt_can_be_saved_and_reset": False,
+                "category_prompt_can_be_saved_and_reset": False,
             }
             openai_key_input = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.ID, "ai-key-openai"))
@@ -1456,6 +1460,43 @@ def main():
                 and saved_ai_settings.get("openai_api_key") is None
                 and saved_ai_settings.get("gemini_api_key") is None
             )
+            goal_prompt_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-goal_planner"]')
+            category_prompt_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-category_rules"]')
+            default_goal_prompt = goal_prompt_input.get_property("value")
+            default_category_prompt = category_prompt_input.get_property("value")
+            ai_settings_checks["both_system_prompts_are_visible"] = (
+                "minimized financial snapshot" in default_goal_prompt
+                and "goal_draft" in default_goal_prompt
+                and "valid JSON" in default_category_prompt
+                and "category" in default_category_prompt
+            )
+
+            goal_prompt_input.clear()
+            goal_prompt_input.send_keys(default_goal_prompt + "\nAsk one clear follow-up at a time.")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-save-goal_planner"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: "System prompt saved" in current.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-message-goal_planner"]').text
+            )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-reset-goal_planner"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-goal_planner"]').get_property("value") == default_goal_prompt
+            )
+            ai_settings_checks["goal_prompt_can_be_saved_and_reset"] = True
+
+            category_prompt_input.clear()
+            category_prompt_input.send_keys(default_category_prompt + "\nPrefer stable, recognizable merchant patterns.")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-save-category_rules"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: "System prompt saved" in current.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-message-category_rules"]').text
+            )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-reset-category_rules"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="ai-prompt-category_rules"]').get_property("value") == default_category_prompt
+            )
+            ai_settings_checks["category_prompt_can_be_saved_and_reset"] = True
+            ai_prompts_screenshot = screenshot.with_name(screenshot.stem + "-settings-ai-prompts" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'start'});", driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-system-prompts"]'))
+            driver.save_screenshot(str(ai_prompts_screenshot))
             driver.execute_script("window.scrollTo(0, 0)")
             settings_overflow = settings_overflow or driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
             driver.execute_script("window.scrollTo(0, 0)")
@@ -1875,6 +1916,7 @@ def main():
                 "general_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-general" + screenshot.suffix)),
                 "category_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-categories" + screenshot.suffix)),
                 "ai_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-ai" + screenshot.suffix)),
+                "ai_prompts_screenshot": str(ai_prompts_screenshot),
                 "goals_screenshot": str(goals_screenshot),
                 "dashboard_goals_screenshot": str(dashboard_goals_screenshot),
                 "goal_form_screenshot": str(goal_form_screenshot),

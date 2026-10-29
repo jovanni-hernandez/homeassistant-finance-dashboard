@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from ai_assistant import _provider_key, get_ai_settings
+from ai_prompts import DEFAULT_SYSTEM_PROMPTS, get_ai_system_prompt
 from database import get_manual_assets, get_stored_accounts
 from goals import get_goals
 from models import LIABILITY_ACCOUNT_TYPES, SessionLocal, Transaction
@@ -25,14 +26,7 @@ CHAT_PREVIEW_LIMIT = 64
 _pending_chat_previews = {}
 _pending_chat_previews_lock = threading.Lock()
 logger = logging.getLogger("finance_dashboard")
-CHAT_SYSTEM_PROMPT = """You help the user think through financial goals using a minimized financial snapshot.
-The snapshot contains aggregate balances grouped by currency and account type, monthly income and category spending totals, and unnamed goal summaries. It contains no account names, account IDs, merchant names, or transaction descriptions. Never ask for account names, account numbers, or other identifying details.
-
-Use only the information provided. Keep currencies separate; never convert currencies or invent balances. Treat projections as estimates, not guarantees or professional financial advice. Do not assume an APR, return, inflation rate, or contribution amount unless the user or snapshot provides it. Ask a concise follow-up if important inputs are missing.
-
-When you have enough information to suggest one concrete goal, include exactly one final structured block in this format, with no markdown fence:
-<goal_draft>{"goal_type":"savings|debt_payoff|retirement","name":"short non-identifying label","target_amount":"number","target_date":"YYYY-MM-DD","apr_percent":"number","planned_monthly":"number","retirement_timing_mode":"year|age","retirement_year":0,"birth_year":0,"target_retirement_age":0,"expected_return_percent":"number","inflation_percent":"number"}</goal_draft>
-Include only relevant fields. Never include account IDs or account names in a draft. The app will require the user to choose sources and review/save the draft."""
+CHAT_SYSTEM_PROMPT = DEFAULT_SYSTEM_PROMPTS["goal_planner"]
 
 
 class AIChatError(ValueError):
@@ -336,7 +330,7 @@ def _prepare_goal_chat_payload(messages: list[dict]) -> dict:
         _recent_transactions(date.today()),
     )
     system_content = (
-        CHAT_SYSTEM_PROMPT
+        get_ai_system_prompt("goal_planner")
         + "\n\nSanitized aggregate financial snapshot (JSON):\n"
         + json.dumps(context, separators=(",", ":"), ensure_ascii=False)
     )
@@ -481,19 +475,81 @@ def _provider_status_code(exc: Exception) -> int | None:
     return None
 
 
-def _safe_provider_error(provider: str, status: int | None) -> str:
+SAFE_UNSUPPORTED_PARAMS = {
+    "frequency_penalty",
+    "logprobs",
+    "max_completion_tokens",
+    "max_tokens",
+    "n",
+    "parallel_tool_calls",
+    "presence_penalty",
+    "reasoning_effort",
+    "response_format",
+    "seed",
+    "stop",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_logprobs",
+    "top_p",
+}
+
+
+def _unsupported_params(exc: Exception) -> list[str]:
+    found = set()
+    for candidate in (getattr(exc, "param", None), getattr(exc, "unsupported_params", None)):
+        candidates = candidate if isinstance(candidate, (list, tuple, set)) else [candidate]
+        for value in candidates:
+            if isinstance(value, str) and value.lower() in SAFE_UNSUPPORTED_PARAMS:
+                found.add(value.lower())
+
+    # Parse only recognized option names near an "unsupported parameter" label.
+    # Never return the exception's raw message, which could contain request data.
+    diagnostic = str(getattr(exc, "message", "") or str(exc))[:400]
+    match = re.search(r"unsupported\s+(?:params?|parameters?)\b", diagnostic, re.IGNORECASE)
+    if match:
+        nearby_text = diagnostic[match.end():match.end() + 160]
+        for parameter in SAFE_UNSUPPORTED_PARAMS:
+            if re.search(rf"(?<![\w]){re.escape(parameter)}(?![\w])", nearby_text, re.IGNORECASE):
+                found.add(parameter)
+    return sorted(found)
+
+
+def _safe_provider_error(provider: str, model: str, status: int | None, exc: Exception) -> tuple[str, str]:
     provider_name = {"openai": "OpenAI", "claude": "Anthropic", "gemini": "Google Gemini"}.get(provider, "AI provider")
+    error_type = type(exc).__name__
+    safe_model = re.sub(r"[^A-Za-z0-9._:/+\-]", "", model)[:80] or "selected model"
+    if error_type == "UnsupportedParamsError":
+        unsupported = _unsupported_params(exc)
+        if unsupported:
+            names = ", ".join(f"`{name}`" for name in unsupported)
+            options = ", ".join(unsupported)
+            diagnostic = f"unsupported_params:{','.join(unsupported)}"
+            return (
+                f"{provider_name} rejected request option {names} for model `{safe_model}` (HTTP {status or 400}). "
+                f"The planner sends this option; choose a model in AI Settings that supports {options}.",
+                diagnostic,
+            )
+        return (
+            f"{provider_name} reports that model `{safe_model}` does not accept one of the planner's request options "
+            f"(temperature or max-token limit, HTTP {status or 400}). Choose another available chat model in AI Settings.",
+            "unsupported_params",
+        )
     if status in {400, 404}:
-        return f"{provider_name} rejected the request (HTTP {status}). Check that the selected model is available to this API key and supports chat."
+        return (
+            f"{provider_name} rejected the request for model `{safe_model}` (HTTP {status}, {error_type}). "
+            "Check the provider's model access and request compatibility.",
+            f"http_{status}:{error_type}",
+        )
     if status in {401, 403}:
-        return f"{provider_name} rejected the API key or its permissions (HTTP {status}). Check the key and model access."
+        return f"{provider_name} rejected the API key or its permissions (HTTP {status}). Check the key and model access.", f"http_{status}:{error_type}"
     if status == 429:
-        return f"{provider_name} rate limit or quota reached (HTTP 429). Check your provider usage and try again later."
+        return f"{provider_name} rate limit or quota reached (HTTP 429). Check your provider usage and try again later.", f"http_429:{error_type}"
     if status is not None and status >= 500:
-        return f"{provider_name} is temporarily unavailable (HTTP {status}). Try again later."
+        return f"{provider_name} is temporarily unavailable (HTTP {status}). Try again later.", f"http_{status}:{error_type}"
     if status is not None:
-        return f"The {provider_name} request failed (HTTP {status}). Check the provider and model settings."
-    return f"Could not reach {provider_name}. Check your connection and provider status, then try again."
+        return f"The {provider_name} request failed (HTTP {status}, {error_type}). Check the provider and model settings.", f"http_{status}:{error_type}"
+    return f"Could not reach {provider_name} ({error_type}). Check your connection and provider status, then try again.", f"connection:{error_type}"
 
 
 def create_goal_chat_response(preview_id: str) -> dict:
@@ -514,14 +570,18 @@ def create_goal_chat_response(preview_id: str) -> dict:
             response_text = str(response_text)
     except Exception as exc:
         status = _provider_status_code(exc)
+        safe_message, diagnostic = _safe_provider_error(
+            prepared["provider"], prepared["model"], status, exc,
+        )
         logger.warning(
-            "AI provider request failed (provider=%s, status=%s, error_type=%s). Chat content and credentials were not logged.",
+            "AI provider request failed (provider=%s, status=%s, error_type=%s, diagnostic=%s). Chat content and credentials were not logged.",
             prepared["provider"],
             status if status is not None else "unknown",
             type(exc).__name__,
+            diagnostic,
         )
         raise AIProviderRequestError(
-            _safe_provider_error(prepared["provider"], status),
+            safe_message,
             provider_status=status,
         ) from None
 

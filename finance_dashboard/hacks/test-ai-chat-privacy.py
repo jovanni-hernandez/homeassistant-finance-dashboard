@@ -25,7 +25,9 @@ sys.path.insert(0, str(BACKEND))
 os.chdir(BACKEND)
 
 import ai_chat  # noqa: E402
+import ai_assistant  # noqa: E402
 from ai_assistant import AI_ENABLED_KEY, AI_MODEL_KEY, AI_OPENAI_KEY, AI_PROVIDER_KEY  # noqa: E402
+from ai_prompts import save_ai_system_prompt  # noqa: E402
 from database import (  # noqa: E402
     create_manual_asset,
     get_manual_assets,
@@ -173,20 +175,52 @@ class AIChatPrivacyTests(unittest.TestCase):
         self.assertEqual(len(get_goals(get_stored_accounts(), get_manual_assets())), before)
 
     def test_provider_failure_gives_safe_actionable_error_and_logs_no_chat_content(self):
-        class ProviderFailure(Exception):
+        class UnsupportedParamsError(Exception):
             status_code = 400
 
         private_message = "Use Primary Checking for my private plan"
         preview = ai_chat.prepare_goal_chat_preview([{"role": "user", "content": private_message}])
-        with patch.object(ai_chat, "_completion", side_effect=ProviderFailure("raw provider response containing credentials")):
+        provider_detail = "Unsupported parameter: 'temperature' is not supported with this model. raw provider response containing credentials"
+        with patch.object(ai_chat, "_completion", side_effect=UnsupportedParamsError(provider_detail)):
             with self.assertLogs("finance_dashboard", level="WARNING") as captured_logs:
                 with self.assertRaises(ai_chat.AIProviderRequestError) as raised:
                     ai_chat.create_goal_chat_response(preview["preview_id"])
 
-        self.assertIn("selected model is available", str(raised.exception))
+        self.assertIn("`temperature`", str(raised.exception))
+        self.assertIn("privacy-test-model", str(raised.exception))
+        self.assertEqual(raised.exception.provider_status, 400)
         self.assertNotIn(private_message, str(raised.exception))
+        self.assertIn("diagnostic=unsupported_params:temperature", "\n".join(captured_logs.output))
         self.assertNotIn("raw provider response containing credentials", "\n".join(captured_logs.output))
         self.assertNotIn(private_message, "\n".join(captured_logs.output))
+
+    def test_custom_goal_prompt_is_used_in_the_reviewed_provider_payload(self):
+        custom_prompt = "Use a concise, supportive tone and ask for missing assumptions."
+        save_ai_system_prompt("goal_planner", custom_prompt)
+        preview = ai_chat.prepare_goal_chat_preview([{"role": "user", "content": "Help me plan a savings goal."}])
+        self.assertTrue(preview["messages"][0]["content"].startswith(custom_prompt + "\n\n"))
+        self.assertIn("Sanitized aggregate financial snapshot (JSON)", preview["messages"][0]["content"])
+
+    def test_custom_category_prompt_is_used_for_category_generation(self):
+        custom_prompt = "Return JSON only and use stable merchant names."
+        save_ai_system_prompt("category_rules", custom_prompt)
+        captured = {}
+
+        def fake_completion(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='[{"category":"Dining","patterns":["Cafe"]}]'))])
+
+        analysis = {
+            "current_category_mix": [],
+            "proposals": [],
+            "uncategorized_candidates": [],
+            "rules_json": "[]",
+        }
+        with patch.object(ai_assistant, "generate_category_analysis", return_value=analysis):
+            with patch.dict(sys.modules, {"litellm": SimpleNamespace(completion=fake_completion)}):
+                ai_assistant.build_ai_category_defaults()
+
+        self.assertEqual(captured["messages"][0]["content"], custom_prompt)
 
     def test_disabled_ai_does_not_call_provider(self):
         set_setting(AI_ENABLED_KEY, "false")

@@ -1453,6 +1453,35 @@
                         <div v-if="aiSettingsMessage" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="aiSettingsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-violet-200 bg-violet-50 text-violet-700'">
                             {{ aiSettingsMessage }}
                         </div>
+
+                        <div data-testid="ai-system-prompts" class="mt-8 border-t border-slate-200 pt-6">
+                            <div>
+                                <h4 class="text-base font-semibold text-slate-800">System prompts</h4>
+                                <p class="mt-1 text-sm text-slate-500">Customize the instructions used by each AI feature. Changes apply to future requests. Reset restores that feature’s shipped default.</p>
+                            </div>
+                            <p v-if="aiPromptLoading" data-testid="ai-prompts-loading" class="mt-4 text-sm text-slate-500">Loading system prompts…</p>
+                            <div v-else class="mt-4 grid gap-4 lg:grid-cols-2">
+                                <section v-for="promptSection in aiPromptSections" :key="promptSection.id" class="min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                    <div class="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                                        <div>
+                                            <h5 class="text-sm font-semibold text-slate-800">{{ promptSection.title }}</h5>
+                                            <p class="mt-1 text-xs leading-5 text-slate-500">{{ promptSection.description }}</p>
+                                        </div>
+                                        <span class="shrink-0 text-xs text-slate-500">{{ aiSystemPrompts[promptSection.id].is_custom ? 'Custom' : 'Default' }}</span>
+                                    </div>
+                                    <label class="sr-only" :for="`ai-prompt-${promptSection.id}`">{{ promptSection.title }} system prompt</label>
+                                    <textarea :id="`ai-prompt-${promptSection.id}`" :data-testid="`ai-prompt-${promptSection.id}`" v-model="aiPromptDrafts[promptSection.id]" maxlength="12000" rows="12" spellcheck="true" class="mt-3 w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-3 font-mono text-xs leading-5 text-slate-800 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"></textarea>
+                                    <div class="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <span class="text-xs text-slate-500">{{ aiPromptDrafts[promptSection.id].length }}/12000 characters · saved prompts are encrypted</span>
+                                        <div class="flex gap-2">
+                                            <button type="button" :data-testid="`ai-prompt-reset-${promptSection.id}`" @click="resetAiPrompt(promptSection.id)" :disabled="!!aiPromptSavingId" class="min-h-10 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50">Reset to default</button>
+                                            <button type="button" :data-testid="`ai-prompt-save-${promptSection.id}`" @click="saveAiPrompt(promptSection.id)" :disabled="!!aiPromptSavingId" class="min-h-10 flex-1 rounded-lg bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50">{{ aiPromptSavingId === promptSection.id ? 'Saving…' : 'Save prompt' }}</button>
+                                        </div>
+                                    </div>
+                                    <div v-if="aiPromptMessage.id === promptSection.id" :data-testid="`ai-prompt-message-${promptSection.id}`" role="status" class="mt-3 rounded-lg border px-3 py-2 text-xs" :class="aiPromptMessage.error ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">{{ aiPromptMessage.text }}</div>
+                                </section>
+                            </div>
+                        </div>
                     </div>
 
                     <div v-if="view === 'settings-general'" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -1697,6 +1726,26 @@
                 const aiSettingsError = ref(false);
                 const savingAiSettings = ref(false);
                 const aiProviderKeys = ref({ openai: false, claude: false, gemini: false });
+                const aiPromptSections = [
+                    {
+                        id: 'goal_planner',
+                        title: 'Goal planner',
+                        description: 'Instructions for the Goals-page assistant and its structured goal drafts.',
+                    },
+                    {
+                        id: 'category_rules',
+                        title: 'Category rule generator',
+                        description: 'Instructions for AI-generated merchant and category matching rules.',
+                    },
+                ];
+                const aiSystemPrompts = ref({
+                    goal_planner: { prompt: '', default_prompt: '', is_custom: false },
+                    category_rules: { prompt: '', default_prompt: '', is_custom: false },
+                });
+                const aiPromptDrafts = ref({ goal_planner: '', category_rules: '' });
+                const aiPromptSavingId = ref('');
+                const aiPromptLoading = ref(true);
+                const aiPromptMessage = ref({ id: '', text: '', error: false });
                 const selectedProviderApiKey = computed(() => ({
                     openai: aiOpenaiApiKey.value,
                     claude: aiClaudeApiKey.value,
@@ -2252,6 +2301,29 @@
                     }
                 };
 
+                const fetchAiPrompts = async () => {
+                    if (!pinStatus.value.session_active) return;
+                    aiPromptLoading.value = true;
+                    try {
+                        const res = await apiFetch('/api/ai/prompts');
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Failed to load AI system prompts.');
+                        const prompts = data.prompts || {};
+                        aiSystemPrompts.value = {
+                            goal_planner: prompts.goal_planner || { prompt: '', default_prompt: '', is_custom: false },
+                            category_rules: prompts.category_rules || { prompt: '', default_prompt: '', is_custom: false },
+                        };
+                        aiPromptDrafts.value = {
+                            goal_planner: aiSystemPrompts.value.goal_planner.prompt || '',
+                            category_rules: aiSystemPrompts.value.category_rules.prompt || '',
+                        };
+                    } catch (err) {
+                        console.warn('Could not load AI system prompts:', err.message);
+                    } finally {
+                        aiPromptLoading.value = false;
+                    }
+                };
+
                 const fetchGoals = async () => {
                     goalsLoading.value = true;
                     try {
@@ -2267,7 +2339,7 @@
                 };
 
                 const fetchProtectedState = async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings(), fetchGoals()]);
+                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals()]);
                     await nextTick();
                     renderSankey();
                     renderSpendingPie();
@@ -2397,6 +2469,60 @@
                         aiSettingsMessage.value = err.message;
                     } finally {
                         savingAiSettings.value = false;
+                    }
+                };
+
+                const saveAiPrompt = async (promptId) => {
+                    if (!aiSystemPrompts.value[promptId] || aiPromptSavingId.value) return;
+                    aiPromptSavingId.value = promptId;
+                    aiPromptMessage.value = { id: promptId, text: '', error: false };
+                    try {
+                        const res = await apiFetch(`/api/ai/prompts/${encodeURIComponent(promptId)}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ prompt: aiPromptDrafts.value[promptId], reset_to_default: false }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Could not save this system prompt.');
+                        aiSystemPrompts.value[promptId] = {
+                            ...aiSystemPrompts.value[promptId],
+                            prompt: data.prompt,
+                            default_prompt: data.default_prompt,
+                            is_custom: !!data.is_custom,
+                        };
+                        aiPromptDrafts.value[promptId] = data.prompt;
+                        aiPromptMessage.value = { id: promptId, text: 'System prompt saved. It will be used for future requests.', error: false };
+                    } catch (err) {
+                        aiPromptMessage.value = { id: promptId, text: err.message, error: true };
+                    } finally {
+                        aiPromptSavingId.value = '';
+                    }
+                };
+
+                const resetAiPrompt = async (promptId) => {
+                    if (!aiSystemPrompts.value[promptId] || aiPromptSavingId.value) return;
+                    aiPromptSavingId.value = promptId;
+                    aiPromptMessage.value = { id: promptId, text: '', error: false };
+                    try {
+                        const res = await apiFetch(`/api/ai/prompts/${encodeURIComponent(promptId)}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ reset_to_default: true }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Could not reset this system prompt.');
+                        aiSystemPrompts.value[promptId] = {
+                            ...aiSystemPrompts.value[promptId],
+                            prompt: data.prompt,
+                            default_prompt: data.default_prompt,
+                            is_custom: !!data.is_custom,
+                        };
+                        aiPromptDrafts.value[promptId] = data.prompt;
+                        aiPromptMessage.value = { id: promptId, text: 'Restored the shipped default prompt.', error: false };
+                    } catch (err) {
+                        aiPromptMessage.value = { id: promptId, text: err.message, error: true };
+                    } finally {
+                        aiPromptSavingId.value = '';
                     }
                 };
 
@@ -4287,6 +4413,12 @@
                     aiSettingsMessage,
                     aiSettingsError,
                     savingAiSettings,
+                    aiPromptSections,
+                    aiSystemPrompts,
+                    aiPromptDrafts,
+                    aiPromptSavingId,
+                    aiPromptLoading,
+                    aiPromptMessage,
                     aiChatReady,
                     chatMessages,
                     chatMessageDraft,
@@ -4352,6 +4484,8 @@
                     applyRuleRowChange,
                     saveCategoryRules,
                     saveAiSettings,
+                    saveAiPrompt,
+                    resetAiPrompt,
                     updateAccountType,
                     updateAccountNickname,
                     saveManualAsset,
