@@ -1391,11 +1391,12 @@
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div>
                                 <h3 class="text-lg font-semibold text-slate-800">AI assistance</h3>
-                                <p class="mt-1 text-sm text-slate-500">Configure the provider and keys used for AI-generated category rules.</p>
+                                <p class="mt-1 text-sm text-slate-500">Choose a provider, load the models available to your key, then save your selection.</p>
                             </div>
                             <button
                                 @click="saveAiSettings"
-                                :disabled="savingAiSettings"
+                                :disabled="savingAiSettings || aiModelsLoading || !aiSettingsProvider"
+                                data-testid="ai-settings-save"
                                 class="inline-flex items-center justify-center rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700 disabled:opacity-60"
                             >
                                 {{ savingAiSettings ? 'Saving…' : 'Save AI settings' }}
@@ -1405,32 +1406,33 @@
                         <div class="mt-4 grid gap-4 md:grid-cols-2">
                             <label class="block">
                                 <span class="block text-sm font-medium text-slate-700">Provider</span>
-                                <select v-model="aiSettingsProvider" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-violet-500 focus:ring-2 focus:ring-violet-100">
+                                <select v-model="aiSettingsProvider" data-testid="ai-provider-select" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-violet-500 focus:ring-2 focus:ring-violet-100">
+                                    <option value="">Choose a provider</option>
                                     <option value="openai">OpenAI</option>
                                     <option value="claude">Claude</option>
                                     <option value="gemini">Gemini</option>
                                 </select>
                             </label>
 
-                            <label class="block">
+                            <label v-if="aiSettingsProvider" class="block">
                                 <span class="block text-sm font-medium text-slate-700">Model</span>
-                                <input v-model="aiSettingsModel" type="text" placeholder="gpt-4o-mini" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                                <select v-model="aiSettingsModel" data-testid="ai-model-select" :disabled="aiModelsLoading || !aiAvailableModels.length" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-violet-500 focus:ring-2 focus:ring-violet-100 disabled:bg-slate-100 disabled:text-slate-500">
+                                    <option v-if="aiSettingsModel && !aiAvailableModels.includes(aiSettingsModel)" :value="aiSettingsModel">{{ aiSettingsModel }} (current selection)</option>
+                                    <option v-for="model in aiAvailableModels" :key="model" :value="model">{{ model }}</option>
+                                </select>
+                                <p v-if="aiModelsLoading" data-testid="ai-models-loading" class="mt-2 text-xs text-slate-500">Loading models from {{ aiSettingsProvider }}…</p>
+                                <p v-else-if="aiModelsMessage" data-testid="ai-models-message" class="mt-2 text-xs text-slate-500">{{ aiModelsMessage }}</p>
+                                <p v-if="aiModelsError" data-testid="ai-models-error" role="alert" class="mt-2 text-xs text-red-700">{{ aiModelsError }}</p>
                             </label>
                         </div>
 
-                        <div class="mt-4 grid gap-4 md:grid-cols-3">
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700">OpenAI API key</label>
-                                <input v-model="aiOpenaiApiKey" type="password" autocomplete="off" placeholder="sk-..." class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700">Claude API key</label>
-                                <input v-model="aiClaudeApiKey" type="password" autocomplete="off" placeholder="sk-ant-..." class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700">Gemini API key</label>
-                                <input v-model="aiGeminiApiKey" type="password" autocomplete="off" placeholder="AIza..." class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
-                            </div>
+                        <div v-if="aiSettingsProvider" class="mt-4 max-w-xl">
+                            <label class="block text-sm font-medium text-slate-700" :for="`ai-key-${aiSettingsProvider}`">{{ aiProviderLabels[aiSettingsProvider] }} API key</label>
+                            <input v-if="aiSettingsProvider === 'openai'" id="ai-key-openai" v-model="aiOpenaiApiKey" data-testid="ai-provider-key" type="password" autocomplete="new-password" :placeholder="aiProviderKeys.openai ? 'A key is already saved; enter a replacement or leave blank' : 'Enter your OpenAI API key'" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                            <input v-else-if="aiSettingsProvider === 'claude'" id="ai-key-claude" v-model="aiClaudeApiKey" data-testid="ai-provider-key" type="password" autocomplete="new-password" :placeholder="aiProviderKeys.claude ? 'A key is already saved; enter a replacement or leave blank' : 'Enter your Claude API key'" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                            <input v-else id="ai-key-gemini" v-model="aiGeminiApiKey" data-testid="ai-provider-key" type="password" autocomplete="new-password" :placeholder="aiProviderKeys.gemini ? 'A key is already saved; enter a replacement or leave blank' : 'Enter your Gemini API key'" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-100" />
+                            <p v-if="aiProviderKeys[aiSettingsProvider]" class="mt-2 text-xs text-slate-500">A key is saved. Leave this blank to keep using it.</p>
+                            <p v-else class="mt-2 text-xs text-slate-500">The key is used to load available models now and is stored only when you save settings.</p>
                         </div>
 
                         <div class="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
@@ -1438,7 +1440,7 @@
                                 <input v-model="aiSettingsEnabled" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500" />
                                 Enable AI assistance
                             </label>
-                            <span>Saved keys stay encrypted in the app database.</span>
+                            <span>Saved keys stay encrypted in the app database. Model discovery contacts the selected provider.</span>
                         </div>
 
                         <div v-if="aiSettingsMessage" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="aiSettingsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-violet-200 bg-violet-50 text-violet-700'">
@@ -1671,15 +1673,28 @@
                 const generatingCategoryDefaults = ref(false);
                 const generatingAiCategoryDefaults = ref(false);
                 const aiSettingsEnabled = ref(false);
-                const aiSettingsProvider = ref('openai');
-                const aiSettingsModel = ref('gpt-4o-mini');
+                const aiSettingsLoaded = ref(false);
+                const aiSettingsProvider = ref('');
+                const aiSettingsModel = ref('');
                 const aiOpenaiApiKey = ref('');
                 const aiClaudeApiKey = ref('');
                 const aiGeminiApiKey = ref('');
+                const aiAvailableModels = ref([]);
+                const aiModelsLoading = ref(false);
+                const aiModelsError = ref('');
+                const aiModelsMessage = ref('');
+                const aiProviderLabels = { openai: 'OpenAI', claude: 'Claude', gemini: 'Gemini' };
+                let aiModelsTimer = null;
+                let aiModelsRequestId = 0;
                 const aiSettingsMessage = ref('');
                 const aiSettingsError = ref(false);
                 const savingAiSettings = ref(false);
                 const aiProviderKeys = ref({ openai: false, claude: false, gemini: false });
+                const selectedProviderApiKey = computed(() => ({
+                    openai: aiOpenaiApiKey.value,
+                    claude: aiClaudeApiKey.value,
+                    gemini: aiGeminiApiKey.value,
+                })[aiSettingsProvider.value] || '');
                 const chatMessages = ref([]);
                 const chatMessageDraft = ref('');
                 const chatPreviewMessage = ref('');
@@ -2149,6 +2164,60 @@
                     return map[provider] || map.openai;
                 };
 
+                const fetchAiModels = async (provider, apiKey = '') => {
+                    const requestId = ++aiModelsRequestId;
+                    aiModelsLoading.value = true;
+                    aiModelsError.value = '';
+                    aiModelsMessage.value = '';
+                    try {
+                        const res = await apiFetch('/api/ai/models', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ provider, api_key: apiKey || null }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || `Could not load models (${res.status})`);
+                        if (requestId !== aiModelsRequestId || provider !== aiSettingsProvider.value || apiKey !== selectedProviderApiKey.value.trim()) return;
+
+                        const models = Array.isArray(data.models) ? data.models.filter((model) => typeof model === 'string' && model.trim()) : [];
+                        aiAvailableModels.value = models;
+                        if (!models.includes(aiSettingsModel.value)) {
+                            aiSettingsModel.value = models.includes(providerDefaultModel(provider))
+                                ? providerDefaultModel(provider)
+                                : (models[0] || '');
+                        }
+                        aiModelsMessage.value = `${models.length} compatible model${models.length === 1 ? '' : 's'} found.`;
+                    } catch (err) {
+                        if (requestId === aiModelsRequestId) {
+                            aiAvailableModels.value = [];
+                            aiModelsError.value = err.message || 'Could not load models from the provider.';
+                        }
+                    } finally {
+                        if (requestId === aiModelsRequestId) aiModelsLoading.value = false;
+                    }
+                };
+
+                const scheduleAiModelDiscovery = (provider, apiKey) => {
+                    if (aiModelsTimer) {
+                        clearTimeout(aiModelsTimer);
+                        aiModelsTimer = null;
+                    }
+                    ++aiModelsRequestId;
+                    aiModelsLoading.value = false;
+                    aiModelsError.value = '';
+                    aiModelsMessage.value = '';
+                    aiAvailableModels.value = [];
+                    if (!provider) return;
+                    if (!apiKey && !aiProviderKeys.value[provider]) {
+                        aiModelsMessage.value = 'Enter an API key to load available models.';
+                        return;
+                    }
+                    aiModelsTimer = window.setTimeout(() => {
+                        aiModelsTimer = null;
+                        fetchAiModels(provider, apiKey.trim());
+                    }, apiKey ? 700 : 0);
+                };
+
                 const fetchAiSettings = async () => {
                     if (!pinStatus.value.session_active) return;
                     try {
@@ -2156,13 +2225,15 @@
                         if (!res.ok) throw new Error('Failed to load AI settings');
                         const data = await res.json();
                         aiSettingsEnabled.value = !!data.enabled;
-                        aiSettingsProvider.value = data.provider || 'openai';
-                        aiSettingsModel.value = data.model || providerDefaultModel(aiSettingsProvider.value);
+                        aiSettingsProvider.value = data.provider_configured ? (data.provider || 'openai') : '';
+                        aiSettingsModel.value = data.model || providerDefaultModel(aiSettingsProvider.value || 'openai');
                         aiProviderKeys.value = {
                             openai: !!data.openai_key_set,
                             claude: !!data.claude_key_set,
                             gemini: !!data.gemini_key_set,
                         };
+                        await nextTick();
+                        aiSettingsLoaded.value = true;
                     } catch (err) {
                         console.warn(err);
                     }
@@ -2288,9 +2359,9 @@
                                 enabled: aiSettingsEnabled.value,
                                 provider: aiSettingsProvider.value,
                                 model: aiSettingsModel.value || providerDefaultModel(aiSettingsProvider.value),
-                                openai_api_key: aiOpenaiApiKey.value.trim() || null,
-                                claude_api_key: aiClaudeApiKey.value.trim() || null,
-                                gemini_api_key: aiGeminiApiKey.value.trim() || null,
+                                openai_api_key: aiSettingsProvider.value === 'openai' ? (aiOpenaiApiKey.value.trim() || null) : null,
+                                claude_api_key: aiSettingsProvider.value === 'claude' ? (aiClaudeApiKey.value.trim() || null) : null,
+                                gemini_api_key: aiSettingsProvider.value === 'gemini' ? (aiGeminiApiKey.value.trim() || null) : null,
                             }),
                         });
                         const data = await res.json().catch(() => ({}));
@@ -4014,6 +4085,22 @@
                     syncSelectedMonth();
                 }, { immediate: true });
 
+                watch([aiSettingsProvider, selectedProviderApiKey, view], ([provider, apiKey, currentView], [previousProvider]) => {
+                    if (currentView !== 'settings-ai') {
+                        if (aiModelsTimer) {
+                            clearTimeout(aiModelsTimer);
+                            aiModelsTimer = null;
+                        }
+                        ++aiModelsRequestId;
+                        aiModelsLoading.value = false;
+                        return;
+                    }
+                    if (aiSettingsLoaded.value && provider !== previousProvider) {
+                        aiSettingsModel.value = provider ? providerDefaultModel(provider) : '';
+                    }
+                    scheduleAiModelDiscovery(provider, apiKey);
+                });
+
                 watch([selectedMonth, transactionSearch, transactionCategoryFilter, selectedAccountIds], () => {
                     visibleTransactionLimit.value = 15;
                 });
@@ -4061,6 +4148,8 @@
                 onUnmounted(() => {
                     if (idleMonitor) clearInterval(idleMonitor);
                     if (clockInterval) clearInterval(clockInterval);
+                    if (aiModelsTimer) clearTimeout(aiModelsTimer);
+                    ++aiModelsRequestId;
                     financeThemeMediaQuery?.removeEventListener?.('change', syncFinanceTheme);
                 });
 
@@ -4164,6 +4253,12 @@
                     aiSettingsEnabled,
                     aiSettingsProvider,
                     aiSettingsModel,
+                    aiProviderLabels,
+                    aiProviderKeys,
+                    aiAvailableModels,
+                    aiModelsLoading,
+                    aiModelsError,
+                    aiModelsMessage,
                     aiOpenaiApiKey,
                     aiClaudeApiKey,
                     aiGeminiApiKey,

@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import requests
 
 from category_analysis import generate_category_analysis
 from database import get_setting, set_setting
@@ -29,13 +30,15 @@ def _parse_bool(value, default=False):
 
 
 def get_ai_settings():
-    provider = (get_setting(AI_PROVIDER_KEY) or DEFAULT_PROVIDER).strip().lower()
+    stored_provider = get_setting(AI_PROVIDER_KEY)
+    provider = (stored_provider or DEFAULT_PROVIDER).strip().lower()
     if provider not in DEFAULT_MODELS:
         provider = DEFAULT_PROVIDER
 
     return {
         "enabled": _parse_bool(get_setting(AI_ENABLED_KEY), False),
         "provider": provider,
+        "provider_configured": bool(stored_provider),
         "model": get_setting(AI_MODEL_KEY) or DEFAULT_MODELS[provider],
         "openai_key_set": bool(get_setting(AI_OPENAI_KEY)),
         "claude_key_set": bool(get_setting(AI_CLAUDE_KEY)),
@@ -73,6 +76,82 @@ def _provider_key(provider: str):
         "claude": get_setting(AI_CLAUDE_KEY),
         "gemini": get_setting(AI_GEMINI_KEY),
     }.get(provider)
+
+
+class ProviderModelDiscoveryError(ValueError):
+    """A provider did not return a usable model list."""
+
+
+def list_provider_models(provider: str, api_key: str | None = None):
+    provider = (provider or "").strip().lower()
+    if provider not in DEFAULT_MODELS:
+        raise ProviderModelDiscoveryError("Choose a supported AI provider first.")
+
+    api_key = (api_key or _provider_key(provider) or "").strip()
+    if not api_key:
+        raise ProviderModelDiscoveryError("Enter an API key for the selected provider first.")
+
+    try:
+        if provider == "openai":
+            response = requests.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=15,
+            )
+            response.raise_for_status()
+            model_ids = [
+                item.get("id", "")
+                for item in response.json().get("data", [])
+                if isinstance(item, dict)
+            ]
+            # The models endpoint also includes embedding, moderation, and audio
+            # models, which are not compatible with this chat-based feature.
+            model_ids = [
+                model_id for model_id in model_ids
+                if model_id.startswith(("gpt-", "o1", "o3", "o4", "chatgpt-"))
+            ]
+        elif provider == "claude":
+            response = requests.get(
+                "https://api.anthropic.com/v1/models",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            model_ids = [
+                item.get("id", "")
+                for item in response.json().get("data", [])
+                if isinstance(item, dict)
+            ]
+        else:
+            response = requests.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={"x-goog-api-key": api_key},
+                timeout=15,
+            )
+            response.raise_for_status()
+            model_ids = [
+                item.get("name", "").removeprefix("models/")
+                for item in response.json().get("models", [])
+                if isinstance(item, dict)
+                and "generateContent" in item.get("supportedGenerationMethods", [])
+            ]
+            # LiteLLM expects Gemini's provider prefix for completion calls.
+            model_ids = [f"gemini/{model_id}" for model_id in model_ids]
+    except requests.RequestException as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 403):
+            raise ProviderModelDiscoveryError("The provider rejected this API key. Check the key and try again.") from None
+        raise ProviderModelDiscoveryError("Could not retrieve models from the provider. Check your connection and try again.") from None
+    except (ValueError, TypeError, AttributeError):
+        raise ProviderModelDiscoveryError("The provider returned an unexpected model-list response.") from None
+
+    models = sorted({model_id.strip() for model_id in model_ids if isinstance(model_id, str) and model_id.strip()})
+    if not models:
+        raise ProviderModelDiscoveryError("No compatible chat models were found for this API key.")
+    return models
 
 
 def _extract_json_array(text: str):

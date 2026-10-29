@@ -41,6 +41,7 @@ fi
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-manual-category-rule.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-transaction-pagination.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-goals.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-ai-model-discovery.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-ai-chat-privacy.py"
 
 MODE_ARGS=()

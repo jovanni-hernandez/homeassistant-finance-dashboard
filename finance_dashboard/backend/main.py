@@ -11,7 +11,13 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import simplefin
-from ai_assistant import build_ai_category_defaults, get_ai_settings, update_ai_settings
+from ai_assistant import (
+    ProviderModelDiscoveryError,
+    build_ai_category_defaults,
+    get_ai_settings,
+    list_provider_models,
+    update_ai_settings,
+)
 from ai_chat import AIChatError, create_goal_chat_response, preview_chat_message
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
@@ -182,6 +188,11 @@ class AiSettingsRequest(BaseModel):
     openai_api_key: str | None = None
     claude_api_key: str | None = None
     gemini_api_key: str | None = None
+
+
+class AiModelsRequest(BaseModel):
+    provider: str
+    api_key: str | None = Field(default=None, max_length=4096)
 
 
 @app.on_event("startup")
@@ -721,6 +732,21 @@ def api_get_category_defaults(top: int = Query(default=25, ge=1, le=100), min_co
 @app.get("/api/ai/settings", dependencies=[Depends(verify_ha_auth)])
 def api_get_ai_settings():
     return get_ai_settings()
+
+
+@app.post("/api/ai/models", dependencies=[Depends(verify_ha_auth)])
+def api_list_ai_models(payload: AiModelsRequest):
+    try:
+        return {
+            "status": "success",
+            "provider": payload.provider.strip().lower(),
+            "models": list_provider_models(payload.provider, payload.api_key),
+        }
+    except ProviderModelDiscoveryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("AI model discovery failed (%s).", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not retrieve models from the selected provider.") from exc
 
 
 @app.post("/api/ai/settings", dependencies=[Depends(verify_ha_auth)])

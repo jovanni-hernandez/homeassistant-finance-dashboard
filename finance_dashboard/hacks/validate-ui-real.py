@@ -438,10 +438,24 @@ def main():
                             goal_draft: {goal_type: "savings", name: "Emergency fund", target_amount: "10000", target_date: "2030-12-31"}
                           }), {status: 200, headers: {"Content-Type": "application/json"}});
                         }
+                        if (url.endsWith("/api/ai/models")) {
+                          const body = JSON.parse(args[1]?.body || "{}");
+                          const available = {
+                            openai: ["gpt-4o-mini", "gpt-4.1-mini"],
+                            claude: ["claude-3-7-sonnet-latest"],
+                            gemini: ["gemini/gemini-2.5-flash"],
+                          };
+                          return new Response(JSON.stringify({status: "success", provider: body.provider, models: available[body.provider] || []}), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
+                        if (url.endsWith("/api/ai/settings") && args[1]?.method === "POST") {
+                          window.__testAiSettingsSave = JSON.parse(args[1].body || "{}");
+                        }
                         const response = await nativeFetch(...args);
-                        if (url.endsWith("/api/ai/settings")) {
+                        if (url.endsWith("/api/ai/settings") && args[1]?.method !== "POST") {
                           const payload = await response.clone().json();
                           payload.enabled = true;
+                          payload.provider = "openai";
+                          payload.provider_configured = true;
                           payload.openai_key_set = true;
                           const headers = new Headers(response.headers);
                           headers.delete("content-length");
@@ -1381,6 +1395,54 @@ def main():
                 and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="category-management-settings"]')
                 and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-settings"]')
             )
+            ai_settings_checks = {
+                "only_selected_provider_key_is_visible": False,
+                "saved_key_loads_model_choices": False,
+                "new_key_loads_provider_models": False,
+                "save_uses_selected_provider_and_model": False,
+            }
+            openai_key_input = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.ID, "ai-key-openai"))
+            )
+            openai_models = WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_elements(By.CSS_SELECTOR, '[data-testid="ai-model-select"] option[value="gpt-4o-mini"]')
+            )
+            ai_settings_checks["only_selected_provider_key_is_visible"] = (
+                len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-provider-key"]')) == 1
+                and openai_key_input.get_attribute("placeholder").startswith("A key is already saved")
+            )
+            ai_settings_checks["saved_key_loads_model_choices"] = bool(openai_models)
+            Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-provider-select"]')).select_by_value("claude")
+            claude_key_input = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.ID, "ai-key-claude"))
+            )
+            ai_settings_checks["only_selected_provider_key_is_visible"] = (
+                ai_settings_checks["only_selected_provider_key_is_visible"]
+                and len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-provider-key"]')) == 1
+                and not driver.find_elements(By.ID, "ai-key-openai")
+                and not driver.find_elements(By.ID, "ai-key-gemini")
+            )
+            claude_key_input.send_keys("selenium-claude-key")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_elements(By.CSS_SELECTOR, '[data-testid="ai-model-select"] option[value="claude-3-7-sonnet-latest"]')
+            )
+            ai_settings_checks["new_key_loads_provider_models"] = bool(
+                driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-model-select"] option[value="claude-3-7-sonnet-latest"]')
+            )
+            Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-model-select"]')).select_by_value("claude-3-7-sonnet-latest")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-settings-save"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.execute_script("return !!window.__testAiSettingsSave")
+            )
+            saved_ai_settings = driver.execute_script("return window.__testAiSettingsSave")
+            ai_settings_checks["save_uses_selected_provider_and_model"] = (
+                saved_ai_settings.get("provider") == "claude"
+                and saved_ai_settings.get("model") == "claude-3-7-sonnet-latest"
+                and saved_ai_settings.get("claude_api_key") == "selenium-claude-key"
+                and saved_ai_settings.get("openai_api_key") is None
+                and saved_ai_settings.get("gemini_api_key") is None
+            )
+            driver.execute_script("window.scrollTo(0, 0)")
             settings_overflow = settings_overflow or driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
             driver.execute_script("window.scrollTo(0, 0)")
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-ai" + screenshot.suffix)))
@@ -1710,6 +1772,7 @@ def main():
                 "spending_pie": spending_pie_checks,
                 "account_types_and_net_worth": account_type_checks,
                 "settings_navigation": settings_navigation_checks,
+                "ai_settings_model_discovery": ai_settings_checks,
                 "financial_goals": goal_checks,
                 "ai_chat_privacy": ai_chat_checks,
                 "manual_assets": manual_asset_checks,
@@ -1745,6 +1808,7 @@ def main():
                 and all(spending_pie_checks.values())
                 and all(account_type_checks.values())
                 and all(settings_navigation_checks.values())
+                and all(ai_settings_checks.values())
                 and all(goal_checks.values())
                 and all(ai_chat_checks.values())
                 and all(manual_asset_checks.values())
