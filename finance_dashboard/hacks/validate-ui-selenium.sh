@@ -43,6 +43,8 @@ fi
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-goals.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-ai-model-discovery.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-ai-prompts.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-app-logging.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-app-logging.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-ai-chat-privacy.py"
 
 MODE_ARGS=()

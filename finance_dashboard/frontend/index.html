@@ -1553,6 +1553,26 @@
                             </div>
                         </div>
                     </div>
+
+                    <section v-if="view === 'settings-general'" data-testid="app-log-settings" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <h3 class="text-lg font-semibold text-slate-800">Log verbosity</h3>
+                                <p class="mt-1 text-sm text-slate-500">Choose how much diagnostic detail the Finance Dashboard writes to its add-on logs.</p>
+                            </div>
+                            <button type="button" data-testid="app-log-settings-save" @click="saveAppLogSettings" :disabled="savingAppLogSettings" class="inline-flex min-h-10 items-center justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">{{ savingAppLogSettings ? 'Saving…' : 'Save log level' }}</button>
+                        </div>
+                        <label class="mt-4 block max-w-sm">
+                            <span class="block text-sm font-medium text-slate-700">Application log level</span>
+                            <select v-model="appLogLevel" data-testid="app-log-level" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm shadow-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-100">
+                                <option value="INFO">Info (default)</option>
+                                <option value="DEBUG">Debug</option>
+                            </select>
+                        </label>
+                        <p v-if="appLogLevel === 'DEBUG'" data-testid="app-log-debug-warning" class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-900">Debug logs include complete AI inputs, expanded financial context, merchant examples, provider replies, and errors. API keys and authorization tokens are redacted. Logs remain available until Home Assistant rotates or clears them.</p>
+                        <p v-else class="mt-3 text-sm text-slate-500">Info keeps routine status and errors; full AI request and response payloads are not logged.</p>
+                        <div v-if="appLogSettingsMessage" data-testid="app-log-settings-message" role="status" class="mt-3 rounded-lg border px-4 py-3 text-sm" :class="appLogSettingsError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">{{ appLogSettingsMessage }}</div>
+                    </section>
                 </section>
             </template>
         </main>
@@ -1698,6 +1718,10 @@
                 const pinSettingsMessage = ref('');
                 const pinSettingsError = ref(false);
                 const savingPinSettings = ref(false);
+                const appLogLevel = ref('INFO');
+                const appLogSettingsMessage = ref('');
+                const appLogSettingsError = ref(false);
+                const savingAppLogSettings = ref(false);
                 const lastActivityAt = ref(Date.now());
                 let idleMonitor = null;
                 let clockInterval = null;
@@ -2220,6 +2244,18 @@
                     }
                 };
 
+                const fetchAppLogSettings = async () => {
+                    if (!pinStatus.value.session_active) return;
+                    try {
+                        const res = await apiFetch('/api/logging/settings');
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Failed to load log settings.');
+                        appLogLevel.value = data.level || 'INFO';
+                    } catch (err) {
+                        console.warn('Could not load app log settings:', err.message);
+                    }
+                };
+
                 const providerDefaultModel = (provider) => {
                     const map = {
                         openai: 'gpt-4o-mini',
@@ -2342,7 +2378,7 @@
                 };
 
                 const fetchProtectedState = async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals()]);
+                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAppLogSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals()]);
                     await nextTick();
                     renderSankey();
                     renderSpendingPie();
@@ -2432,6 +2468,29 @@
                         pinSettingsMessage.value = err.message;
                     } finally {
                         savingPinSettings.value = false;
+                    }
+                };
+
+                const saveAppLogSettings = async () => {
+                    savingAppLogSettings.value = true;
+                    appLogSettingsMessage.value = '';
+                    appLogSettingsError.value = false;
+                    try {
+                        const res = await apiFetch('/api/logging/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ level: appLogLevel.value }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to save log settings (${res.status})`);
+                        appLogLevel.value = data.level || appLogLevel.value;
+                        appLogSettingsMessage.value = data.message || 'Log verbosity saved.';
+                        appLogSettingsError.value = false;
+                    } catch (err) {
+                        appLogSettingsError.value = true;
+                        appLogSettingsMessage.value = err.message;
+                    } finally {
+                        savingAppLogSettings.value = false;
                     }
                 };
 
@@ -4380,6 +4439,10 @@
                     pinSettingsMessage,
                     pinSettingsError,
                     savingPinSettings,
+                    appLogLevel,
+                    appLogSettingsMessage,
+                    appLogSettingsError,
+                    savingAppLogSettings,
                     syncing,
                     claiming,
                     syncMessage,
@@ -4487,6 +4550,7 @@
                     applyRuleRowChange,
                     saveCategoryRules,
                     saveAiSettings,
+                    saveAppLogSettings,
                     saveAiPrompt,
                     resetAiPrompt,
                     updateAccountType,

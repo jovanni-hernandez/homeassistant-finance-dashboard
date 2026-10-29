@@ -6,6 +6,7 @@ import requests
 from category_analysis import generate_category_analysis
 from database import get_setting, set_setting
 from ai_prompts import get_ai_system_prompt
+from ai_logging import log_ai_exchange
 
 logger = logging.getLogger("finance_dashboard")
 
@@ -143,6 +144,15 @@ def list_provider_models(provider: str, api_key: str | None = None):
             model_ids = [f"gemini/{model_id}" for model_id in model_ids]
     except requests.RequestException as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
+        log_ai_exchange(
+            event="model_discovery_error",
+            provider=provider,
+            model="model_catalog",
+            request={"provider": provider},
+            api_key=api_key,
+            error=exc,
+            status=status,
+        )
         if status in (401, 403):
             raise ProviderModelDiscoveryError("The provider rejected this API key. Check the key and try again.") from None
         raise ProviderModelDiscoveryError("Could not retrieve models from the provider. Check your connection and try again.") from None
@@ -150,6 +160,15 @@ def list_provider_models(provider: str, api_key: str | None = None):
         raise ProviderModelDiscoveryError("The provider returned an unexpected model-list response.") from None
 
     models = sorted({model_id.strip() for model_id in model_ids if isinstance(model_id, str) and model_id.strip()})
+    log_ai_exchange(
+        event="model_discovery_response",
+        provider=provider,
+        model="model_catalog",
+        request={"provider": provider},
+        api_key=api_key,
+        response={"models": models},
+        status=200,
+    )
     if not models:
         raise ProviderModelDiscoveryError("No compatible chat models were found for this API key.")
     return models
@@ -247,21 +266,44 @@ def build_ai_category_defaults(top_n: int = 25, min_count: int = 2):
         user_payload = {**category_analysis, "instructions": instructions}
     user_prompt = json.dumps(user_payload, indent=2)
 
-    response = completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        api_key=api_key,
-        temperature=0,
-    )
+    provider_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    try:
+        response = completion(
+            model=model,
+            messages=provider_messages,
+            api_key=api_key,
+            temperature=0,
+        )
+    except Exception as exc:
+        log_ai_exchange(
+            event="category_rules_provider_error",
+            provider=provider,
+            model=model,
+            request=provider_messages,
+            api_key=api_key,
+            error=exc,
+            status=getattr(exc, "status_code", None),
+        )
+        raise
 
     content = ""
     try:
         content = response.choices[0].message.content or ""
     except Exception:
         content = str(response)
+
+    log_ai_exchange(
+        event="category_rules_provider_response",
+        provider=provider,
+        model=model,
+        request=provider_messages,
+        api_key=api_key,
+        response={"content": content},
+        status=200,
+    )
 
     parsed = _extract_json_array(content)
     rules = _normalize_rules(parsed)

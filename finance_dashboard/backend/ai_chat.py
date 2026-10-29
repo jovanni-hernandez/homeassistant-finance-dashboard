@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from ai_assistant import _provider_key, get_ai_settings
+from ai_logging import log_ai_exchange
 from ai_prompts import DEFAULT_SYSTEM_PROMPTS, get_ai_system_prompt
 from database import get_manual_assets, get_stored_accounts
 from goals import get_goals
@@ -369,6 +370,16 @@ def _store_chat_preview(prepared: dict) -> str:
 def prepare_goal_chat_preview(messages: list[dict]) -> dict:
     """Return the exact sanitized provider messages and a short-lived send token."""
     prepared = _prepare_goal_chat_payload(messages)
+    api_key = _provider_key(prepared["provider"])
+    log_ai_exchange(
+        event="goal_preview",
+        provider=prepared["provider"],
+        model=prepared["model"],
+        request={"raw_conversation": messages, "provider_messages": prepared["messages"]},
+        api_key=api_key,
+        response={"redaction_count": prepared["redaction_count"]},
+        status="previewed",
+    )
     preview_id = _store_chat_preview(prepared)
     return {
         "preview_id": preview_id,
@@ -582,6 +593,7 @@ def create_goal_chat_response(preview_id: str) -> dict:
         raise AIChatError(f"No API key is saved for the selected provider ({prepared['provider']}).")
 
     temperature_retry_attempted = False
+    attempt = 1
     try:
         try:
             response = _completion(prepared["model"], api_key, prepared["messages"])
@@ -589,25 +601,56 @@ def create_goal_chat_response(preview_id: str) -> dict:
             unsupported = _unsupported_params(exc) if type(exc).__name__ == "UnsupportedParamsError" else []
             if type(exc).__name__ != "UnsupportedParamsError" or (unsupported and "temperature" not in unsupported):
                 raise
+            log_ai_exchange(
+                event="goal_provider_attempt_failed",
+                provider=prepared["provider"],
+                model=prepared["model"],
+                request=prepared["messages"],
+                api_key=api_key,
+                error=exc,
+                status=_provider_status_code(exc),
+                attempt=1,
+            )
             logger.info(
                 "Retrying AI goal request once without temperature after an unsupported-parameter response (provider=%s).",
                 prepared["provider"],
             )
             temperature_retry_attempted = True
+            attempt = 2
             response = _completion(
                 prepared["model"], api_key, prepared["messages"], omit_temperature=True,
             )
         response_text = response.choices[0].message.content or ""
         if not isinstance(response_text, str):
             response_text = str(response_text)
+        log_ai_exchange(
+            event="goal_provider_response",
+            provider=prepared["provider"],
+            model=prepared["model"],
+            request=prepared["messages"],
+            api_key=api_key,
+            response={"content": response_text},
+            status=200,
+            attempt=attempt,
+        )
     except Exception as exc:
         status = _provider_status_code(exc)
         safe_message, diagnostic = _safe_provider_error(
             prepared["provider"], prepared["model"], status, exc,
             temperature_retry_attempted=temperature_retry_attempted,
         )
+        log_ai_exchange(
+            event="goal_provider_error",
+            provider=prepared["provider"],
+            model=prepared["model"],
+            request=prepared["messages"],
+            api_key=api_key,
+            error=exc,
+            status=status if status is not None else "unknown",
+            attempt=attempt,
+        )
         logger.warning(
-            "AI provider request failed (provider=%s, status=%s, error_type=%s, diagnostic=%s, temperature_retry=%s). Chat content and credentials were not logged.",
+            "AI provider request failed (provider=%s, status=%s, error_type=%s, diagnostic=%s, temperature_retry=%s). Full exchange details are available at DEBUG; keys and auth tokens are redacted.",
             prepared["provider"],
             status if status is not None else "unknown",
             type(exc).__name__,

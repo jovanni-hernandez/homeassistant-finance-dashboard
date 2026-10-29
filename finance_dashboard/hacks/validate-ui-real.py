@@ -171,6 +171,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/recurring-rules",
         "api/recurring-payments",
         "api/pin/settings",
+        "api/logging/settings",
         "api/ai/settings",
         "api/ai/prompts",
     ]
@@ -1296,7 +1297,33 @@ def main():
                 "categories_page_has_category_panel_only": False,
                 "ai_page_has_ai_panel_only": False,
                 "settings_menu_has_three_entries": False,
+                "log_level_defaults_to_info": False,
+                "debug_level_warns_and_saves": False,
+                "info_level_can_be_restored": False,
             }
+            app_log_select = Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="app-log-level"]'))
+            settings_navigation_checks["log_level_defaults_to_info"] = (
+                app_log_select.first_selected_option.get_attribute("value") == "INFO"
+            )
+            app_log_select.select_by_value("DEBUG")
+            settings_navigation_checks["debug_level_warns_and_saves"] = (
+                "complete AI inputs" in driver.find_element(By.CSS_SELECTOR, '[data-testid="app-log-debug-warning"]').text
+                and "redacted" in driver.find_element(By.CSS_SELECTOR, '[data-testid="app-log-debug-warning"]').text
+            )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="app-log-settings-save"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: "Log verbosity saved" in current.find_element(By.CSS_SELECTOR, '[data-testid="app-log-settings-message"]').text
+            )
+            app_log_select = Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="app-log-level"]'))
+            app_log_select.select_by_value("INFO")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="app-log-settings-save"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="app-log-level"]').get_attribute("value") == "INFO"
+            )
+            settings_navigation_checks["info_level_can_be_restored"] = (
+                not driver.find_elements(By.CSS_SELECTOR, '[data-testid="app-log-debug-warning"]')
+                and "full AI request and response payloads are not logged" in driver.find_element(By.TAG_NAME, "body").text
+            )
 
             custom_category_checks = {
                 "pets_category_available": False,

@@ -11,8 +11,10 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import simplefin
+from app_logging import apply_app_log_level, get_app_log_settings
 from ai_assistant import (
     ProviderModelDiscoveryError,
+    _provider_key,
     build_ai_category_defaults,
     get_ai_settings,
     list_provider_models,
@@ -24,6 +26,7 @@ from ai_chat import (
     create_goal_chat_response,
     prepare_goal_chat_preview,
 )
+from ai_logging import redact_api_keys
 from ai_prompts import AIPromptValidationError, get_ai_prompt_settings, save_ai_system_prompt
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
@@ -206,10 +209,15 @@ class AiPromptRequest(BaseModel):
     reset_to_default: bool = False
 
 
+class AppLogSettingsRequest(BaseModel):
+    level: Literal["INFO", "DEBUG"]
+
+
 @app.on_event("startup")
 def startup_event():
     logger.info("Initializing database...")
     init_db()
+    apply_app_log_level()
     logger.info("Syncing / seeding initial data...")
     try:
         simplefin.fetch_and_sync_simplefin()
@@ -508,6 +516,20 @@ def api_pin_lock():
 @app.get("/api/pin/settings", dependencies=[Depends(verify_ha_auth)])
 def api_get_pin_settings():
     return pin_auth.get_pin_settings()
+
+
+@app.get("/api/logging/settings", dependencies=[Depends(verify_ha_auth)])
+def api_get_logging_settings():
+    return get_app_log_settings()
+
+
+@app.post("/api/logging/settings", dependencies=[Depends(verify_ha_auth)])
+def api_set_logging_settings(payload: AppLogSettingsRequest):
+    try:
+        apply_app_log_level(payload.level)
+        return {"status": "success", "message": "Log verbosity saved.", **get_app_log_settings()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/pin/settings", dependencies=[Depends(verify_ha_auth)])
@@ -827,8 +849,9 @@ def api_get_category_defaults_ai(top: int = Query(default=25, ge=1, le=100), min
         analysis = build_ai_category_defaults(top_n=top, min_count=min_count)
         return {"status": "success", **analysis}
     except Exception as e:
-        logger.error(f"Failed to generate AI category defaults: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Failed to generate AI category defaults (%s).", type(e).__name__)
+        active_key = _provider_key(get_ai_settings()["provider"])
+        raise HTTPException(status_code=400, detail=redact_api_keys(str(e), active_key))
 
 
 @app.get("/api/recurring-payments", dependencies=[Depends(verify_ha_auth)])
