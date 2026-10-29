@@ -14,6 +14,7 @@ import simplefin
 from ai_assistant import build_ai_category_defaults, get_ai_settings, update_ai_settings
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
+from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
 from database import (
     init_db,
     get_stored_accounts,
@@ -115,6 +116,23 @@ class ManualAssetRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     value: str = Field(min_length=1, max_length=50)
     currency: str = Field(default="USD", min_length=3, max_length=3)
+
+
+class FinancialGoalRequest(BaseModel):
+    goal_type: Literal["debt_payoff", "savings", "retirement"]
+    name: str = Field(min_length=1, max_length=80)
+    account_ids: list[str] = Field(default_factory=list)
+    manual_asset_ids: list[str] = Field(default_factory=list)
+    target_amount: str | None = Field(default=None, max_length=50)
+    target_date: str | None = Field(default=None, max_length=10)
+    apr_percent: str | None = Field(default=None, max_length=12)
+    planned_monthly: str | None = Field(default=None, max_length=50)
+    retirement_timing_mode: Literal["age", "year"] | None = None
+    birth_year: int | None = None
+    target_retirement_age: int | None = None
+    retirement_year: int | None = None
+    expected_return_percent: str | None = Field(default=None, max_length=12)
+    inflation_percent: str | None = Field(default=None, max_length=12)
 
 
 class PinUnlockRequest(BaseModel):
@@ -494,6 +512,56 @@ def api_get_manual_assets():
     except Exception as exc:
         logger.error("Failed to query manual assets (%s).", type(exc).__name__)
         raise HTTPException(status_code=500, detail="Could not load manual assets.") from exc
+
+
+@app.get("/api/goals", dependencies=[Depends(verify_ha_auth)])
+def api_get_goals():
+    try:
+        return {"goals": get_goals(get_stored_accounts(), get_manual_assets())}
+    except Exception as exc:
+        logger.error("Failed to query financial goals (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not load financial goals.") from exc
+
+
+@app.post("/api/goals", dependencies=[Depends(verify_ha_auth)])
+def api_create_goal(payload: FinancialGoalRequest):
+    try:
+        goal = create_goal(payload.dict(), get_stored_accounts(), get_manual_assets())
+        return {"status": "success", "goal": goal}
+    except GoalValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Failed to create financial goal (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not save the financial goal.") from exc
+
+
+@app.put("/api/goals/{goal_id}", dependencies=[Depends(verify_ha_auth)])
+def api_update_goal(goal_id: str, payload: FinancialGoalRequest):
+    try:
+        goal = update_goal(goal_id, payload.dict(), get_stored_accounts(), get_manual_assets())
+        if not goal:
+            raise HTTPException(status_code=404, detail="Financial goal not found.")
+        return {"status": "success", "goal": goal}
+    except GoalValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update financial goal (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not update the financial goal.") from exc
+
+
+@app.delete("/api/goals/{goal_id}", dependencies=[Depends(verify_ha_auth)])
+def api_delete_goal(goal_id: str):
+    try:
+        if not delete_goal(goal_id):
+            raise HTTPException(status_code=404, detail="Financial goal not found.")
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to delete financial goal (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not delete the financial goal.") from exc
 
 
 @app.post("/api/manual-assets", dependencies=[Depends(verify_ha_auth)])

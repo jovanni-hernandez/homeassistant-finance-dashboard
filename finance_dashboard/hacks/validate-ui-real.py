@@ -165,6 +165,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/pin/status",
         "api/accounts",
         "api/manual-assets",
+        "api/goals",
         "api/transactions",
         "api/category-rules",
         "api/recurring-rules",
@@ -1369,6 +1370,98 @@ def main():
             driver.execute_script("window.scrollTo(0, 0)")
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-ai" + screenshot.suffix)))
 
+            goal_checks = {
+                "goals_page_opens": False,
+                "debt_goal_fields_visible": False,
+                "retirement_goal_fields_visible": False,
+                "savings_goal_can_be_created": False,
+                "goal_can_be_edited": False,
+                "goal_progress_appears_on_dashboard": False,
+                "goal_can_be_deleted": False,
+            }
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goals-nav"]').click()
+            goals_page = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goals-page"]'))
+            )
+            goal_checks["goals_page_opens"] = "Financial goals" in goals_page.text
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]').click()
+            goal_form_screenshot = screenshot.with_name(screenshot.stem + "-goal-form" + screenshot.suffix)
+            driver.execute_script("window.scrollTo(0, 0)")
+            driver.save_screenshot(str(goal_form_screenshot))
+            goal_type_select = Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-type"]'))
+            goal_type_select.select_by_value("retirement")
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goal-return"]'))
+            )
+            goal_checks["retirement_goal_fields_visible"] = (
+                bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-retirement-year"]'))
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-inflation"]'))
+            )
+            retirement_goal_form_screenshot = screenshot.with_name(screenshot.stem + "-goal-retirement-form" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-return"]'))
+            driver.save_screenshot(str(retirement_goal_form_screenshot))
+            goal_type_select.select_by_value("debt_payoff")
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goal-apr"]'))
+            )
+            goal_checks["debt_goal_fields_visible"] = bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-target-date"]'))
+            goal_type_select.select_by_value("savings")
+            goal_name_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-name"]')
+            goal_name_input.clear()
+            goal_name_input.send_keys("Selenium Savings Goal")
+            driver.find_element(By.CSS_SELECTOR, '[data-goal-account-id="3"]').click()
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-target-amount"]').send_keys("5000")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-save"]').click()
+            saved_goal = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goal-card"]'))
+            )
+            goal_id = saved_goal.get_attribute("data-goal-id")
+            goal_checks["savings_goal_can_be_created"] = (
+                "Selenium Savings Goal" in saved_goal.text
+                and "3,400.50" in saved_goal.text
+                and "68%" in saved_goal.text
+            )
+            goals_screenshot = screenshot.with_name(screenshot.stem + "-goals" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", saved_goal)
+            driver.save_screenshot(str(goals_screenshot))
+
+            saved_goal.find_element(By.XPATH, ".//button[starts-with(@aria-label, 'Edit ')]").click()
+            goal_name_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-name"]')
+            goal_name_input.clear()
+            goal_name_input.send_keys("Selenium Reserve")
+            goal_amount_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-target-amount"]')
+            goal_amount_input.clear()
+            goal_amount_input.send_keys("6000")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-save"]').click()
+            edited_goal = WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, f'[data-testid="goal-card"][data-goal-id="{goal_id}"]')
+                if "Selenium Reserve" in current.find_element(By.CSS_SELECTOR, f'[data-testid="goal-card"][data-goal-id="{goal_id}"]').text
+                else False
+            )
+            goal_checks["goal_can_be_edited"] = "6,000.00" in edited_goal.text
+
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
+            dashboard_goal = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="dashboard-goal-card"]'))
+            )
+            goal_checks["goal_progress_appears_on_dashboard"] = "Selenium Reserve" in dashboard_goal.text
+            dashboard_goals_screenshot = screenshot.with_name(screenshot.stem + "-dashboard-goals" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", dashboard_goal)
+            driver.save_screenshot(str(dashboard_goals_screenshot))
+
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goals-nav"]').click()
+            edited_goal = driver.find_element(By.CSS_SELECTOR, f'[data-testid="goal-card"][data-goal-id="{goal_id}"]')
+            edited_goal.find_element(By.XPATH, ".//button[starts-with(@aria-label, 'Delete ')]").click()
+            driver.switch_to.alert.accept()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: not current.find_elements(By.CSS_SELECTOR, '[data-testid="goal-card"]')
+            )
+            goal_checks["goal_can_be_deleted"] = bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goals-empty"]'))
+            goals_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
             WebDriverWait(driver, args.timeout).until(
@@ -1542,6 +1635,7 @@ def main():
                 "spending_pie": spending_pie_checks,
                 "account_types_and_net_worth": account_type_checks,
                 "settings_navigation": settings_navigation_checks,
+                "financial_goals": goal_checks,
                 "manual_assets": manual_asset_checks,
                 "transaction_description_fits_card": transaction_description_fits_card,
                 "ha_theme_auto_detection": theme_checks,
@@ -1550,6 +1644,7 @@ def main():
                 "dashboard_no_horizontal_overflow": not dashboard_overflow,
                 "recurring_no_horizontal_overflow": not recurring_overflow,
                 "settings_no_horizontal_overflow": not settings_overflow,
+                "goals_no_horizontal_overflow": not goals_overflow,
                 "show_more_transactions_works": show_more_works,
             }
             ok = (
@@ -1573,6 +1668,7 @@ def main():
                 and all(spending_pie_checks.values())
                 and all(account_type_checks.values())
                 and all(settings_navigation_checks.values())
+                and all(goal_checks.values())
                 and all(manual_asset_checks.values())
                 and transaction_description_fits_card
                 and all(theme_checks.values())
@@ -1581,6 +1677,7 @@ def main():
                 and checks["dashboard_no_horizontal_overflow"]
                 and checks["recurring_no_horizontal_overflow"]
                 and checks["settings_no_horizontal_overflow"]
+                and checks["goals_no_horizontal_overflow"]
                 and checks["show_more_transactions_works"]
             )
             print(json.dumps({
@@ -1601,6 +1698,10 @@ def main():
                 "general_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-general" + screenshot.suffix)),
                 "category_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-categories" + screenshot.suffix)),
                 "ai_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-ai" + screenshot.suffix)),
+                "goals_screenshot": str(goals_screenshot),
+                "dashboard_goals_screenshot": str(dashboard_goals_screenshot),
+                "goal_form_screenshot": str(goal_form_screenshot),
+                "retirement_goal_form_screenshot": str(retirement_goal_form_screenshot),
                 "sankey_filtered_screenshot": str(sankey_filtered_screenshot) if sankey_filtered_screenshot else None,
                 "sankey_restored_screenshot": str(sankey_restored_screenshot) if sankey_restored_screenshot else None,
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,

@@ -174,6 +174,17 @@
                         <span class="font-medium">Dashboard</span>
                     </button>
                     <button
+                        data-testid="goals-nav"
+                        @click="setView('goals')"
+                        class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
+                        :class="view === 'goals' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
+                    >
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l2.2 5.1L20 10l-4.4 3.7L16.8 20 12 17.1 7.2 20l1.2-6.3L4 10l5.8-1.9L12 3z" />
+                        </svg>
+                        <span class="font-medium">Goals</span>
+                    </button>
+                    <button
                         @click="setView('assets')"
                         class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
                         :class="view === 'assets' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
@@ -433,6 +444,31 @@
                                 </div>
                             </button>
                         </div>
+                    </section>
+
+                    <section data-testid="dashboard-goals" class="space-y-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <h2 class="text-xl font-semibold text-slate-800">Your goals</h2>
+                                <p class="text-sm text-slate-500">Small, steady steps add up.</p>
+                            </div>
+                            <button type="button" data-testid="dashboard-goals-manage" @click="setView('goals')" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{{ goals.length ? 'Manage goals' : 'Set a goal' }}</button>
+                        </div>
+                        <div v-if="dashboardGoals.length" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            <button v-for="goal in dashboardGoals" :key="goal.id" type="button" data-testid="dashboard-goal-card" :data-goal-id="goal.id" @click="setView('goals')" class="min-w-0 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-sky-300">
+                                <div class="flex items-start justify-between gap-2">
+                                    <span class="min-w-0 truncate text-sm font-semibold text-slate-900">{{ goal.name }}</span>
+                                    <span class="shrink-0 text-xs font-semibold text-sky-700">{{ goal.progress_percent }}%</span>
+                                </div>
+                                <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div class="h-full rounded-full bg-sky-500" :style="{ width: `${goal.progress_percent}%` }"></div></div>
+                                <p class="mt-2 line-clamp-2 text-xs leading-5 text-slate-600">{{ goal.encouragement }}</p>
+                                <p v-if="goal.required_monthly" class="mt-2 text-xs font-medium text-slate-700">Estimated pace {{ formatCurrency(goal.required_monthly, goal.currency) }}/month</p>
+                                <p v-if="goal.goal_type === 'debt_payoff'" class="mt-1 text-[11px] text-slate-500">APR assumption {{ goal.apr_percent }}%</p>
+                                <p v-if="goal.goal_type === 'retirement'" class="mt-1 text-[11px] text-slate-500">Return {{ goal.expected_return_percent }}% · Inflation {{ goal.inflation_percent }}%</p>
+                                <p v-if="goal.goal_type === 'savings' && goal.required_monthly" class="mt-1 text-[11px] text-slate-500">Pace excludes interest</p>
+                            </button>
+                        </div>
+                        <div v-else class="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">No goals yet. Create a savings, debt payoff, or retirement goal to see your progress here.</div>
                     </section>
 
                     <section>
@@ -811,6 +847,185 @@
                             </div>
                             <div v-else data-testid="manual-assets-empty" class="mt-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">No manual assets yet. Add one above to include it in net worth.</div>
                         </div>
+                    </div>
+                </section>
+
+                <section v-else-if="view === 'goals'" data-testid="goals-page" class="space-y-6">
+                    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <h2 class="text-xl font-semibold text-slate-800">Financial goals</h2>
+                                <p class="mt-1 text-sm text-slate-500">Choose what you’re working toward. Progress uses only the accounts and assets you select.</p>
+                            </div>
+                            <button data-testid="goal-add-button" type="button" @click="openNewGoalForm" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700">Add a goal</button>
+                        </div>
+                    </div>
+
+                    <div v-if="goalMessage" data-testid="goal-message" class="rounded-lg border px-4 py-3 text-sm" :class="goalError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ goalMessage }}</div>
+
+                    <form v-if="goalFormOpen" data-testid="goal-form" @submit.prevent="saveGoal" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div class="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 class="text-lg font-semibold text-slate-900">{{ editingGoalId ? 'Edit goal' : 'Create a goal' }}</h3>
+                                <p class="mt-1 text-sm text-slate-500">Estimates are calculators, not guarantees or financial advice.</p>
+                            </div>
+                            <button type="button" aria-label="Close goal form" @click="closeGoalForm" class="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100">Close</button>
+                        </div>
+
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            <label class="block text-sm font-medium text-slate-700">
+                                Goal type
+                                <select data-testid="goal-type" v-model="goalForm.goal_type" @change="changeGoalType" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100">
+                                    <option value="debt_payoff">Pay off a liability</option>
+                                    <option value="savings">Savings / emergency fund</option>
+                                    <option value="retirement">Retirement</option>
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium text-slate-700">
+                                Goal name
+                                <input data-testid="goal-name" v-model="goalForm.name" maxlength="80" required type="text" placeholder="e.g. Emergency fund" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                            </label>
+                        </div>
+
+                        <div v-if="goalForm.goal_type === 'debt_payoff'" class="grid gap-4 sm:grid-cols-2">
+                            <label class="block text-sm font-medium text-slate-700">
+                                Liability account
+                                <select data-testid="goal-debt-account" v-model="goalForm.account_id" required class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100">
+                                    <option value="">Choose a liability</option>
+                                    <option v-for="account in goalAccountOptions" :key="account.id" :value="String(account.id)">{{ account.nickname || account.name }} · {{ account.currency || 'USD' }}</option>
+                                </select>
+                            </label>
+                            <label class="block text-sm font-medium text-slate-700">
+                                Payoff target date
+                                <input data-testid="goal-target-date" v-model="goalForm.target_date" required type="date" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                            </label>
+                        </div>
+
+                        <div v-else class="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <div class="text-sm font-medium text-slate-800">Accounts to count</div>
+                            <p class="text-xs text-slate-500">Select sources in one currency. No currency conversion is applied.</p>
+                            <div v-if="goalAccountOptions.length" class="grid gap-2 sm:grid-cols-2">
+                                <label v-for="account in goalAccountOptions" :key="account.id" class="flex min-w-0 items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm">
+                                    <input type="checkbox" :data-goal-account-id="String(account.id)" :checked="goalAccountSelected(account.id)" @change="toggleGoalAccount(account.id, $event.target.checked)" class="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                                    <span class="min-w-0"><span class="block truncate font-medium text-slate-800">{{ account.nickname || account.name }}</span><span class="block text-xs text-slate-500">{{ account.currency || 'USD' }} · {{ formatCurrency(goalAccountBalance(account), account.currency || 'USD') }}</span></span>
+                                </label>
+                            </div>
+                            <p v-else class="text-sm text-amber-800">No eligible linked accounts are available. Classify an account as {{ goalForm.goal_type === 'savings' ? 'Bank / cash' : 'Investment' }} first.</p>
+
+                            <div v-if="goalForm.goal_type === 'retirement' && manualAssets.length" class="space-y-2 border-t border-slate-200 pt-3">
+                                <div class="text-sm font-medium text-slate-800">Manually tracked assets (optional)</div>
+                                <label v-for="asset in manualAssets" :key="asset.id" class="flex min-w-0 items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm">
+                                    <input type="checkbox" :data-goal-manual-asset-id="String(asset.id)" :checked="goalManualAssetSelected(asset.id)" @change="toggleGoalManualAsset(asset.id, $event.target.checked)" class="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                                    <span class="min-w-0"><span class="block truncate font-medium text-slate-800">{{ asset.name }}</span><span class="block text-xs text-slate-500">{{ asset.currency }} · {{ formatCurrency(asset.value, asset.currency) }}</span></span>
+                                </label>
+                            </div>
+                            <p v-if="goalSourceCurrencyMismatch" data-testid="goal-currency-warning" class="text-sm text-rose-700">Selected sources use different currencies. Choose sources with the same currency.</p>
+                        </div>
+
+                        <div v-if="goalForm.goal_type !== 'debt_payoff'" class="grid gap-4 sm:grid-cols-2">
+                            <label class="block text-sm font-medium text-slate-700">
+                                {{ goalForm.goal_type === 'retirement' ? 'Target amount in today’s dollars' : 'Target amount' }}
+                                <input data-testid="goal-target-amount" v-model="goalForm.target_amount" required type="number" min="0.01" step="0.01" inputmode="decimal" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                            </label>
+                            <label v-if="goalForm.goal_type === 'savings'" class="block text-sm font-medium text-slate-700">
+                                Target date (optional)
+                                <input data-testid="goal-target-date" v-model="goalForm.target_date" type="date" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                            </label>
+                        </div>
+
+                        <div v-if="goalForm.goal_type === 'debt_payoff'" class="grid gap-4 sm:grid-cols-2">
+                            <label class="block text-sm font-medium text-slate-700">
+                                Annual interest rate (APR %)
+                                <input data-testid="goal-apr" v-model="goalForm.apr_percent" required type="number" min="0" max="100" step="0.01" inputmode="decimal" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                            </label>
+                            <label class="block text-sm font-medium text-slate-700">
+                                Planned monthly payment (optional)
+                                <input data-testid="goal-planned-monthly" v-model="goalForm.planned_monthly" type="number" min="0" step="0.01" inputmode="decimal" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                            </label>
+                        </div>
+
+                        <div v-if="goalForm.goal_type === 'savings'" class="grid gap-4 sm:grid-cols-2">
+                            <label class="block text-sm font-medium text-slate-700">
+                                Planned monthly saving (optional)
+                                <input data-testid="goal-planned-monthly" v-model="goalForm.planned_monthly" type="number" min="0" step="0.01" inputmode="decimal" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                            </label>
+                            <p class="self-center text-xs text-slate-500">Monthly pace excludes account interest. Without a target date, the page shows your balance and remaining amount without a pace estimate.</p>
+                        </div>
+
+                        <div v-if="goalForm.goal_type === 'retirement'" class="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+                            <div class="grid gap-4 sm:grid-cols-2">
+                                <label class="block text-sm font-medium text-slate-700">
+                                    Retirement timing
+                                    <select data-testid="goal-retirement-mode" v-model="goalForm.retirement_timing_mode" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm">
+                                        <option value="age">Birth year and target age</option>
+                                        <option value="year">Retirement year</option>
+                                    </select>
+                                </label>
+                                <label v-if="goalForm.retirement_timing_mode === 'year'" class="block text-sm font-medium text-slate-700">
+                                    Retirement year
+                                    <input data-testid="goal-retirement-year" v-model="goalForm.retirement_year" required type="number" min="1900" max="2200" step="1" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" />
+                                </label>
+                                <template v-else>
+                                    <label class="block text-sm font-medium text-slate-700">
+                                        Birth year
+                                        <input data-testid="goal-birth-year" v-model="goalForm.birth_year" required type="number" min="1900" max="2100" step="1" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" />
+                                    </label>
+                                    <label class="block text-sm font-medium text-slate-700">
+                                        Target retirement age
+                                        <input data-testid="goal-retirement-age" v-model="goalForm.target_retirement_age" required type="number" min="18" max="100" step="1" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" />
+                                    </label>
+                                </template>
+                            </div>
+                            <div class="grid gap-4 sm:grid-cols-3">
+                                <label class="block text-sm font-medium text-slate-700">Expected annual return (%)<input data-testid="goal-return" v-model="goalForm.expected_return_percent" required type="number" min="0" max="50" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" /></label>
+                                <label class="block text-sm font-medium text-slate-700">Annual inflation (%)<input data-testid="goal-inflation" v-model="goalForm.inflation_percent" required type="number" min="0" max="30" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" /></label>
+                                <label class="block text-sm font-medium text-slate-700">Planned monthly contribution (optional)<input data-testid="goal-planned-monthly" v-model="goalForm.planned_monthly" type="number" min="0" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" /></label>
+                            </div>
+                            <p class="text-xs text-slate-500">The target is expressed in today’s purchasing power; your inflation and return assumptions are used to estimate the future target. Outcomes are not guaranteed.</p>
+                        </div>
+
+                        <div class="flex flex-col gap-2 sm:flex-row">
+                            <button data-testid="goal-save" type="submit" :disabled="savingGoal || goalSourceCurrencyMismatch" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60">{{ savingGoal ? 'Saving…' : (editingGoalId ? 'Save changes' : 'Save goal') }}</button>
+                            <button type="button" @click="closeGoalForm" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+                        </div>
+                    </form>
+
+                    <div v-if="goals.length" data-testid="goals-list" class="grid gap-4 lg:grid-cols-2">
+                        <article v-for="goal in goals" :key="goal.id" data-testid="goal-card" :data-goal-id="goal.id" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="text-xs font-semibold uppercase tracking-wide text-sky-700">{{ goalTypeLabel(goal.goal_type) }}</div>
+                                    <h3 class="mt-1 break-words text-lg font-semibold text-slate-900">{{ goal.name }}</h3>
+                                    <p class="mt-1 text-xs text-slate-500">{{ goal.source_names.join(' · ') || 'Selected source unavailable' }} · {{ goal.currency }}</p>
+                                </div>
+                                <div class="flex shrink-0 gap-1">
+                                    <button type="button" :aria-label="`Edit ${goal.name}`" @click="editGoal(goal)" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Edit</button>
+                                    <button type="button" :aria-label="`Delete ${goal.name}`" @click="removeGoal(goal)" class="rounded-lg border border-rose-200 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50">Delete</button>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex items-center justify-between gap-3 text-sm">
+                                <span class="font-medium text-slate-700">{{ goal.goal_type === 'debt_payoff' ? `${formatCurrency(goal.progress_amount, goal.currency)} paid of ${formatCurrency(goal.starting_balance, goal.currency)}` : `${formatCurrency(goal.current_amount, goal.currency)} of ${formatCurrency(goal.target_amount, goal.currency)}` }}</span>
+                                <span class="shrink-0 font-semibold text-slate-800">{{ goal.progress_percent }}%</span>
+                            </div>
+                            <div class="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" :aria-valuenow="goal.progress_percent" aria-valuemin="0" aria-valuemax="100" :aria-label="`${goal.name} progress`">
+                                <div class="h-full rounded-full bg-sky-500 transition-all" :style="{ width: `${goal.progress_percent}%` }"></div>
+                            </div>
+                            <p class="mt-3 text-sm leading-6 text-slate-700">{{ goal.encouragement }}</p>
+                            <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                                <span v-if="goal.target_date">{{ goal.goal_type === 'retirement' ? `Target year ${goal.retirement_year}` : `Target ${formatGoalDate(goal.target_date)}` }}</span>
+                                <span v-if="goal.required_monthly">Estimated pace {{ formatCurrency(goal.required_monthly, goal.currency) }}/month</span>
+                                <span v-if="goal.goal_type === 'debt_payoff'">APR assumption {{ goal.apr_percent }}%</span>
+                                <span v-if="goal.goal_type === 'savings' && goal.required_monthly">Savings pace excludes interest</span>
+                                <span v-if="goal.goal_type === 'retirement'">Assumptions: {{ goal.expected_return_percent }}% return · {{ goal.inflation_percent }}% inflation</span>
+                                <span v-if="goal.goal_type === 'retirement'">Target at retirement {{ formatCurrency(goal.target_nominal_amount, goal.currency) }}</span>
+                                <span v-if="goal.projected_amount">Projected {{ formatCurrency(goal.projected_amount, goal.currency) }}</span>
+                            </div>
+                        </article>
+                    </div>
+                    <div v-else-if="!goalFormOpen" data-testid="goals-empty" class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+                        <h3 class="text-base font-semibold text-slate-800">Your goals start here</h3>
+                        <p class="mt-2 text-sm text-slate-500">Set a savings target, a debt payoff date, or a retirement goal to see progress on your dashboard.</p>
+                        <button type="button" @click="openNewGoalForm" class="mt-4 rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700">Create your first goal</button>
                     </div>
                 </section>
 
@@ -1315,6 +1530,31 @@
                 const savingManualAsset = ref(false);
                 const manualAssetMessage = ref('');
                 const manualAssetError = ref(false);
+                const goals = ref([]);
+                const goalsLoading = ref(false);
+                const goalFormOpen = ref(false);
+                const editingGoalId = ref('');
+                const savingGoal = ref(false);
+                const goalMessage = ref('');
+                const goalError = ref(false);
+                const createGoalForm = () => ({
+                    goal_type: 'savings',
+                    name: '',
+                    account_id: '',
+                    account_ids: [],
+                    manual_asset_ids: [],
+                    target_amount: '',
+                    target_date: '',
+                    apr_percent: '',
+                    planned_monthly: '',
+                    retirement_timing_mode: 'year',
+                    birth_year: '',
+                    target_retirement_age: '65',
+                    retirement_year: String(new Date().getFullYear() + 20),
+                    expected_return_percent: '',
+                    inflation_percent: '',
+                });
+                const goalForm = ref(createGoalForm());
                 const recurringItems = ref([]);
                 const recurringSummary = ref({ subscription_count: 0, recurring_bill_count: 0, recurring_income_count: 0, other_count: 0 });
                 const recurringGeneratedAt = ref(null);
@@ -1858,8 +2098,22 @@
                     }
                 };
 
+                const fetchGoals = async () => {
+                    goalsLoading.value = true;
+                    try {
+                        const res = await apiFetch('/api/goals');
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || data.message || `Failed to load goals (${res.status})`);
+                        goals.value = Array.isArray(data.goals) ? data.goals : [];
+                    } catch (err) {
+                        console.warn('Could not load financial goals:', err.message);
+                    } finally {
+                        goalsLoading.value = false;
+                    }
+                };
+
                 const fetchProtectedState = async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings()]);
+                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAiSettings(), fetchGoals()]);
                     await nextTick();
                     renderSankey();
                     renderSpendingPie();
@@ -2129,6 +2383,7 @@
                                 String(account.id) === accountKey ? data.account : account
                             ));
                         }
+                        await fetchGoals();
                         accountTypeMessage.value = 'Account type saved. Net worth totals have been updated.';
                     } catch (err) {
                         accountTypeError.value = true;
@@ -2161,6 +2416,7 @@
                                     : transaction
                             ));
                         }
+                        await fetchGoals();
                         accountNicknameMessage.value = 'Account nickname saved.';
                     } catch (err) {
                         accountNicknameError.value = true;
@@ -2216,6 +2472,7 @@
                         } else if (data.asset) {
                             manualAssets.value = [...manualAssets.value, data.asset];
                         }
+                        await fetchGoals();
                         resetManualAssetForm();
                         manualAssetMessage.value = assetId ? 'Asset updated.' : 'Asset added.';
                     } catch (err) {
@@ -2240,6 +2497,7 @@
                         if (!response.ok) throw new Error(data.detail || data.message || `Failed to remove asset (${response.status})`);
                         manualAssets.value = manualAssets.value.filter((item) => String(item.id) !== String(asset.id));
                         if (String(editingManualAssetId.value) === String(asset.id)) resetManualAssetForm();
+                        await fetchGoals();
                         manualAssetMessage.value = 'Asset removed.';
                     } catch (err) {
                         manualAssetError.value = true;
@@ -2247,6 +2505,168 @@
                     } finally {
                         savingManualAsset.value = false;
                     }
+                };
+
+                const openNewGoalForm = () => {
+                    editingGoalId.value = '';
+                    goalForm.value = createGoalForm();
+                    goalFormOpen.value = true;
+                    goalMessage.value = '';
+                    goalError.value = false;
+                };
+
+                const closeGoalForm = () => {
+                    goalFormOpen.value = false;
+                    editingGoalId.value = '';
+                    goalForm.value = createGoalForm();
+                };
+
+                const changeGoalType = () => {
+                    const type = goalForm.value.goal_type;
+                    goalForm.value.name = type === 'debt_payoff'
+                        ? 'Debt payoff'
+                        : type === 'retirement' ? 'Retirement' : 'Savings goal';
+                    goalForm.value.account_id = '';
+                    goalForm.value.account_ids = [];
+                    goalForm.value.manual_asset_ids = [];
+                    goalForm.value.target_amount = '';
+                    goalForm.value.target_date = '';
+                    goalForm.value.planned_monthly = '';
+                };
+
+                const goalAccountSelected = (accountId) => {
+                    const id = String(accountId);
+                    return goalForm.value.goal_type === 'debt_payoff'
+                        ? goalForm.value.account_id === id
+                        : goalForm.value.account_ids.includes(id);
+                };
+
+                const toggleGoalAccount = (accountId, checked) => {
+                    const id = String(accountId);
+                    if (goalForm.value.goal_type === 'debt_payoff') {
+                        goalForm.value.account_id = checked ? id : '';
+                        return;
+                    }
+                    const selected = new Set(goalForm.value.account_ids);
+                    if (checked) selected.add(id);
+                    else selected.delete(id);
+                    goalForm.value.account_ids = Array.from(selected);
+                };
+
+                const goalManualAssetSelected = (assetId) => goalForm.value.manual_asset_ids.includes(String(assetId));
+
+                const toggleGoalManualAsset = (assetId, checked) => {
+                    const id = String(assetId);
+                    const selected = new Set(goalForm.value.manual_asset_ids);
+                    if (checked) selected.add(id);
+                    else selected.delete(id);
+                    goalForm.value.manual_asset_ids = Array.from(selected);
+                };
+
+                const goalAccountBalance = (account) => {
+                    const value = Number.parseFloat(account?.balance || 0);
+                    return Number.isFinite(value) ? Math.abs(value) : 0;
+                };
+
+                const editGoal = (goal) => {
+                    editingGoalId.value = String(goal.id);
+                    goalForm.value = {
+                        ...createGoalForm(),
+                        goal_type: goal.goal_type,
+                        name: goal.name,
+                        account_id: goal.goal_type === 'debt_payoff' ? String(goal.account_ids?.[0] || '') : '',
+                        account_ids: (goal.account_ids || []).map(String),
+                        manual_asset_ids: (goal.manual_asset_ids || []).map(String),
+                        target_amount: String(goal.target_amount ?? ''),
+                        target_date: goal.goal_type === 'retirement' ? '' : (goal.target_date || ''),
+                        apr_percent: String(goal.apr_percent ?? ''),
+                        planned_monthly: goal.planned_monthly == null ? '' : String(goal.planned_monthly),
+                        retirement_timing_mode: goal.retirement_timing_mode || 'year',
+                        birth_year: goal.birth_year == null ? '' : String(goal.birth_year),
+                        target_retirement_age: goal.target_retirement_age == null ? '' : String(goal.target_retirement_age),
+                        retirement_year: goal.retirement_year == null ? '' : String(goal.retirement_year),
+                        expected_return_percent: String(goal.expected_return_percent ?? ''),
+                        inflation_percent: String(goal.inflation_percent ?? ''),
+                    };
+                    goalFormOpen.value = true;
+                    goalMessage.value = '';
+                    goalError.value = false;
+                    setView('goals');
+                    goalFormOpen.value = true;
+                };
+
+                const saveGoal = async () => {
+                    savingGoal.value = true;
+                    goalMessage.value = '';
+                    goalError.value = false;
+                    const form = goalForm.value;
+                    const payload = {
+                        goal_type: form.goal_type,
+                        name: form.name.trim(),
+                        account_ids: form.goal_type === 'debt_payoff'
+                            ? (form.account_id ? [String(form.account_id)] : [])
+                            : form.account_ids.map(String),
+                        manual_asset_ids: form.manual_asset_ids.map(String),
+                        target_amount: form.goal_type === 'debt_payoff' ? null : String(form.target_amount),
+                        target_date: form.goal_type === 'retirement' ? null : (form.target_date || null),
+                        apr_percent: form.goal_type === 'debt_payoff' ? String(form.apr_percent) : null,
+                        planned_monthly: form.planned_monthly === '' ? null : String(form.planned_monthly),
+                        retirement_timing_mode: form.goal_type === 'retirement' ? form.retirement_timing_mode : null,
+                        birth_year: form.goal_type === 'retirement' && form.retirement_timing_mode === 'age' ? Number(form.birth_year) : null,
+                        target_retirement_age: form.goal_type === 'retirement' && form.retirement_timing_mode === 'age' ? Number(form.target_retirement_age) : null,
+                        retirement_year: form.goal_type === 'retirement' && form.retirement_timing_mode === 'year' ? Number(form.retirement_year) : null,
+                        expected_return_percent: form.goal_type === 'retirement' ? String(form.expected_return_percent) : null,
+                        inflation_percent: form.goal_type === 'retirement' ? String(form.inflation_percent) : null,
+                    };
+                    const goalId = editingGoalId.value;
+                    try {
+                        const response = await apiFetch(goalId ? `/api/goals/${encodeURIComponent(goalId)}` : '/api/goals', {
+                            method: goalId ? 'PUT' : 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || data.message || `Failed to save goal (${response.status})`);
+                        if (goalId) {
+                            goals.value = goals.value.map((goal) => String(goal.id) === goalId ? data.goal : goal);
+                        } else if (data.goal) {
+                            goals.value = [data.goal, ...goals.value];
+                        }
+                        goalMessage.value = goalId ? 'Goal updated.' : 'Goal saved.';
+                        closeGoalForm();
+                    } catch (err) {
+                        goalError.value = true;
+                        goalMessage.value = err.message;
+                    } finally {
+                        savingGoal.value = false;
+                    }
+                };
+
+                const removeGoal = async (goal) => {
+                    if (!window.confirm(`Delete the “${goal.name}” goal?`)) return;
+                    goalMessage.value = '';
+                    goalError.value = false;
+                    try {
+                        const response = await apiFetch(`/api/goals/${encodeURIComponent(goal.id)}`, { method: 'DELETE' });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || data.message || `Failed to delete goal (${response.status})`);
+                        goals.value = goals.value.filter((item) => String(item.id) !== String(goal.id));
+                        goalMessage.value = 'Goal deleted.';
+                    } catch (err) {
+                        goalError.value = true;
+                        goalMessage.value = err.message;
+                    }
+                };
+
+                const goalTypeLabel = (type) => ({
+                    debt_payoff: 'Debt payoff',
+                    savings: 'Savings goal',
+                    retirement: 'Retirement',
+                }[type] || 'Financial goal');
+                const formatGoalDate = (value) => {
+                    if (!value) return '';
+                    const parsed = new Date(`${value}T00:00:00`);
+                    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
                 };
 
                 const displayedTransactionGroups = computed(() => {
@@ -2301,7 +2721,7 @@
                 const setView = (nextView) => {
                     view.value = nextView;
                     drawerOpen.value = false;
-                    if (nextView === 'assets' || nextView.startsWith('settings-')) window.scrollTo(0, 0);
+                    if (nextView === 'assets' || nextView === 'goals' || nextView.startsWith('settings-')) window.scrollTo(0, 0);
                 };
 
                 const fetchStatus = async () => {
@@ -2817,6 +3237,30 @@
                 const unclassifiedAccountCount = computed(() => accounts.value.filter(
                     (account) => !assetAccountTypes.has(account.account_type) && !liabilityAccountTypes.has(account.account_type),
                 ).length);
+                const goalAccountOptions = computed(() => {
+                    if (goalForm.value.goal_type === 'debt_payoff') {
+                        return accounts.value.filter((account) => liabilityAccountTypes.has(account.account_type));
+                    }
+                    if (goalForm.value.goal_type === 'savings') {
+                        return accounts.value.filter((account) => account.account_type === 'bank_account');
+                    }
+                    if (goalForm.value.goal_type === 'retirement') {
+                        return accounts.value.filter((account) => account.account_type === 'investment');
+                    }
+                    return [];
+                });
+                const selectedGoalSources = computed(() => {
+                    const accountIds = goalForm.value.goal_type === 'debt_payoff'
+                        ? (goalForm.value.account_id ? [goalForm.value.account_id] : [])
+                        : goalForm.value.account_ids;
+                    const sourceAccounts = accounts.value.filter((account) => accountIds.includes(String(account.id)));
+                    const sourceAssets = manualAssets.value.filter((asset) => goalForm.value.manual_asset_ids.includes(String(asset.id)));
+                    return [...sourceAccounts, ...sourceAssets];
+                });
+                const goalSourceCurrencyMismatch = computed(() => new Set(
+                    selectedGoalSources.value.map((source) => String(source.currency || 'USD').toUpperCase()),
+                ).size > 1);
+                const dashboardGoals = computed(() => goals.value.slice(0, 3));
 
                 const spendingPiePalette = [
                     '#0284c7', '#0f766e', '#7c3aed', '#c2410c', '#be123c', '#4d7c0f',
@@ -3469,6 +3913,17 @@
                     accounts,
                     transactions,
                     manualAssets,
+                    goals,
+                    goalsLoading,
+                    goalFormOpen,
+                    editingGoalId,
+                    savingGoal,
+                    goalMessage,
+                    goalError,
+                    goalForm,
+                    goalAccountOptions,
+                    goalSourceCurrencyMismatch,
+                    dashboardGoals,
                     recurringItems,
                     recurringSummary,
                     recurringGeneratedAt,
@@ -3578,6 +4033,13 @@
                     accountBalanceClass,
                     netWorthByCurrency,
                     unclassifiedAccountCount,
+                    goalAccountSelected,
+                    toggleGoalAccount,
+                    goalManualAssetSelected,
+                    toggleGoalManualAsset,
+                    goalAccountBalance,
+                    goalTypeLabel,
+                    formatGoalDate,
                     categoryOptions,
                     relockCountdownText,
                     status,
@@ -3611,6 +4073,12 @@
                     resetManualAssetForm,
                     editManualAsset,
                     removeManualAsset,
+                    openNewGoalForm,
+                    closeGoalForm,
+                    changeGoalType,
+                    editGoal,
+                    saveGoal,
+                    removeGoal,
                     buildCategoryDefaults,
                     buildAiCategoryDefaults,
                     openRecurringEdit,

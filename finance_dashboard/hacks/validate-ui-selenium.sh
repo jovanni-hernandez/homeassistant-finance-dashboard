@@ -40,6 +40,7 @@ fi
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-manual-assets.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-manual-category-rule.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-transaction-pagination.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-goals.py"
 
 MODE_ARGS=()
 if [ "${FINANCE_DASHBOARD_URL:-}" = "local" ]; then
