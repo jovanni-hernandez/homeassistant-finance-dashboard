@@ -343,18 +343,70 @@ def get_transaction_count():
         db.close()
 
 
-def set_transaction_category(transaction_id: str, category: str):
+def set_transaction_category(
+    transaction_id: str,
+    category: str,
+    apply_to_future_matches: bool = False,
+    default_category_rules: list[dict] | None = None,
+):
     db = SessionLocal()
     try:
         tx = db.query(Transaction).filter(Transaction.id == transaction_id).first()
         if not tx:
             return False
-        tx.category = category or "Uncategorized"
+
+        normalized_category = str(category or "Uncategorized").strip() or "Uncategorized"
+        tx.category = normalized_category
+        if apply_to_future_matches:
+            pattern = str(tx.payee or "").strip() or str(tx.description or "").strip()
+            if not pattern:
+                raise ValueError("This transaction has no payee or description to match in future transactions.")
+            if len(pattern) > 200:
+                raise ValueError("The payee or description is too long to use as a category rule.")
+
+            setting = db.query(Setting).filter(Setting.key == "category_rules_json").first()
+            if setting and setting.value:
+                try:
+                    rules = json.loads(setting.value)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("Saved category rules are invalid. Fix them in Settings before adding a rule.") from exc
+                if not isinstance(rules, list) or len(rules) > 100:
+                    raise ValueError("Saved category rules are invalid or have reached the rule limit.")
+            else:
+                rules = json.loads(json.dumps(default_category_rules or []))
+
+            normalized_pattern = pattern.casefold()
+            preserved_rules = []
+            for rule in rules:
+                if not isinstance(rule, dict):
+                    raise ValueError("Saved category rules are invalid. Fix them in Settings before adding a rule.")
+                patterns = rule.get("patterns", [])
+                if not isinstance(patterns, list):
+                    raise ValueError("Saved category rules are invalid. Fix them in Settings before adding a rule.")
+                remaining_patterns = [
+                    existing for existing in patterns
+                    if not isinstance(existing, str) or existing.strip().casefold() != normalized_pattern
+                ]
+                if len(remaining_patterns) != len(patterns):
+                    if not remaining_patterns:
+                        continue
+                    rule = {**rule, "patterns": remaining_patterns}
+                preserved_rules.append(rule)
+
+            if len(preserved_rules) >= 100:
+                raise ValueError("The category rule limit has been reached. Remove a rule in Settings before adding another.")
+            rules = [{"category": normalized_category, "patterns": [pattern]}, *preserved_rules]
+            rules_json = json.dumps(rules, ensure_ascii=False)
+            if setting:
+                setting.value = rules_json
+            else:
+                db.add(Setting(key="category_rules_json", value=rules_json))
+
         db.commit()
         return True
     except Exception as e:
         db.rollback()
-        logger.error(f"Error setting category for transaction {transaction_id}: {e}")
+        logger.error("Error setting transaction category (%s).", type(e).__name__)
         raise e
     finally:
         db.close()

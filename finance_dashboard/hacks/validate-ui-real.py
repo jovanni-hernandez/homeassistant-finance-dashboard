@@ -537,6 +537,10 @@ def main():
                 "category_filter_matches": False,
                 "empty_state_for_no_match": False,
                 "manual_category_edit_works": False,
+                "manual_category_change_prompts_for_future_rule": False,
+                "one_off_choice_does_not_create_rule": False,
+                "future_rule_choice_saves_merchant_match": False,
+                "future_rule_choice_preserves_existing_defaults": False,
                 "account_cards_toggle_and_multi_select": False,
                 "account_filtered_phone_layout_has_no_overflow": True,
             }
@@ -549,6 +553,7 @@ def main():
                 "mortgage_payment_in_housing_slice": False,
             }
             transaction_screenshot = None
+            category_rule_prompt_screenshot = None
             account_filter_screenshot = None
             spending_pie_screenshot = None
             if args.device in {"iphone", "pixel"}:
@@ -878,15 +883,59 @@ def main():
                     and len(transfer_details.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]')) == 2
                 )
 
-            editable_row = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)[0]
+            editable_row = next(
+                row for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                if "Grocery Store" in row.text
+            )
             editable_transaction_id = editable_row.get_attribute("data-transaction-id")
             editable_category = Select(editable_row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]'))
             editable_category.select_by_value("Shopping")
+            category_prompt = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="category-rule-prompt"]'))
+            )
+            category_rule_prompt_screenshot = screenshot.with_name(screenshot.stem + "-category-rule-prompt" + screenshot.suffix)
+            driver.save_screenshot(str(category_rule_prompt_screenshot))
+            transaction_filter_checks["manual_category_change_prompts_for_future_rule"] = (
+                "Grocery Store" in category_prompt.text
+                and "Shopping" in category_prompt.text
+                and bool(category_prompt.find_elements(By.CSS_SELECTOR, '[data-testid="category-rule-apply"]'))
+            )
+            category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-one-off"]').click()
             WebDriverWait(driver, args.timeout).until(
                 lambda current: current.find_element(By.CSS_SELECTOR, f'{transaction_row_selector}[data-transaction-id="{editable_transaction_id}"]')
                     .find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == "Shopping"
+                and not current.find_elements(By.CSS_SELECTOR, '[data-testid="category-rule-prompt"]')
             )
             transaction_filter_checks["manual_category_edit_works"] = True
+            with urllib.request.urlopen(base_url + "api/category-rules", timeout=10) as response:
+                one_off_rules = json.loads(response.read().decode("utf-8")).get("rules_json") or ""
+            transaction_filter_checks["one_off_choice_does_not_create_rule"] = not one_off_rules
+
+            coffee_row = next(
+                row for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                if "Coffee Shop" in row.text
+            )
+            coffee_transaction_id = coffee_row.get_attribute("data-transaction-id")
+            Select(coffee_row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]')).select_by_value("Shopping")
+            category_prompt = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="category-rule-prompt"]'))
+            )
+            category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-apply"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, f'{transaction_row_selector}[data-transaction-id="{coffee_transaction_id}"]')
+                    .find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == "Shopping"
+                and not current.find_elements(By.CSS_SELECTOR, '[data-testid="category-rule-prompt"]')
+            )
+            transaction_filter_checks["future_rule_choice_saves_merchant_match"] = True
+            with urllib.request.urlopen(base_url + "api/category-rules", timeout=10) as response:
+                saved_rules = json.loads(json.loads(response.read().decode("utf-8")).get("rules_json") or "[]")
+            transaction_filter_checks["future_rule_choice_preserves_existing_defaults"] = (
+                saved_rules
+                and saved_rules[0].get("category") == "Shopping"
+                and "Coffee Shop" in saved_rules[0].get("patterns", [])
+                and any(rule.get("category") == "Groceries" and "grocery" in rule.get("patterns", []) for rule in saved_rules)
+                and any(rule.get("category") == "Income" and "payroll" in rule.get("patterns", []) for rule in saved_rules)
+            )
 
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Settings']]").click()
@@ -1195,6 +1244,7 @@ def main():
                 "sankey_details_screenshot": str(sankey_details_screenshot),
                 "transfer_screenshot": str(transfer_screenshot) if args.device in {"iphone", "pixel"} else None,
                 "transaction_screenshot": str(transaction_screenshot) if transaction_screenshot else None,
+                "category_rule_prompt_screenshot": str(category_rule_prompt_screenshot) if category_rule_prompt_screenshot else None,
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,
                 "spending_pie_screenshot": str(spending_pie_screenshot) if spending_pie_screenshot else None,
                 "dark_mode_screenshot": str(dark_mode_screenshot) if dark_mode_screenshot else None,

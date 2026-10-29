@@ -18,11 +18,15 @@ os.environ["FINANCE_KEY_PATH"] = str(Path(TEST_DATA.name) / "test.key")
 sys.path.insert(0, str(BACKEND))
 os.chdir(BACKEND)
 
-from main import validate_category_rules_json, validate_recurring_rules_json  # noqa: E402
+from main import TransactionCategoryRequest, validate_category_rules_json, validate_recurring_rules_json  # noqa: E402
 import security  # noqa: E402
 
 
 class ApiValidationTests(unittest.TestCase):
+    def test_future_category_rule_is_explicitly_opt_in(self):
+        self.assertFalse(TransactionCategoryRequest(category="Dining").apply_to_future_matches)
+        self.assertTrue(TransactionCategoryRequest(category="Dining", apply_to_future_matches=True).apply_to_future_matches)
+
     def test_category_rules_accept_valid_json(self):
         validate_category_rules_json('[{"category":"Subscriptions","patterns":["spotify"]}]')
 

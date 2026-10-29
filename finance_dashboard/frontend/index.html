@@ -652,6 +652,32 @@
                     </div>
                 </section>
 
+                <div v-if="pendingTransactionCategory" data-testid="category-rule-prompt" role="dialog" aria-modal="true" aria-labelledby="category-rule-prompt-title" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm" @click.self="cancelTransactionCategoryChange">
+                    <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
+                        <h3 id="category-rule-prompt-title" class="text-lg font-semibold text-slate-900">Apply this category to future matches?</h3>
+                        <p class="mt-2 text-sm text-slate-600">
+                            You’re categorizing <strong class="break-words text-slate-900">{{ pendingTransactionCategory.merchantPattern || 'this transaction' }}</strong> as
+                            <strong class="text-slate-900">{{ pendingTransactionCategory.category }}</strong>.
+                        </p>
+                        <p class="mt-2 text-sm text-slate-600">A rule will use this payee or description for future transactions. Other existing transactions won’t be changed.</p>
+                        <p v-if="!pendingTransactionCategory.canCreateRule" class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                            This entry doesn’t have a usable payee or description, so only this entry can be updated.
+                        </p>
+                        <div v-if="transactionCategoryError" role="alert" class="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{{ transactionCategoryError }}</div>
+                        <div class="mt-5 flex flex-col gap-2">
+                            <button type="button" data-testid="category-rule-apply" @click="confirmTransactionCategoryChange(true)" :disabled="savingTransactionCategory || !pendingTransactionCategory.canCreateRule" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">
+                                {{ savingTransactionCategory ? 'Saving…' : 'Apply to future matches' }}
+                            </button>
+                            <button type="button" data-testid="category-rule-one-off" @click="confirmTransactionCategoryChange(false)" :disabled="savingTransactionCategory" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                Just this entry
+                            </button>
+                            <button type="button" @click="cancelTransactionCategoryChange" :disabled="savingTransactionCategory" class="inline-flex min-h-11 items-center justify-center rounded-lg px-4 py-2.5 text-sm font-medium text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <div v-if="recurringEditOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 backdrop-blur-sm" @click.self="closeRecurringEdit">
                     <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
                         <div class="flex items-center justify-between gap-3">
@@ -1260,6 +1286,9 @@
                 const recurringActionMessage = ref('');
                 const recurringActionError = ref(false);
                 const recurringEditOpen = ref(false);
+                const pendingTransactionCategory = ref(null);
+                const savingTransactionCategory = ref(false);
+                const transactionCategoryError = ref('');
                 const recurringEditKey = ref('');
                 const recurringEditLabel = ref('');
                 const recurringEditKind = ref('subscription');
@@ -2501,21 +2530,51 @@
                     }
                 };
 
-                const updateTransactionCategory = async (transactionId, category) => {
+                const updateTransactionCategory = (transactionId, category) => {
+                    const transaction = transactions.value.find((item) => String(item.id) === String(transactionId));
+                    if (!transaction || (transaction.category || 'Uncategorized') === category) return;
+                    const merchantPattern = String(transaction.payee || '').trim() || String(transaction.description || '').trim();
+                    pendingTransactionCategory.value = {
+                        transactionId,
+                        category,
+                        merchantPattern,
+                        canCreateRule: merchantPattern.length > 0 && merchantPattern.length <= 200,
+                    };
+                    transactionCategoryError.value = '';
+                };
+
+                const cancelTransactionCategoryChange = () => {
+                    if (savingTransactionCategory.value) return;
+                    pendingTransactionCategory.value = null;
+                    transactionCategoryError.value = '';
+                };
+
+                const confirmTransactionCategoryChange = async (applyToFutureMatches) => {
+                    const pending = pendingTransactionCategory.value;
+                    if (!pending || savingTransactionCategory.value) return;
+                    savingTransactionCategory.value = true;
+                    transactionCategoryError.value = '';
                     try {
-                        const res = await apiFetch(`/api/transactions/${encodeURIComponent(transactionId)}/category`, {
+                        const res = await apiFetch(`/api/transactions/${encodeURIComponent(pending.transactionId)}/category`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                            body: JSON.stringify({ category }),
+                            body: JSON.stringify({
+                                category: pending.category,
+                                apply_to_future_matches: Boolean(applyToFutureMatches && pending.canCreateRule),
+                            }),
                         });
                         const data = await res.json().catch(() => ({}));
                         if (!res.ok) throw new Error(data.detail || data.message || `Failed to update category (${res.status})`);
+                        pendingTransactionCategory.value = null;
+                        syncError.value = false;
+                        syncMessage.value = data.message || 'Transaction category updated.';
                         await fetchData();
                         await nextTick();
                         renderSankey();
                     } catch (err) {
-                        syncError.value = true;
-                        syncMessage.value = err.message;
+                        transactionCategoryError.value = err.message;
+                    } finally {
+                        savingTransactionCategory.value = false;
                     }
                 };
 
@@ -3210,6 +3269,9 @@
                     recurringActionMessage,
                     recurringActionError,
                     recurringEditOpen,
+                    pendingTransactionCategory,
+                    savingTransactionCategory,
+                    transactionCategoryError,
                     recurringEditKey,
                     recurringEditLabel,
                     recurringEditKind,
@@ -3346,6 +3408,8 @@
                     saveRecurringEdit,
                     unlockWithPin,
                     updateTransactionCategory,
+                    confirmTransactionCategoryChange,
+                    cancelTransactionCategoryChange,
                     showMoreTransactions,
                     renderSankey,
                     formatCurrency,

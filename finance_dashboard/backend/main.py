@@ -97,6 +97,7 @@ class CategoryRulesRequest(BaseModel):
 
 class TransactionCategoryRequest(BaseModel):
     category: str = Field(min_length=1, max_length=100)
+    apply_to_future_matches: bool = False
 
 
 class AccountTypeRequest(BaseModel):
@@ -693,15 +694,27 @@ def api_set_recurring_rules(payload: RecurringRulesRequest):
 @app.post("/api/transactions/{transaction_id}/category", dependencies=[Depends(verify_ha_auth)])
 def api_set_transaction_category(transaction_id: str, payload: TransactionCategoryRequest):
     try:
-        ok = set_transaction_category(transaction_id, payload.category)
+        ok = set_transaction_category(
+            transaction_id,
+            payload.category,
+            apply_to_future_matches=payload.apply_to_future_matches,
+            default_category_rules=simplefin.DEFAULT_CATEGORY_RULES,
+        )
         if not ok:
             raise HTTPException(status_code=404, detail="Transaction not found")
-        return {"status": "success", "message": "Transaction category updated."}
+        return {
+            "status": "success",
+            "message": "Transaction category updated and future-match rule saved."
+            if payload.apply_to_future_matches
+            else "Transaction category updated.",
+        }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update transaction category: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        if isinstance(e, ValueError):
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.error("Failed to update transaction category (%s).", type(e).__name__)
+        raise HTTPException(status_code=400, detail="Failed to update the transaction category.") from e
 
 
 # Mount frontend static files.
