@@ -44,6 +44,8 @@ class AIPromptTests(unittest.TestCase):
     def test_both_features_use_their_shipped_prompts_by_default(self):
         settings = get_ai_prompt_settings()
         self.assertEqual(set(settings["prompts"]), {"goal_planner", "category_rules"})
+        self.assertIn("{{financial_snapshot}}", DEFAULT_SYSTEM_PROMPTS["goal_planner"])
+        self.assertIn("{{category_analysis}}", DEFAULT_SYSTEM_PROMPTS["category_rules"])
         for prompt_id, default in DEFAULT_SYSTEM_PROMPTS.items():
             self.assertEqual(settings["prompts"][prompt_id]["prompt"], default)
             self.assertEqual(settings["prompts"][prompt_id]["default_prompt"], default)

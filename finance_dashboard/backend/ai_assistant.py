@@ -222,23 +222,30 @@ def build_ai_category_defaults(top_n: int = 25, min_count: int = 2):
     except Exception as exc:
         raise RuntimeError(f"LiteLLM is not available: {exc}")
 
+    category_analysis = {
+        "current_category_mix": analysis.get("current_category_mix", []),
+        "deterministic_proposals": analysis.get("proposals", []),
+        "uncategorized_candidates": analysis.get("uncategorized_candidates", []),
+        "existing_rules_json": analysis.get("rules_json", "[]"),
+    }
+    instructions = {
+        "target_output": "array of category rule objects",
+        "minimum_categories": 4,
+        "maximum_patterns_per_category": 12,
+        "avoid_duplicates": True,
+    }
     system_prompt = get_ai_system_prompt("category_rules")
-
-    user_prompt = json.dumps(
-        {
-            "current_category_mix": analysis.get("current_category_mix", []),
-            "deterministic_proposals": analysis.get("proposals", []),
-            "uncategorized_candidates": analysis.get("uncategorized_candidates", []),
-            "existing_rules_json": analysis.get("rules_json", "[]"),
-            "instructions": {
-                "target_output": "array of category rule objects",
-                "minimum_categories": 4,
-                "maximum_patterns_per_category": 12,
-                "avoid_duplicates": True,
-            },
-        },
-        indent=2,
-    )
+    analysis_placeholder = "{{category_analysis}}"
+    if analysis_placeholder in system_prompt:
+        system_prompt = system_prompt.replace(
+            analysis_placeholder,
+            json.dumps(category_analysis, indent=2),
+        )
+        user_payload = {"instructions": instructions}
+    else:
+        # Preserve the prior user-message payload for saved prompts without a token.
+        user_payload = {**category_analysis, "instructions": instructions}
+    user_prompt = json.dumps(user_payload, indent=2)
 
     response = completion(
         model=model,

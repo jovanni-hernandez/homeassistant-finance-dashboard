@@ -329,11 +329,14 @@ def _prepare_goal_chat_payload(messages: list[dict]) -> dict:
         goals,
         _recent_transactions(date.today()),
     )
-    system_content = (
-        get_ai_system_prompt("goal_planner")
-        + "\n\nSanitized aggregate financial snapshot (JSON):\n"
-        + json.dumps(context, separators=(",", ":"), ensure_ascii=False)
-    )
+    snapshot_json = json.dumps(context, separators=(",", ":"), ensure_ascii=False)
+    system_prompt = get_ai_system_prompt("goal_planner")
+    snapshot_placeholder = "{{financial_snapshot}}"
+    if snapshot_placeholder in system_prompt:
+        system_content = system_prompt.replace(snapshot_placeholder, snapshot_json)
+    else:
+        # Keep user prompts saved before placeholder support working as before.
+        system_content = system_prompt + "\n\nSanitized aggregate financial snapshot (JSON):\n" + snapshot_json
     provider_messages = [{"role": "system", "content": system_content}, *safe_messages]
     return {
         "provider": provider,
@@ -448,16 +451,18 @@ def _extract_goal_draft(response_text: str, sensitive_terms: list[str]):
     return reply, None, 0
 
 
-def _completion(model: str, api_key: str, messages: list[dict]):
+def _completion(model: str, api_key: str, messages: list[dict], *, omit_temperature: bool = False):
     from litellm import completion
 
-    return completion(
-        model=model,
-        messages=messages,
-        api_key=api_key,
-        temperature=0.2,
-        max_tokens=700,
-    )
+    request = {
+        "model": model,
+        "messages": messages,
+        "api_key": api_key,
+        "max_tokens": 700,
+    }
+    if not omit_temperature:
+        request["temperature"] = 0.2
+    return completion(**request)
 
 
 def _provider_status_code(exc: Exception) -> int | None:
@@ -515,7 +520,14 @@ def _unsupported_params(exc: Exception) -> list[str]:
     return sorted(found)
 
 
-def _safe_provider_error(provider: str, model: str, status: int | None, exc: Exception) -> tuple[str, str]:
+def _safe_provider_error(
+    provider: str,
+    model: str,
+    status: int | None,
+    exc: Exception,
+    *,
+    temperature_retry_attempted: bool = False,
+) -> tuple[str, str]:
     provider_name = {"openai": "OpenAI", "claude": "Anthropic", "gemini": "Google Gemini"}.get(provider, "AI provider")
     error_type = type(exc).__name__
     safe_model = re.sub(r"[^A-Za-z0-9._:/+\-]", "", model)[:80] or "selected model"
@@ -529,6 +541,12 @@ def _safe_provider_error(provider: str, model: str, status: int | None, exc: Exc
                 f"{provider_name} rejected request option {names} for model `{safe_model}` (HTTP {status or 400}). "
                 f"The planner sends this option; choose a model in AI Settings that supports {options}.",
                 diagnostic,
+            )
+        if temperature_retry_attempted:
+            return (
+                f"{provider_name} still rejected model `{safe_model}` after retrying without the temperature option "
+                f"(HTTP {status or 400}). The model may reject the max-token limit or chat request format; choose another available chat model.",
+                "unsupported_params:after_temperature_retry",
             )
         return (
             f"{provider_name} reports that model `{safe_model}` does not accept one of the planner's request options "
@@ -563,8 +581,22 @@ def create_goal_chat_response(preview_id: str) -> dict:
     if not api_key:
         raise AIChatError(f"No API key is saved for the selected provider ({prepared['provider']}).")
 
+    temperature_retry_attempted = False
     try:
-        response = _completion(prepared["model"], api_key, prepared["messages"])
+        try:
+            response = _completion(prepared["model"], api_key, prepared["messages"])
+        except Exception as exc:
+            unsupported = _unsupported_params(exc) if type(exc).__name__ == "UnsupportedParamsError" else []
+            if type(exc).__name__ != "UnsupportedParamsError" or (unsupported and "temperature" not in unsupported):
+                raise
+            logger.info(
+                "Retrying AI goal request once without temperature after an unsupported-parameter response (provider=%s).",
+                prepared["provider"],
+            )
+            temperature_retry_attempted = True
+            response = _completion(
+                prepared["model"], api_key, prepared["messages"], omit_temperature=True,
+            )
         response_text = response.choices[0].message.content or ""
         if not isinstance(response_text, str):
             response_text = str(response_text)
@@ -572,13 +604,15 @@ def create_goal_chat_response(preview_id: str) -> dict:
         status = _provider_status_code(exc)
         safe_message, diagnostic = _safe_provider_error(
             prepared["provider"], prepared["model"], status, exc,
+            temperature_retry_attempted=temperature_retry_attempted,
         )
         logger.warning(
-            "AI provider request failed (provider=%s, status=%s, error_type=%s, diagnostic=%s). Chat content and credentials were not logged.",
+            "AI provider request failed (provider=%s, status=%s, error_type=%s, diagnostic=%s, temperature_retry=%s). Chat content and credentials were not logged.",
             prepared["provider"],
             status if status is not None else "unknown",
             type(exc).__name__,
             diagnostic,
+            temperature_retry_attempted,
         )
         raise AIProviderRequestError(
             safe_message,

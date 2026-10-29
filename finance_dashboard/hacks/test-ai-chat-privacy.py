@@ -154,7 +154,8 @@ class AIChatPrivacyTests(unittest.TestCase):
         }]
         preview = ai_chat.prepare_goal_chat_preview(conversation)
         preview_payload = json.dumps(preview["messages"])
-        self.assertIn(ai_chat.CHAT_SYSTEM_PROMPT, preview["messages"][0]["content"])
+        self.assertIn("You help the user think through financial goals", preview["messages"][0]["content"])
+        self.assertNotIn("{{financial_snapshot}}", preview["messages"][0]["content"])
         self.assertIn("monthly_activity", preview_payload)
         self.assertIn("balances_by_currency_and_account_type", preview_payload)
         for private_value in self.private_names + ["checking-123456789", "retirement-987654321", "Private cafe note"]:
@@ -194,12 +195,41 @@ class AIChatPrivacyTests(unittest.TestCase):
         self.assertNotIn("raw provider response containing credentials", "\n".join(captured_logs.output))
         self.assertNotIn(private_message, "\n".join(captured_logs.output))
 
+    def test_goal_retry_omits_temperature_after_unsupported_params(self):
+        class UnsupportedParamsError(Exception):
+            status_code = 400
+
+        calls = []
+
+        def fake_completion(model, api_key, messages, *, omit_temperature=False):
+            calls.append(omit_temperature)
+            if not omit_temperature:
+                raise UnsupportedParamsError("Unsupported parameter: 'temperature'")
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="A savings plan can start with your target and timeline."))])
+
+        preview = ai_chat.prepare_goal_chat_preview([{"role": "user", "content": "Help me plan savings."}])
+        with patch.object(ai_chat, "_completion", side_effect=fake_completion):
+            result = ai_chat.create_goal_chat_response(preview["preview_id"])
+
+        self.assertEqual(calls, [False, True])
+        self.assertIn("savings plan", result["reply"])
+
     def test_custom_goal_prompt_is_used_in_the_reviewed_provider_payload(self):
         custom_prompt = "Use a concise, supportive tone and ask for missing assumptions."
         save_ai_system_prompt("goal_planner", custom_prompt)
         preview = ai_chat.prepare_goal_chat_preview([{"role": "user", "content": "Help me plan a savings goal."}])
         self.assertTrue(preview["messages"][0]["content"].startswith(custom_prompt + "\n\n"))
         self.assertIn("Sanitized aggregate financial snapshot (JSON)", preview["messages"][0]["content"])
+
+    def test_goal_prompt_placeholder_inserts_snapshot_at_its_position(self):
+        save_ai_system_prompt("goal_planner", "Start here:\n{{financial_snapshot}}\nEnd here.")
+        preview = ai_chat.prepare_goal_chat_preview([{"role": "user", "content": "Help me plan."}])
+        system_content = preview["messages"][0]["content"]
+
+        self.assertTrue(system_content.startswith("Start here:\n{"))
+        self.assertIn("\nEnd here.", system_content)
+        self.assertIn("monthly_activity", system_content)
+        self.assertNotIn("{{financial_snapshot}}", system_content)
 
     def test_custom_category_prompt_is_used_for_category_generation(self):
         custom_prompt = "Return JSON only and use stable merchant names."
@@ -221,6 +251,31 @@ class AIChatPrivacyTests(unittest.TestCase):
                 ai_assistant.build_ai_category_defaults()
 
         self.assertEqual(captured["messages"][0]["content"], custom_prompt)
+        self.assertIn("current_category_mix", captured["messages"][1]["content"])
+
+    def test_category_prompt_placeholder_moves_analysis_into_system_message(self):
+        custom_prompt = "Analyze this context:\n{{category_analysis}}\nReturn the required JSON."
+        save_ai_system_prompt("category_rules", custom_prompt)
+        captured = {}
+
+        def fake_completion(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='[{"category":"Dining","patterns":["Unique Cafe"]}]'))])
+
+        analysis = {
+            "current_category_mix": [{"category": "Dining", "merchant": "Unique Cafe"}],
+            "proposals": [],
+            "uncategorized_candidates": [{"merchant": "Unique Cafe"}],
+            "rules_json": "[]",
+        }
+        with patch.object(ai_assistant, "generate_category_analysis", return_value=analysis):
+            with patch.dict(sys.modules, {"litellm": SimpleNamespace(completion=fake_completion)}):
+                ai_assistant.build_ai_category_defaults()
+
+        self.assertIn("Unique Cafe", captured["messages"][0]["content"])
+        self.assertNotIn("{{category_analysis}}", captured["messages"][0]["content"])
+        self.assertNotIn("Unique Cafe", captured["messages"][1]["content"])
+        self.assertIn("target_output", captured["messages"][1]["content"])
 
     def test_disabled_ai_does_not_call_provider(self):
         set_setting(AI_ENABLED_KEY, "false")

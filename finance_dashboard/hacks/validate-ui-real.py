@@ -1467,8 +1467,10 @@ def main():
             ai_settings_checks["both_system_prompts_are_visible"] = (
                 "minimized financial snapshot" in default_goal_prompt
                 and "goal_draft" in default_goal_prompt
+                and "{{financial_snapshot}}" in default_goal_prompt
                 and "valid JSON" in default_category_prompt
                 and "category" in default_category_prompt
+                and "{{category_analysis}}" in default_category_prompt
             )
 
             goal_prompt_input.clear()
