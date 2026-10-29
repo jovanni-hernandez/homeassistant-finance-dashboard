@@ -28,6 +28,9 @@ class ApiValidationTests(unittest.TestCase):
         self.assertTrue(TransactionCategoryRequest(category="Dining", apply_to_future_matches=True).apply_to_future_matches)
         self.assertFalse(TransactionCategoryRequest(category="Dining").apply_to_existing_matches)
         self.assertTrue(TransactionCategoryRequest(category="Dining", apply_to_future_matches=True, apply_to_existing_matches=True).apply_to_existing_matches)
+        self.assertEqual(TransactionCategoryRequest(category="Dining").rule_match_source, "merchant")
+        self.assertEqual(TransactionCategoryRequest(category="Dining", rule_match_source="description").rule_match_source, "description")
+        self.assertEqual(TransactionCategoryRequest(category="Dining", rule_match_source="both").rule_match_source, "both")
 
     def test_category_rules_accept_valid_json(self):
         validate_category_rules_json('[{"category":"Subscriptions","patterns":["spotify"]}]')

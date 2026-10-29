@@ -348,6 +348,7 @@ def set_transaction_category(
     category: str,
     apply_to_future_matches: bool = False,
     apply_to_existing_matches: bool = False,
+    rule_match_source: str = "merchant",
     default_category_rules: list[dict] | None = None,
 ):
     db = SessionLocal()
@@ -362,12 +363,22 @@ def set_transaction_category(
         normalized_category = str(category or "Uncategorized").strip() or "Uncategorized"
         tx.category = normalized_category
         updated_existing_count = 0
+        rule_patterns = []
         if apply_to_future_matches:
-            pattern = str(tx.payee or "").strip() or str(tx.description or "").strip()
-            if not pattern:
-                raise ValueError("This transaction has no payee or description to match in future transactions.")
-            if len(pattern) > 200:
-                raise ValueError("The payee or description is too long to use as a category rule.")
+            merchant_pattern = str(tx.payee or "").strip()
+            description_pattern = str(tx.description or "").strip()
+            if rule_match_source == "merchant":
+                rule_patterns = [merchant_pattern] if merchant_pattern else []
+            elif rule_match_source == "description":
+                rule_patterns = [description_pattern] if description_pattern else []
+            elif rule_match_source == "both":
+                rule_patterns = list(dict.fromkeys(pattern for pattern in (merchant_pattern, description_pattern) if pattern))
+            else:
+                raise ValueError("Choose merchant, description, or both for the category rule.")
+            if not rule_patterns:
+                raise ValueError("This transaction has no selected payee or description to match in future transactions.")
+            if any(len(pattern) > 200 for pattern in rule_patterns):
+                raise ValueError("The selected payee or description is too long to use as a category rule.")
 
             setting = db.query(Setting).filter(Setting.key == "category_rules_json").first()
             if setting and setting.value:
@@ -380,7 +391,7 @@ def set_transaction_category(
             else:
                 rules = json.loads(json.dumps(default_category_rules or []))
 
-            normalized_pattern = pattern.casefold()
+            normalized_patterns = {pattern.casefold() for pattern in rule_patterns}
             preserved_rules = []
             for rule in rules:
                 if not isinstance(rule, dict):
@@ -390,7 +401,7 @@ def set_transaction_category(
                     raise ValueError("Saved category rules are invalid. Fix them in Settings before adding a rule.")
                 remaining_patterns = [
                     existing for existing in patterns
-                    if not isinstance(existing, str) or existing.strip().casefold() != normalized_pattern
+                    if not isinstance(existing, str) or existing.strip().casefold() not in normalized_patterns
                 ]
                 if len(remaining_patterns) != len(patterns):
                     if not remaining_patterns:
@@ -400,7 +411,7 @@ def set_transaction_category(
 
             if len(preserved_rules) >= 100:
                 raise ValueError("The category rule limit has been reached. Remove a rule in Settings before adding another.")
-            rules = [{"category": normalized_category, "patterns": [pattern]}, *preserved_rules]
+            rules = [{"category": normalized_category, "patterns": rule_patterns}, *preserved_rules]
             rules_json = json.dumps(rules, ensure_ascii=False)
             if setting:
                 setting.value = rules_json
@@ -410,7 +421,7 @@ def set_transaction_category(
             if apply_to_existing_matches:
                 for existing_tx in db.query(Transaction).filter(Transaction.id != tx.id).all():
                     haystack = f"{existing_tx.payee or ''} {existing_tx.description or ''}".casefold()
-                    if normalized_pattern in haystack and (existing_tx.category or "Uncategorized") != normalized_category:
+                    if any(pattern.casefold() in haystack for pattern in rule_patterns) and (existing_tx.category or "Uncategorized") != normalized_category:
                         existing_tx.category = normalized_category
                         updated_existing_count += 1
 

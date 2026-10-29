@@ -656,10 +656,20 @@
                     <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl sm:p-6">
                         <h3 id="category-rule-prompt-title" class="text-lg font-semibold text-slate-900">Where should this category apply?</h3>
                         <p class="mt-2 text-sm text-slate-600">
-                            You’re categorizing <strong class="break-words text-slate-900">{{ pendingTransactionCategory.merchantPattern || 'this transaction' }}</strong> as
+                            You’re categorizing <strong class="break-words text-slate-900">{{ pendingTransactionCategory.merchantPattern || pendingTransactionCategory.descriptionPattern || 'this transaction' }}</strong> as
                             <strong class="text-slate-900">{{ pendingTransactionCategory.category }}</strong>.
                         </p>
-                        <p class="mt-2 text-sm text-slate-600">A rule will use this payee or description for future transactions. You can also choose whether to update matching transactions already in your history.</p>
+                        <label for="category-rule-match-source" class="mt-4 block text-sm font-medium text-slate-700">Make the future rule from</label>
+                        <select id="category-rule-match-source" data-testid="category-rule-match-source" :value="pendingTransactionCategory.matchSource" @change="updatePendingTransactionCategoryMatchSource($event.target.value)" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100">
+                            <option value="merchant" :disabled="!pendingTransactionCategory.canMatchMerchant">Merchant / payee</option>
+                            <option value="description" :disabled="!pendingTransactionCategory.canMatchDescription">Description</option>
+                            <option value="both" :disabled="!pendingTransactionCategory.canMatchBoth">Both (either can match)</option>
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500">The selected text is matched against transaction payees and descriptions. Both saves both patterns, and either one can match.</p>
+                        <p v-if="pendingTransactionCategory.rulePatterns.length" data-testid="category-rule-pattern-preview" class="mt-2 break-words text-sm text-slate-600">
+                            Matching text: <strong class="text-slate-900">{{ pendingTransactionCategory.rulePatterns.join(' or ') }}</strong>
+                        </p>
+                        <p class="mt-2 text-sm text-slate-600">You can apply this rule to future transactions, and optionally update matching transactions already in your history.</p>
                         <p v-if="pendingTransactionCategory.existingMatchCount" data-testid="category-rule-existing-warning" role="alert" class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                             {{ pendingTransactionCategory.existingMatchCount }} other matching transaction{{ pendingTransactionCategory.existingMatchCount === 1 ? '' : 's' }} found. Updating them will replace their categories, including categories you previously chose manually.
                         </p>
@@ -2537,24 +2547,63 @@
                     }
                 };
 
+                const categoryRulePatterns = (pending, source = pending?.matchSource) => {
+                    const values = source === 'both'
+                        ? [pending?.merchantPattern, pending?.descriptionPattern]
+                        : [source === 'description' ? pending?.descriptionPattern : pending?.merchantPattern];
+                    return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+                };
+
+                const countExistingCategoryMatches = (transactionId, category, patterns) => {
+                    const normalizedPatterns = patterns.map((pattern) => pattern.toLocaleLowerCase());
+                    if (!normalizedPatterns.length) return 0;
+                    return transactions.value.filter((item) => {
+                        if (String(item.id) === String(transactionId) || (item.category || 'Uncategorized') === category) return false;
+                        const haystack = `${item.payee || ''} ${item.description || ''}`.toLocaleLowerCase();
+                        return normalizedPatterns.some((pattern) => haystack.includes(pattern));
+                    }).length;
+                };
+
+                const updatePendingTransactionCategoryMatchSource = (matchSource) => {
+                    const pending = pendingTransactionCategory.value;
+                    if (!pending) return;
+                    const rulePatterns = categoryRulePatterns(pending, matchSource);
+                    const canCreateRule = rulePatterns.length > 0 && rulePatterns.every((pattern) => pattern.length <= 200);
+                    pendingTransactionCategory.value = {
+                        ...pending,
+                        matchSource,
+                        rulePatterns,
+                        canCreateRule,
+                        existingMatchCount: canCreateRule
+                            ? countExistingCategoryMatches(pending.transactionId, pending.category, rulePatterns)
+                            : 0,
+                    };
+                };
+
                 const updateTransactionCategory = (transactionId, category) => {
                     const transaction = transactions.value.find((item) => String(item.id) === String(transactionId));
                     if (!transaction || (transaction.category || 'Uncategorized') === category) return;
-                    const merchantPattern = String(transaction.payee || '').trim() || String(transaction.description || '').trim();
-                    const patternForMatch = merchantPattern.toLocaleLowerCase();
-                    const existingMatchCount = merchantPattern.length <= 200
-                        ? transactions.value.filter((item) => (
-                            String(item.id) !== String(transactionId)
-                            && (item.category || 'Uncategorized') !== category
-                            && `${item.payee || ''} ${item.description || ''}`.toLocaleLowerCase().includes(patternForMatch)
-                        )).length
-                        : 0;
-                    pendingTransactionCategory.value = {
+                    const merchantPattern = String(transaction.payee || '').trim();
+                    const descriptionPattern = String(transaction.description || '').trim();
+                    const canMatchMerchant = merchantPattern.length > 0 && merchantPattern.length <= 200;
+                    const canMatchDescription = descriptionPattern.length > 0 && descriptionPattern.length <= 200;
+                    const matchSource = canMatchMerchant ? 'merchant' : canMatchDescription ? 'description' : 'merchant';
+                    const pending = {
                         transactionId,
                         category,
                         merchantPattern,
-                        canCreateRule: merchantPattern.length > 0 && merchantPattern.length <= 200,
-                        existingMatchCount,
+                        descriptionPattern,
+                        matchSource,
+                        canMatchMerchant,
+                        canMatchDescription,
+                        canMatchBoth: canMatchMerchant && canMatchDescription,
+                    };
+                    const rulePatterns = categoryRulePatterns(pending);
+                    pendingTransactionCategory.value = {
+                        ...pending,
+                        rulePatterns,
+                        canCreateRule: rulePatterns.length > 0 && rulePatterns.every((pattern) => pattern.length <= 200),
+                        existingMatchCount: countExistingCategoryMatches(transactionId, category, rulePatterns),
                     };
                     transactionCategoryError.value = '';
                 };
@@ -2580,6 +2629,7 @@
                                 apply_to_existing_matches: Boolean(
                                     applyToFutureMatches && applyToExistingMatches && pending.existingMatchCount > 0
                                 ),
+                                rule_match_source: pending.matchSource,
                             }),
                         });
                         const data = await res.json().catch(() => ({}));
@@ -3227,7 +3277,7 @@
                     visibleTransactionLimit.value = 15;
                 });
 
-                watch([transactions, selectedMonth, view, sankeyMode], async () => {
+                watch([transactions, selectedMonth, transactionCategoryFilter, view, sankeyMode], async () => {
                     clearSankeyDetails();
                     await nextTick();
                     if (view.value === 'dashboard') renderSankey();
@@ -3427,6 +3477,7 @@
                     saveRecurringEdit,
                     unlockWithPin,
                     updateTransactionCategory,
+                    updatePendingTransactionCategoryMatchSource,
                     confirmTransactionCategoryChange,
                     cancelTransactionCategoryChange,
                     showMoreTransactions,

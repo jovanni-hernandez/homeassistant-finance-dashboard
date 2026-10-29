@@ -563,8 +563,10 @@ def main():
                 "manual_category_edit_works": False,
                 "manual_category_change_prompts_for_future_rule": False,
                 "one_off_choice_does_not_create_rule": False,
-                "future_rule_choice_saves_merchant_match": False,
+                "future_rule_choice_saves_selected_patterns": False,
                 "future_rule_choice_preserves_existing_defaults": False,
+                "category_rule_match_source_is_selectable": False,
+                "description_source_recalculates_existing_matches": False,
                 "retroactive_prompt_shows_count_and_warning": False,
                 "retroactive_choice_updates_all_matching_entries": False,
                 "account_cards_toggle_and_multi_select": False,
@@ -574,6 +576,8 @@ def main():
                 "transfers_excluded_by_default": False,
                 "toggle_adds_transfer_slice": False,
                 "category_slice_filters_and_reselect_clears": False,
+                "pie_category_filters_sankey": False,
+                "clearing_pie_filter_restores_sankey": False,
                 "transfer_slice_filters_transfer_entries": False,
                 "phone_layout_has_no_horizontal_overflow": True,
                 "mortgage_payment_in_housing_slice": False,
@@ -581,6 +585,8 @@ def main():
             transaction_screenshot = None
             category_rule_prompt_screenshot = None
             category_rule_existing_prompt_screenshot = None
+            sankey_filtered_screenshot = None
+            sankey_restored_screenshot = None
             account_filter_screenshot = None
             spending_pie_screenshot = None
             if args.device in {"iphone", "pixel"}:
@@ -737,6 +743,18 @@ def main():
             )
 
             category_to_test = "Groceries" if "Groceries" in default_pie_categories else sorted(default_pie_categories)[0]
+            driver.execute_script("arguments[0].click();", driver.find_element(By.CSS_SELECTOR, '[data-testid="sankey-cashflow-tab"]'))
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="sankey-cashflow-tab"]').get_attribute("aria-selected") == "true"
+            )
+
+            def current_sankey_node_names(current):
+                return {
+                    node.get_attribute("data-sankey-node-name")
+                    for node in current.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                }
+
+            full_sankey_node_names = current_sankey_node_names(driver)
             category_slice = driver.find_element(By.CSS_SELECTOR, f'[data-testid="spending-pie-slice"][data-category="{category_to_test}"]')
             driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", category_slice)
             WebDriverWait(driver, args.timeout).until(
@@ -747,13 +765,39 @@ def main():
                 row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == category_to_test
                 for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
             )
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: (
+                    category_to_test in current_sankey_node_names(current)
+                    and current_sankey_node_names(current) != full_sankey_node_names
+                )
+            )
+            filtered_sankey_node_names = current_sankey_node_names(driver)
+            spending_pie_checks["pie_category_filters_sankey"] = (
+                category_to_test in filtered_sankey_node_names
+                and "Housing" not in filtered_sankey_node_names
+            )
+            sankey_filtered_screenshot = screenshot.with_name(screenshot.stem + "-sankey-pie-filtered" + screenshot.suffix)
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});",
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="sankey-chart"]'),
+            )
+            driver.save_screenshot(str(sankey_filtered_screenshot))
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", spending_pie_section)
             full_breakdown_remains = len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="spending-pie-slice"]')) == len(default_pie_categories)
             category_slice = driver.find_element(By.CSS_SELECTOR, f'[data-testid="spending-pie-slice"][data-category="{category_to_test}"]')
             driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", category_slice)
             WebDriverWait(driver, args.timeout).until(
                 lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == "all"
+                and current_sankey_node_names(current) == full_sankey_node_names
             )
             spending_pie_checks["category_slice_filters_and_reselect_clears"] = category_rows_match and full_breakdown_remains
+            spending_pie_checks["clearing_pie_filter_restores_sankey"] = current_sankey_node_names(driver) == full_sankey_node_names
+            sankey_restored_screenshot = screenshot.with_name(screenshot.stem + "-sankey-pie-reset" + screenshot.suffix)
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});",
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="sankey-chart"]'),
+            )
+            driver.save_screenshot(str(sankey_restored_screenshot))
 
             sankey_layout_checks = {
                 "cashflow_has_readable_mobile_width": True,
@@ -947,7 +991,25 @@ def main():
             category_prompt = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="category-rule-prompt"]'))
             )
+            rule_source_select = Select(category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-match-source"]'))
+            rule_source_select.select_by_value("description")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: bool(current.find_elements(By.CSS_SELECTOR, '[data-testid="category-rule-no-existing-matches"]'))
+                and not current.find_elements(By.CSS_SELECTOR, '[data-testid="category-rule-apply-existing"]')
+            )
+            transaction_filter_checks["description_source_recalculates_existing_matches"] = (
+                category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-match-source"]').get_attribute("value") == "description"
+            )
+            rule_source_select = Select(category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-match-source"]'))
+            rule_source_select.select_by_value("both")
+            category_prompt = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="category-rule-prompt"]'))
+            )
             existing_match_button = category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-apply-existing"]')
+            transaction_filter_checks["category_rule_match_source_is_selectable"] = (
+                category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-match-source"]').get_attribute("value") == "both"
+                and "either" in category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-match-source"]').text.lower()
+            )
             transaction_filter_checks["retroactive_prompt_shows_count_and_warning"] = (
                 "1 other matching transaction" in category_prompt.text
                 and "manually" in category_prompt.text
@@ -967,7 +1029,7 @@ def main():
                 row for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
                 if "Coffee Shop" in row.text
             ]
-            transaction_filter_checks["future_rule_choice_saves_merchant_match"] = bool(coffee_rows)
+            transaction_filter_checks["future_rule_choice_saves_selected_patterns"] = bool(coffee_rows)
             transaction_filter_checks["retroactive_choice_updates_all_matching_entries"] = (
                 len(coffee_rows) >= 2
                 and all(
@@ -981,6 +1043,7 @@ def main():
                 saved_rules
                 and saved_rules[0].get("category") == "Shopping"
                 and "Coffee Shop" in saved_rules[0].get("patterns", [])
+                and "Latte" in saved_rules[0].get("patterns", [])
                 and any(rule.get("category") == "Groceries" and "grocery" in rule.get("patterns", []) for rule in saved_rules)
                 and any(rule.get("category") == "Income" and "payroll" in rule.get("patterns", []) for rule in saved_rules)
             )
@@ -1294,6 +1357,8 @@ def main():
                 "transaction_screenshot": str(transaction_screenshot) if transaction_screenshot else None,
                 "category_rule_prompt_screenshot": str(category_rule_prompt_screenshot) if category_rule_prompt_screenshot else None,
                 "category_rule_existing_prompt_screenshot": str(category_rule_existing_prompt_screenshot) if category_rule_existing_prompt_screenshot else None,
+                "sankey_filtered_screenshot": str(sankey_filtered_screenshot) if sankey_filtered_screenshot else None,
+                "sankey_restored_screenshot": str(sankey_restored_screenshot) if sankey_restored_screenshot else None,
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,
                 "spending_pie_screenshot": str(spending_pie_screenshot) if spending_pie_screenshot else None,
                 "dark_mode_screenshot": str(dark_mode_screenshot) if dark_mode_screenshot else None,

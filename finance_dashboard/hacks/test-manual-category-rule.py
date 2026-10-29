@@ -150,14 +150,48 @@ class ManualCategoryRuleTests(unittest.TestCase):
             "Shopping",
             apply_to_future_matches=True,
             apply_to_existing_matches=True,
+            rule_match_source="both",
             default_category_rules=simplefin.DEFAULT_CATEGORY_RULES,
         )
 
         self.assertEqual(result["updated_existing_count"], 2)
+        saved_rules = json.loads(get_category_rules_value())
+        self.assertEqual(saved_rules[0]["patterns"], ["Coffee Shop", "Morning coffee"])
         self.assertEqual(self.transaction_category("target-transaction"), "Shopping")
         self.assertEqual(self.transaction_category("existing-match"), "Shopping")
         self.assertEqual(self.transaction_category("description-match"), "Shopping")
         self.assertEqual(self.transaction_category("already-correct-match"), "Shopping")
+
+    def test_description_source_uses_only_the_description_pattern(self):
+        set_transaction_category(
+            "target-transaction",
+            "Shopping",
+            apply_to_future_matches=True,
+            rule_match_source="description",
+            default_category_rules=simplefin.DEFAULT_CATEGORY_RULES,
+        )
+
+        saved_rules = json.loads(get_category_rules_value())
+        self.assertEqual(saved_rules[0]["patterns"], ["Morning coffee"])
+
+    def test_both_source_matches_either_merchant_or_description(self):
+        set_transaction_category(
+            "target-transaction",
+            "Shopping",
+            apply_to_future_matches=True,
+            rule_match_source="both",
+            default_category_rules=simplefin.DEFAULT_CATEGORY_RULES,
+        )
+        rules = simplefin._load_category_rules()
+
+        self.assertEqual(
+            simplefin.categorize_transaction({"payee": "Coffee Shop #1234", "description": "Unrelated"}, rules=rules),
+            "Shopping",
+        )
+        self.assertEqual(
+            simplefin.categorize_transaction({"payee": "Different Merchant", "description": "Morning coffee"}, rules=rules),
+            "Shopping",
+        )
 
     def test_existing_match_updates_require_a_future_rule(self):
         with self.assertRaisesRegex(ValueError, "requires saving a future-match rule"):
@@ -170,7 +204,7 @@ class ManualCategoryRuleTests(unittest.TestCase):
         self.assertEqual(self.transaction_category("target-transaction"), "Dining")
 
     def test_failed_rule_creation_rolls_back_the_category_edit(self):
-        with self.assertRaisesRegex(ValueError, "no payee or description"):
+        with self.assertRaisesRegex(ValueError, "no selected payee or description"):
             set_transaction_category(
                 "no-merchant-text",
                 "Shopping",

@@ -6,6 +6,7 @@ import select
 import sys
 import threading
 from collections import Counter, defaultdict
+from typing import Literal
 from fastapi import FastAPI, Header, HTTPException, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -99,6 +100,7 @@ class TransactionCategoryRequest(BaseModel):
     category: str = Field(min_length=1, max_length=100)
     apply_to_future_matches: bool = False
     apply_to_existing_matches: bool = False
+    rule_match_source: Literal["merchant", "description", "both"] = "merchant"
 
 
 class AccountTypeRequest(BaseModel):
@@ -700,6 +702,7 @@ def api_set_transaction_category(transaction_id: str, payload: TransactionCatego
             payload.category,
             apply_to_future_matches=payload.apply_to_future_matches,
             apply_to_existing_matches=payload.apply_to_existing_matches,
+            rule_match_source=payload.rule_match_source,
             default_category_rules=simplefin.DEFAULT_CATEGORY_RULES,
         )
         if not ok:
