@@ -2877,6 +2877,82 @@
                     return diff / (60 * 60 * 24);
                 };
 
+                const sankeyNodeOrderByTransactionCount = (graph) => {
+                    const layers = new Map();
+                    graph.nodes.forEach((node) => {
+                        if (!layers.has(node.depth)) layers.set(node.depth, []);
+                        layers.get(node.depth).push(node);
+                    });
+                    layers.forEach((nodes) => nodes.sort((left, right) => left.y0 - right.y0));
+
+                    const positionsByLayer = () => new Map(
+                        Array.from(layers, ([depth, nodes]) => [
+                            depth,
+                            new Map(nodes.map((node, index) => [node.layoutId, index])),
+                        ]),
+                    );
+                    const maxDepth = Math.max(0, ...layers.keys());
+                    const linkWeight = (link) => Math.max(1, Number(link.transactions?.length || 0));
+
+                    for (let pass = 0; pass < 8; pass += 1) {
+                        let positions = positionsByLayer();
+                        for (let depth = 1; depth <= maxDepth; depth += 1) {
+                            const nodes = layers.get(depth) || [];
+                            const previousOrder = new Map(nodes.map((node, index) => [node.layoutId, index]));
+                            const barycenter = (node) => {
+                                let weightedPosition = 0;
+                                let totalWeight = 0;
+                                (node.targetLinks || []).forEach((link) => {
+                                    const neighborPosition = positions.get(link.source.depth)?.get(link.source.layoutId);
+                                    if (neighborPosition === undefined) return;
+                                    const weight = linkWeight(link);
+                                    weightedPosition += neighborPosition * weight;
+                                    totalWeight += weight;
+                                });
+                                return totalWeight ? weightedPosition / totalWeight : previousOrder.get(node.layoutId);
+                            };
+                            nodes.sort((left, right) => (
+                                barycenter(left) - barycenter(right)
+                                || previousOrder.get(left.layoutId) - previousOrder.get(right.layoutId)
+                            ));
+                            positions = positionsByLayer();
+                        }
+
+                        positions = positionsByLayer();
+                        for (let depth = maxDepth - 1; depth >= 0; depth -= 1) {
+                            const nodes = layers.get(depth) || [];
+                            const previousOrder = new Map(nodes.map((node, index) => [node.layoutId, index]));
+                            const barycenter = (node) => {
+                                let weightedPosition = 0;
+                                let totalWeight = 0;
+                                (node.sourceLinks || []).forEach((link) => {
+                                    const neighborPosition = positions.get(link.target.depth)?.get(link.target.layoutId);
+                                    if (neighborPosition === undefined) return;
+                                    const weight = linkWeight(link);
+                                    weightedPosition += neighborPosition * weight;
+                                    totalWeight += weight;
+                                });
+                                return totalWeight ? weightedPosition / totalWeight : previousOrder.get(node.layoutId);
+                            };
+                            nodes.sort((left, right) => (
+                                barycenter(left) - barycenter(right)
+                                || previousOrder.get(left.layoutId) - previousOrder.get(right.layoutId)
+                            ));
+                            positions = positionsByLayer();
+                        }
+                    }
+
+                    const order = new Map();
+                    let index = 0;
+                    Array.from(layers.keys()).sort((left, right) => left - right).forEach((depth) => {
+                        (layers.get(depth) || []).forEach((node) => {
+                            order.set(node.layoutId, index);
+                            index += 1;
+                        });
+                    });
+                    return order;
+                };
+
                 const calculateSankey = () => {
                     const cashflowTransactions = sankeyTransactions.value.filter((tx) => !isTransferLike(tx));
                     const incomeTx = cashflowTransactions.filter((tx) => parseFloat(tx.amount || 0) > 0);
@@ -3131,18 +3207,29 @@
                         const marginBottom = 10;
                         const marginLeft = 10;
 
-                        const createSankeyLayout = (chartHeight) => d3.sankey()
-                            .nodeWidth(nodeWidth)
-                            .nodePadding(nodePadding)
-                            .extent([[marginLeft, marginTop], [svgWidth - marginRight, chartHeight - marginBottom]]);
+                        const createSankeyLayout = (chartHeight, nodeOrder = null) => {
+                            const layout = d3.sankey()
+                                .nodeWidth(nodeWidth)
+                                .nodePadding(nodePadding)
+                                .extent([[marginLeft, marginTop], [svgWidth - marginRight, chartHeight - marginBottom]]);
+                            if (nodeOrder) {
+                                layout.nodeSort((left, right) => (
+                                    (nodeOrder.get(left.layoutId) ?? left.layoutId)
+                                    - (nodeOrder.get(right.layoutId) ?? right.layoutId)
+                                ));
+                            }
+                            return layout;
+                        };
                         const cloneSankeyData = () => ({
-                            nodes: data.nodes.map((d) => ({ ...d })),
+                            nodes: data.nodes.map((d, layoutId) => ({ ...d, layoutId })),
                             links: data.links.map((d) => ({ ...d })),
                         });
                         let height = baseHeight;
+                        const probeHeight = isMobileLayout
+                            ? Math.max(baseHeight, marginTop + marginBottom + data.nodes.length * 40)
+                            : baseHeight;
+                        const probeGraph = createSankeyLayout(probeHeight)(cloneSankeyData());
                         if (isMobileLayout) {
-                            const probeHeight = Math.max(baseHeight, marginTop + marginBottom + data.nodes.length * 40);
-                            const probeGraph = createSankeyLayout(probeHeight)(cloneSankeyData());
                             const nodesPerColumn = new Map();
                             probeGraph.nodes.forEach((node) => {
                                 const column = Math.round(node.x0);
@@ -3151,7 +3238,10 @@
                             const maxColumnNodeCount = Math.max(1, ...nodesPerColumn.values());
                             height = Math.max(baseHeight, marginTop + marginBottom + maxColumnNodeCount * 36);
                         }
-                        const graph = createSankeyLayout(height)(cloneSankeyData());
+                        const nodeOrder = sankeyMode.value === 'cashflow'
+                            ? sankeyNodeOrderByTransactionCount(probeGraph)
+                            : null;
+                        const graph = createSankeyLayout(height, nodeOrder)(cloneSankeyData());
                         container.style.height = `${height}px`;
 
                         const svg = d3.select(container)
@@ -3289,6 +3379,9 @@
                 });
 
                 onMounted(async () => {
+                    if (window.__FINANCE_TESTING__ === true) {
+                        window.__financeSankeyNodeOrderByTransactionCount = sankeyNodeOrderByTransactionCount;
+                    }
                     syncFinanceTheme();
                     if (window.matchMedia) {
                         financeThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');

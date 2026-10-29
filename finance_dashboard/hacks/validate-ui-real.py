@@ -271,6 +271,84 @@ def sankey_mobile_layout_metrics(driver) -> dict:
     """)
 
 
+def sankey_crossing_order_metrics(driver) -> dict:
+    return driver.execute_script("""
+        const orderNodes = window.__financeSankeyNodeOrderByTransactionCount;
+        if (typeof orderNodes !== 'function' || !window.d3?.sankey) return {
+            ready: false,
+            helperAvailable: typeof orderNodes === 'function',
+            sankeyLibraryAvailable: typeof window.d3?.sankey === 'function',
+        };
+
+        const accountCount = 8;
+        const categoryCount = 10;
+        const nodes = [{ name: 'Paycheck deposits' }];
+        for (let i = 0; i < accountCount; i += 1) nodes.push({ name: `Account ${i}` });
+        for (let i = 0; i < categoryCount; i += 1) nodes.push({ name: `Category ${i}` });
+        const links = [];
+        for (let i = 0; i < accountCount; i += 1) {
+            links.push({ source: 0, target: 1 + i, value: 1000 - i * 30, transactions: [{}] });
+        }
+        for (let account = 0; account < accountCount; account += 1) {
+            for (let category = 0; category < categoryCount; category += 1) {
+                const count = (account * 17 + category * 23 + 11) % 5 === 0
+                    ? 0
+                    : ((account * 13 + category * 19 + 7) % 4 + 1);
+                for (let item = 0; item < count; item += 1) {
+                    links.push({
+                        source: 1 + account,
+                        target: 1 + accountCount + category,
+                        value: (account * 31 + category * 11 + item * 7) % 90 + 1,
+                        transactions: [{}],
+                    });
+                }
+            }
+        }
+        const data = () => ({
+            nodes: nodes.map((node, layoutId) => ({ ...node, layoutId })),
+            links: links.map((link) => ({ ...link })),
+        });
+        const layout = (chartHeight, nodeSort) => {
+            let sankey = d3.sankey()
+                .nodeWidth(14)
+                .nodePadding(18)
+                .extent([[10, 10], [630, chartHeight - 10]])
+                .iterations(6);
+            if (nodeSort) sankey = sankey.nodeSort(nodeSort);
+            return sankey(data());
+        };
+        const crossingCount = (graph) => {
+            const layers = new Map();
+            graph.links.forEach((link) => {
+                const key = `${link.source.depth}:${link.target.depth}`;
+                if (!layers.has(key)) layers.set(key, []);
+                layers.get(key).push(link);
+            });
+            let crossings = 0;
+            layers.forEach((linksInLayer) => {
+                for (let i = 0; i < linksInLayer.length; i += 1) {
+                    for (let j = i + 1; j < linksInLayer.length; j += 1) {
+                        const left = linksInLayer[i];
+                        const right = linksInLayer[j];
+                        if ((left.y0 - right.y0) * (left.y1 - right.y1) < -0.01) crossings += 1;
+                    }
+                }
+            });
+            return crossings;
+        };
+        const baseline = layout(380, null);
+        const probe = layout(780, null);
+        const order = orderNodes(probe);
+        const ordered = layout(380, (left, right) => order.get(left.layoutId) - order.get(right.layoutId));
+        return {
+            ready: true,
+            linkCount: links.length,
+            baselineCrossings: crossingCount(baseline),
+            orderedCrossings: crossingCount(ordered),
+        };
+    """)
+
+
 def main():
     args = parse_args()
     screenshot_base = Path(args.screenshot)
@@ -327,6 +405,10 @@ def main():
             viewport_width, viewport_height = viewport_sizes[args.device]
             driver.set_window_size(viewport_width, viewport_height)
             driver.set_page_load_timeout(args.timeout)
+            if test_mode == "real-fastapi-isolated-db":
+                driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                    "source": "window.__FINANCE_TESTING__ = true;",
+                })
             inject_test_description = (
                 test_mode == "real-fastapi-isolated-db"
                 and os.environ.get("FINANCE_TEST_LONG_DESCRIPTION", "1") != "0"
@@ -438,6 +520,16 @@ def main():
             wait.until(lambda current: "Finance Dashboard" in current.title)
             wait.until(lambda current: current.execute_script("return !document.getElementById('boot-screen')"))
             wait.until(lambda current: "Loading financial data…" not in current.find_element(By.TAG_NAME, "body").text)
+            if test_mode == "real-fastapi-isolated-db":
+                sankey_crossing_metrics = sankey_crossing_order_metrics(driver)
+                sankey_crossing_check = (
+                    sankey_crossing_metrics.get("ready")
+                    and sankey_crossing_metrics.get("orderedCrossings", float("inf"))
+                        < sankey_crossing_metrics.get("baselineCrossings", 0)
+                )
+            else:
+                sankey_crossing_metrics = {"ready": True, "check": "local fixture only"}
+                sankey_crossing_check = True
 
             dashboard_text = driver.find_element(By.TAG_NAME, "body").text
             dashboard_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
@@ -1298,6 +1390,8 @@ def main():
                 "no_vue_warnings": not vue_warnings,
                 "recurring_quick_filters": filter_checks,
                 "sankey_interactions": sankey_interaction_checks,
+                "sankey_crossing_order": sankey_crossing_check,
+                "sankey_crossing_metrics": sankey_crossing_metrics,
                 "sankey_mobile_layout": sankey_layout_checks,
                 "sankey_mobile_measurements": sankey_mobile_measurements,
                 "transaction_grouping": transaction_group_checks,
@@ -1327,6 +1421,7 @@ def main():
                 and checks["no_vue_warnings"]
                 and all(filter_checks.values())
                 and all(sankey_interaction_checks.values())
+                and checks["sankey_crossing_order"]
                 and all(sankey_layout_checks.values())
                 and all(transaction_group_checks.values())
                 and all(transaction_filter_checks.values())
