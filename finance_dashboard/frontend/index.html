@@ -2964,6 +2964,7 @@
                     const accountNodes = new Map();
                     const nodes = [{ name: 'Paycheck deposits' }];
                     const links = [];
+                    const linksByNodes = new Map();
 
                     const ensureNode = (name) => {
                         const key = name || 'Uncategorized';
@@ -2976,7 +2977,15 @@
 
                     const addLink = (source, target, value, linkedTransactions = []) => {
                         if (!value || value <= 0) return;
-                        links.push({ source, target, value, transactions: linkedTransactions });
+                        const key = `${source}\u0000${target}`;
+                        let link = linksByNodes.get(key);
+                        if (!link) {
+                            link = { source, target, value: 0, transactions: [] };
+                            linksByNodes.set(key, link);
+                            links.push(link);
+                        }
+                        link.value += value;
+                        link.transactions.push(...linkedTransactions);
                     };
 
                     paycheckDeposits.forEach((tx) => {
@@ -3277,6 +3286,7 @@
                             .attr('data-testid', 'sankey-link')
                             .attr('data-sankey-link-type', (d) => d.type || 'cashflow')
                             .attr('data-paired-transfer-count', (d) => d.pairedTransferCount || 0)
+                            .attr('data-sankey-transaction-count', (d) => (d.transactions || []).length)
                             .attr('d', d3.sankeyLinkHorizontal())
                             .attr('fill', 'none')
                             .attr('stroke', (d) => d.type === 'paired-transfer' ? '#8b5cf6' : sankeyMode.value === 'transfers' ? '#a78bfa' : '#38bdf8')
@@ -3284,7 +3294,7 @@
                             .attr('stroke-width', (d) => Math.max(1, d.width))
                             .attr('role', 'button')
                             .attr('tabindex', 0)
-                            .attr('aria-label', (d) => `${d.source.name} to ${d.target.name}, ${formatCurrency(d.value)}. Select to inspect transactions.`)
+                            .attr('aria-label', (d) => `${d.source.name} to ${d.target.name}, ${formatCurrency(d.value)}, ${(d.transactions || []).length} transaction${(d.transactions || []).length === 1 ? '' : 's'}. Select to inspect transactions.`)
                             .style('cursor', 'pointer')
                             .on('click', (event, d) => selectSankeyLink(d))
                             .on('keydown', (event, d) => {
@@ -3294,7 +3304,7 @@
                                 }
                             })
                             .append('title')
-                            .text((d) => `${d.source.name} → ${d.target.name}: ${formatCurrency(d.value)}`);
+                            .text((d) => `${d.source.name} → ${d.target.name}: ${formatCurrency(d.value)} · ${(d.transactions || []).length} transaction${(d.transactions || []).length === 1 ? '' : 's'}`);
 
                         const node = svg.append('g')
                             .selectAll('g')

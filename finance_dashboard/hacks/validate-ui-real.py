@@ -285,9 +285,19 @@ def sankey_crossing_order_metrics(driver) -> dict:
         const nodes = [{ name: 'Paycheck deposits' }];
         for (let i = 0; i < accountCount; i += 1) nodes.push({ name: `Account ${i}` });
         for (let i = 0; i < categoryCount; i += 1) nodes.push({ name: `Category ${i}` });
-        const links = [];
+        const linksByNodes = new Map();
+        const addLink = (source, target, value) => {
+            const key = `${source}:${target}`;
+            let link = linksByNodes.get(key);
+            if (!link) {
+                link = { source, target, value: 0, transactions: [] };
+                linksByNodes.set(key, link);
+            }
+            link.value += value;
+            link.transactions.push({});
+        };
         for (let i = 0; i < accountCount; i += 1) {
-            links.push({ source: 0, target: 1 + i, value: 1000 - i * 30, transactions: [{}] });
+            addLink(0, 1 + i, 1000 - i * 30);
         }
         for (let account = 0; account < accountCount; account += 1) {
             for (let category = 0; category < categoryCount; category += 1) {
@@ -295,15 +305,15 @@ def sankey_crossing_order_metrics(driver) -> dict:
                     ? 0
                     : ((account * 13 + category * 19 + 7) % 4 + 1);
                 for (let item = 0; item < count; item += 1) {
-                    links.push({
-                        source: 1 + account,
-                        target: 1 + accountCount + category,
-                        value: (account * 31 + category * 11 + item * 7) % 90 + 1,
-                        transactions: [{}],
-                    });
+                    addLink(
+                        1 + account,
+                        1 + accountCount + category,
+                        (account * 31 + category * 11 + item * 7) % 90 + 1,
+                    );
                 }
             }
         }
+        const links = Array.from(linksByNodes.values());
         const data = () => ({
             nodes: nodes.map((node, layoutId) => ({ ...node, layoutId })),
             links: links.map((link) => ({ ...link })),
@@ -343,6 +353,7 @@ def sankey_crossing_order_metrics(driver) -> dict:
         return {
             ready: true,
             linkCount: links.length,
+            transactionCount: links.reduce((count, link) => count + link.transactions.length, 0),
             baselineCrossings: crossingCount(baseline),
             orderedCrossings: crossingCount(ordered),
         };
@@ -527,9 +538,15 @@ def main():
                     and sankey_crossing_metrics.get("orderedCrossings", float("inf"))
                         < sankey_crossing_metrics.get("baselineCrossings", 0)
                 )
+                sankey_link_aggregation_check = (
+                    sankey_crossing_metrics.get("ready")
+                    and sankey_crossing_metrics.get("linkCount", 0)
+                        < sankey_crossing_metrics.get("transactionCount", 0)
+                )
             else:
                 sankey_crossing_metrics = {"ready": True, "check": "local fixture only"}
                 sankey_crossing_check = True
+                sankey_link_aggregation_check = True
 
             dashboard_text = driver.find_element(By.TAG_NAME, "body").text
             dashboard_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
@@ -926,6 +943,7 @@ def main():
 
             sankey_interaction_checks = {
                 "flow_click_shows_transactions": False,
+                "repeated_account_category_transactions_share_link": False,
                 "node_click_shows_transactions": False,
                 "node_keyboard_selection": False,
                 "cashflow_excludes_internal_transfers": False,
@@ -943,14 +961,25 @@ def main():
                 node.get_attribute("data-sankey-node-name") == "Housing" for node in sankey_nodes
             )
             if sankey_links and sankey_nodes:
-                driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", sankey_links[0])
+                aggregated_cashflow_link = next(
+                    (link for link in sankey_links if int(link.get_attribute("data-sankey-transaction-count") or 0) > 1),
+                    None,
+                )
+                selected_flow_link = aggregated_cashflow_link or sankey_links[0]
+                selected_flow_transaction_count = int(selected_flow_link.get_attribute("data-sankey-transaction-count") or 0)
+                driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", selected_flow_link)
                 details_panel = WebDriverWait(driver, args.timeout).until(
                     EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sankey-details"]'))
                 )
+                detail_transaction_count = len(details_panel.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]'))
                 sankey_interaction_checks["flow_click_shows_transactions"] = (
                     details_panel.get_attribute("data-sankey-selection-type") == "link"
                     and "→" in details_panel.text
-                    and bool(details_panel.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-detail-transaction"]'))
+                    and detail_transaction_count > 0
+                )
+                sankey_interaction_checks["repeated_account_category_transactions_share_link"] = (
+                    aggregated_cashflow_link is not None
+                    and selected_flow_transaction_count == detail_transaction_count
                 )
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", details_panel)
                 driver.save_screenshot(str(sankey_details_screenshot))
@@ -1391,6 +1420,7 @@ def main():
                 "recurring_quick_filters": filter_checks,
                 "sankey_interactions": sankey_interaction_checks,
                 "sankey_crossing_order": sankey_crossing_check,
+                "sankey_link_aggregation": sankey_link_aggregation_check,
                 "sankey_crossing_metrics": sankey_crossing_metrics,
                 "sankey_mobile_layout": sankey_layout_checks,
                 "sankey_mobile_measurements": sankey_mobile_measurements,
@@ -1422,6 +1452,7 @@ def main():
                 and all(filter_checks.values())
                 and all(sankey_interaction_checks.values())
                 and checks["sankey_crossing_order"]
+                and checks["sankey_link_aggregation"]
                 and all(sankey_layout_checks.values())
                 and all(transaction_group_checks.values())
                 and all(transaction_filter_checks.values())
