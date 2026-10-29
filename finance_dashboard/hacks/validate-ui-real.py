@@ -136,6 +136,29 @@ def start_real_backend(frontend_file: Path):
     return base_url, server, thread, test_data_dir
 
 
+def seed_existing_category_match_for_ui_test():
+    """Add one old categorized merchant match to the disposable browser-test DB."""
+    from models import SessionLocal, Transaction
+
+    db = SessionLocal()
+    try:
+        if db.query(Transaction).filter(Transaction.id == "test-old-coffee-match").first():
+            return
+        db.add(Transaction(
+            id="test-old-coffee-match",
+            account_id="1",
+            date=1718300000,
+            amount="-8.00",
+            payee="Coffee Shop",
+            description="Previous coffee stop",
+            category="Dining",
+            pending=False,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
 def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str, int]:
     endpoints = [
         "api/status",
@@ -274,6 +297,7 @@ def main():
         else:
             base_url, server, thread, test_data_dir = start_real_backend(frontend_file)
             test_mode = "real-fastapi-isolated-db"
+            seed_existing_category_match_for_ui_test()
 
         request_headers = {}
         if ingress_cookie:
@@ -541,6 +565,8 @@ def main():
                 "one_off_choice_does_not_create_rule": False,
                 "future_rule_choice_saves_merchant_match": False,
                 "future_rule_choice_preserves_existing_defaults": False,
+                "retroactive_prompt_shows_count_and_warning": False,
+                "retroactive_choice_updates_all_matching_entries": False,
                 "account_cards_toggle_and_multi_select": False,
                 "account_filtered_phone_layout_has_no_overflow": True,
             }
@@ -554,6 +580,7 @@ def main():
             }
             transaction_screenshot = None
             category_rule_prompt_screenshot = None
+            category_rule_existing_prompt_screenshot = None
             account_filter_screenshot = None
             spending_pie_screenshot = None
             if args.device in {"iphone", "pixel"}:
@@ -920,13 +947,34 @@ def main():
             category_prompt = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="category-rule-prompt"]'))
             )
-            category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-apply"]').click()
+            existing_match_button = category_prompt.find_element(By.CSS_SELECTOR, '[data-testid="category-rule-apply-existing"]')
+            transaction_filter_checks["retroactive_prompt_shows_count_and_warning"] = (
+                "1 other matching transaction" in category_prompt.text
+                and "manually" in category_prompt.text
+                and "update 1 past match" in existing_match_button.text.lower()
+            )
+            category_rule_existing_prompt_screenshot = screenshot.with_name(
+                screenshot.stem + "-category-rule-existing-prompt" + screenshot.suffix
+            )
+            driver.save_screenshot(str(category_rule_existing_prompt_screenshot))
+            existing_match_button.click()
             WebDriverWait(driver, args.timeout).until(
                 lambda current: current.find_element(By.CSS_SELECTOR, f'{transaction_row_selector}[data-transaction-id="{coffee_transaction_id}"]')
                     .find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == "Shopping"
                 and not current.find_elements(By.CSS_SELECTOR, '[data-testid="category-rule-prompt"]')
             )
-            transaction_filter_checks["future_rule_choice_saves_merchant_match"] = True
+            coffee_rows = [
+                row for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                if "Coffee Shop" in row.text
+            ]
+            transaction_filter_checks["future_rule_choice_saves_merchant_match"] = bool(coffee_rows)
+            transaction_filter_checks["retroactive_choice_updates_all_matching_entries"] = (
+                len(coffee_rows) >= 2
+                and all(
+                    row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == "Shopping"
+                    for row in coffee_rows
+                )
+            )
             with urllib.request.urlopen(base_url + "api/category-rules", timeout=10) as response:
                 saved_rules = json.loads(json.loads(response.read().decode("utf-8")).get("rules_json") or "[]")
             transaction_filter_checks["future_rule_choice_preserves_existing_defaults"] = (
@@ -1245,6 +1293,7 @@ def main():
                 "transfer_screenshot": str(transfer_screenshot) if args.device in {"iphone", "pixel"} else None,
                 "transaction_screenshot": str(transaction_screenshot) if transaction_screenshot else None,
                 "category_rule_prompt_screenshot": str(category_rule_prompt_screenshot) if category_rule_prompt_screenshot else None,
+                "category_rule_existing_prompt_screenshot": str(category_rule_existing_prompt_screenshot) if category_rule_existing_prompt_screenshot else None,
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,
                 "spending_pie_screenshot": str(spending_pie_screenshot) if spending_pie_screenshot else None,
                 "dark_mode_screenshot": str(dark_mode_screenshot) if dark_mode_screenshot else None,

@@ -36,7 +36,7 @@ The six-hour schedule can make repeated requests, but it cannot make a bank or S
 
 ## Categories and optional AI
 
-Edit automatic rules in **Settings → Category rules**. You can add custom categories and patterns. When you manually change a transaction category, choose whether it applies only to that entry or should also become a rule for future matches. New rules use the transaction payee (or its description when the payee is missing); they apply during future syncs and do not change other existing transactions. Optional AI suggestions require configuring a provider and model. Review that provider's privacy terms before enabling it because transaction context may be sent to the selected service.
+Edit automatic rules in **Settings → Category rules**. You can add custom categories and patterns. When you manually change a transaction category, choose whether it applies only to that entry, to future matches, or to future matches plus existing matches. Existing-match updates show the affected count and replace every matching transaction's category, including categories previously chosen manually. New rules use the transaction payee (or its description when the payee is missing) and apply during future syncs. Optional AI suggestions require configuring a provider and model. Review that provider's privacy terms before enabling it because transaction context may be sent to the selected service.
 
 ## Account types and net worth
 

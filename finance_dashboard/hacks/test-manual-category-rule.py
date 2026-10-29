@@ -63,6 +63,26 @@ class ManualCategoryRuleTests(unittest.TestCase):
                     pending=False,
                 ),
                 Transaction(
+                    id="description-match",
+                    account_id="test-account",
+                    date=1758500000,
+                    amount="-6.00",
+                    payee="Coffee Roasters",
+                    description="Coffee Shop purchase",
+                    category="Groceries",
+                    pending=False,
+                ),
+                Transaction(
+                    id="already-correct-match",
+                    account_id="test-account",
+                    date=1758400000,
+                    amount="-5.00",
+                    payee="Coffee Shop",
+                    description="Already correctly categorized",
+                    category="Shopping",
+                    pending=False,
+                ),
+                Transaction(
                     id="no-merchant-text",
                     account_id="test-account",
                     date=1758000000,
@@ -114,6 +134,8 @@ class ManualCategoryRuleTests(unittest.TestCase):
         self.assertEqual(saved_rules[2], {"category": "Dining", "patterns": ["cafe"]})
         self.assertEqual(self.transaction_category("target-transaction"), "Shopping")
         self.assertEqual(self.transaction_category("existing-match"), "Dining")
+        self.assertEqual(self.transaction_category("description-match"), "Groceries")
+        self.assertEqual(self.transaction_category("already-correct-match"), "Shopping")
         self.assertEqual(
             simplefin.categorize_transaction(
                 {"payee": "Coffee Shop #1234", "description": "Future visit"},
@@ -121,6 +143,31 @@ class ManualCategoryRuleTests(unittest.TestCase):
             ),
             "Shopping",
         )
+
+    def test_explicit_retroactive_choice_updates_all_matching_categories(self):
+        result = set_transaction_category(
+            "target-transaction",
+            "Shopping",
+            apply_to_future_matches=True,
+            apply_to_existing_matches=True,
+            default_category_rules=simplefin.DEFAULT_CATEGORY_RULES,
+        )
+
+        self.assertEqual(result["updated_existing_count"], 2)
+        self.assertEqual(self.transaction_category("target-transaction"), "Shopping")
+        self.assertEqual(self.transaction_category("existing-match"), "Shopping")
+        self.assertEqual(self.transaction_category("description-match"), "Shopping")
+        self.assertEqual(self.transaction_category("already-correct-match"), "Shopping")
+
+    def test_existing_match_updates_require_a_future_rule(self):
+        with self.assertRaisesRegex(ValueError, "requires saving a future-match rule"):
+            set_transaction_category(
+                "target-transaction",
+                "Shopping",
+                apply_to_existing_matches=True,
+                default_category_rules=simplefin.DEFAULT_CATEGORY_RULES,
+            )
+        self.assertEqual(self.transaction_category("target-transaction"), "Dining")
 
     def test_failed_rule_creation_rolls_back_the_category_edit(self):
         with self.assertRaisesRegex(ValueError, "no payee or description"):

@@ -26,6 +26,8 @@ class ApiValidationTests(unittest.TestCase):
     def test_future_category_rule_is_explicitly_opt_in(self):
         self.assertFalse(TransactionCategoryRequest(category="Dining").apply_to_future_matches)
         self.assertTrue(TransactionCategoryRequest(category="Dining", apply_to_future_matches=True).apply_to_future_matches)
+        self.assertFalse(TransactionCategoryRequest(category="Dining").apply_to_existing_matches)
+        self.assertTrue(TransactionCategoryRequest(category="Dining", apply_to_future_matches=True, apply_to_existing_matches=True).apply_to_existing_matches)
 
     def test_category_rules_accept_valid_json(self):
         validate_category_rules_json('[{"category":"Subscriptions","patterns":["spotify"]}]')

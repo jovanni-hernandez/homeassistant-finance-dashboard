@@ -98,6 +98,7 @@ class CategoryRulesRequest(BaseModel):
 class TransactionCategoryRequest(BaseModel):
     category: str = Field(min_length=1, max_length=100)
     apply_to_future_matches: bool = False
+    apply_to_existing_matches: bool = False
 
 
 class AccountTypeRequest(BaseModel):
@@ -698,15 +699,23 @@ def api_set_transaction_category(transaction_id: str, payload: TransactionCatego
             transaction_id,
             payload.category,
             apply_to_future_matches=payload.apply_to_future_matches,
+            apply_to_existing_matches=payload.apply_to_existing_matches,
             default_category_rules=simplefin.DEFAULT_CATEGORY_RULES,
         )
         if not ok:
             raise HTTPException(status_code=404, detail="Transaction not found")
+        updated_existing_count = ok["updated_existing_count"]
+        if payload.apply_to_existing_matches:
+            existing_label = "transaction" if updated_existing_count == 1 else "transactions"
+            message = f"Future-match rule saved; updated {updated_existing_count} existing matching {existing_label}."
+        elif payload.apply_to_future_matches:
+            message = "Transaction category updated and future-match rule saved."
+        else:
+            message = "Transaction category updated."
         return {
             "status": "success",
-            "message": "Transaction category updated and future-match rule saved."
-            if payload.apply_to_future_matches
-            else "Transaction category updated.",
+            "message": message,
+            "updated_existing_count": updated_existing_count,
         }
     except HTTPException:
         raise

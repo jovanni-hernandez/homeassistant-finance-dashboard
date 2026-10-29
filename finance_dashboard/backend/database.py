@@ -347,6 +347,7 @@ def set_transaction_category(
     transaction_id: str,
     category: str,
     apply_to_future_matches: bool = False,
+    apply_to_existing_matches: bool = False,
     default_category_rules: list[dict] | None = None,
 ):
     db = SessionLocal()
@@ -355,8 +356,12 @@ def set_transaction_category(
         if not tx:
             return False
 
+        if apply_to_existing_matches and not apply_to_future_matches:
+            raise ValueError("Updating existing matches requires saving a future-match rule too.")
+
         normalized_category = str(category or "Uncategorized").strip() or "Uncategorized"
         tx.category = normalized_category
+        updated_existing_count = 0
         if apply_to_future_matches:
             pattern = str(tx.payee or "").strip() or str(tx.description or "").strip()
             if not pattern:
@@ -402,8 +407,15 @@ def set_transaction_category(
             else:
                 db.add(Setting(key="category_rules_json", value=rules_json))
 
+            if apply_to_existing_matches:
+                for existing_tx in db.query(Transaction).filter(Transaction.id != tx.id).all():
+                    haystack = f"{existing_tx.payee or ''} {existing_tx.description or ''}".casefold()
+                    if normalized_pattern in haystack and (existing_tx.category or "Uncategorized") != normalized_category:
+                        existing_tx.category = normalized_category
+                        updated_existing_count += 1
+
         db.commit()
-        return True
+        return {"updated_existing_count": updated_existing_count}
     except Exception as e:
         db.rollback()
         logger.error("Error setting transaction category (%s).", type(e).__name__)
