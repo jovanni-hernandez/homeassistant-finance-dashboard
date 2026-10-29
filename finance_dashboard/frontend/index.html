@@ -185,6 +185,17 @@
                         <span class="font-medium">Goals</span>
                     </button>
                     <button
+                        data-testid="ai-chat-nav"
+                        @click="setView('ai-chat')"
+                        class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
+                        :class="view === 'ai-chat' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
+                    >
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M8 10h8M8 14h5m-8 7 1.5-4.5A8 8 0 1119 16l-5 1.5L5 21z" />
+                        </svg>
+                        <span class="font-medium">AI chat</span>
+                    </button>
+                    <button
                         @click="setView('assets')"
                         class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
                         :class="view === 'assets' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
@@ -848,6 +859,58 @@
                             <div v-else data-testid="manual-assets-empty" class="mt-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500">No manual assets yet. Add one above to include it in net worth.</div>
                         </div>
                     </div>
+                </section>
+
+                <section v-else-if="view === 'ai-chat'" data-testid="ai-chat-page" class="mx-auto max-w-4xl space-y-4">
+                    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                        <h2 class="text-xl font-semibold text-slate-800">AI goal planner</h2>
+                        <p class="mt-1 text-sm text-slate-500">Talk through options for savings, debt payoff, or retirement using a minimized summary of your finances.</p>
+                        <div class="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-950">
+                            <div class="font-semibold">What is shared</div>
+                            <p class="mt-1">The provider receives 12-month monthly totals by category and currency, balances grouped by account type and currency, and unnamed goal summaries. Account and institution names, IDs, manual-asset and goal names, and transaction payees/descriptions are not included.</p>
+                            <p class="mt-1">Your typed message is checked against known local identifiers and long account-like numbers. Review the sanitized text before sending; unknown names may not be detected. The selected AI provider receives the sanitized message and aggregate summary under its own data-retention terms. This chat is kept only in this browser session.</p>
+                        </div>
+                        <div v-if="!aiChatReady" data-testid="ai-chat-setup-notice" class="mt-4 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between">
+                            <span>Enable AI assistance and configure a key for the selected provider in AI settings to start a chat.</span>
+                            <button type="button" @click="setView('settings-ai')" class="min-h-10 shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium hover:bg-amber-100">Open AI settings</button>
+                        </div>
+                    </div>
+
+                    <div class="min-h-64 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-5" aria-live="polite">
+                        <div v-if="!chatMessages.length" data-testid="ai-chat-welcome" class="rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
+                            You can ask questions like “What monthly savings pace would get me to a six-month emergency fund?” or “What information do I need to set a debt payoff date?” I can suggest a goal draft, but you choose its sources and save it yourself.
+                        </div>
+                        <article v-for="(message, index) in chatMessages" :key="index" :data-testid="message.role === 'user' ? 'ai-chat-user-message' : 'ai-chat-assistant-message'" class="max-w-[94%] rounded-2xl border p-3 text-sm sm:p-4" :class="message.role === 'user' ? 'ml-auto border-sky-200 bg-sky-50 text-slate-800' : 'border-slate-200 bg-white text-slate-700'">
+                            <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ message.role === 'user' ? 'You · sanitized' : 'Goal planner' }}</div>
+                            <p class="whitespace-pre-wrap break-words leading-6">{{ message.content }}</p>
+                            <div v-if="message.goal_draft" data-testid="ai-chat-goal-draft" class="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3">
+                                <div class="text-sm font-semibold text-violet-950">Suggested goal draft</div>
+                                <p class="mt-1 text-xs text-violet-900">{{ goalTypeLabel(message.goal_draft.goal_type) }}<span v-if="message.goal_draft.name"> · {{ message.goal_draft.name }}</span><span v-if="message.goal_draft.target_amount"> · {{ message.goal_draft.target_amount }}</span></p>
+                                <p class="mt-1 text-xs text-violet-800">No account source is attached. You’ll select sources and review every field before saving.</p>
+                                <button type="button" data-testid="ai-chat-review-goal-draft" @click="reviewAIChatGoalDraft(message.goal_draft)" class="mt-3 min-h-10 rounded-lg bg-violet-700 px-3 py-2 text-sm font-medium text-white hover:bg-violet-800">Review in Goals</button>
+                            </div>
+                        </article>
+                    </div>
+
+                    <form data-testid="ai-chat-composer" @submit.prevent="previewAIChatMessage" class="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+                        <label for="ai-chat-message" class="block text-sm font-medium text-slate-700">Message</label>
+                        <textarea id="ai-chat-message" data-testid="ai-chat-message" v-model="chatMessageDraft" @input="clearAIChatPreview" maxlength="2000" rows="3" placeholder="Describe what you’re aiming for—avoid adding names the local filter may not know." class="mt-2 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"></textarea>
+                        <div class="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <span class="text-xs text-slate-500">{{ chatMessageDraft.length }}/2000 characters · provider: {{ aiSettingsProvider }} · {{ aiSettingsModel }}</span>
+                            <button type="submit" data-testid="ai-chat-preview-button" :disabled="chatPreviewLoading || !chatMessageDraft.trim()" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{{ chatPreviewLoading ? 'Checking…' : 'Preview sanitized message' }}</button>
+                        </div>
+
+                        <div v-if="chatPreviewMessage" data-testid="chat-sanitized-preview" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                            <div class="text-sm font-semibold text-amber-950">Review before sending</div>
+                            <p class="mt-1 text-xs text-amber-900">{{ chatPreviewRedactionCount ? `${chatPreviewRedactionCount} known identifier(s) redacted.` : 'No known saved identifiers were found.' }} Unknown names may still be present.</p>
+                            <pre data-testid="chat-sanitized-message" class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-sm text-slate-800">{{ chatPreviewMessage }}</pre>
+                            <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+                                <button type="button" data-testid="ai-chat-send-button" @click="sendAIChatMessage" :disabled="chatSending || !aiChatReady" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">{{ chatSending ? 'Sending…' : `Send sanitized message to ${aiSettingsProvider}` }}</button>
+                                <button type="button" @click="clearAIChatPreview" :disabled="chatSending" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
+                            </div>
+                        </div>
+                        <div v-if="chatError" data-testid="ai-chat-error" role="alert" class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{{ chatError }}</div>
+                    </form>
                 </section>
 
                 <section v-else-if="view === 'goals'" data-testid="goals-page" class="space-y-6">
@@ -1626,6 +1689,14 @@
                 const aiSettingsMessage = ref('');
                 const aiSettingsError = ref(false);
                 const savingAiSettings = ref(false);
+                const aiProviderKeys = ref({ openai: false, claude: false, gemini: false });
+                const chatMessages = ref([]);
+                const chatMessageDraft = ref('');
+                const chatPreviewMessage = ref('');
+                const chatPreviewRedactionCount = ref(0);
+                const chatPreviewLoading = ref(false);
+                const chatSending = ref(false);
+                const chatError = ref('');
                 const accountTypeMessage = ref('');
                 const accountTypeError = ref(false);
                 const savingAccountTypeId = ref('');
@@ -2003,6 +2074,10 @@
                         pinStatus.value.locked = pinStatus.value.pin_required;
                         pinUnlockValue.value = '';
                         clearLoadedData();
+                        chatMessages.value = [];
+                        chatMessageDraft.value = '';
+                        chatPreviewMessage.value = '';
+                        chatPreviewRedactionCount.value = 0;
                         loading.value = false;
                     }
                 };
@@ -2093,6 +2168,11 @@
                         aiSettingsEnabled.value = !!data.enabled;
                         aiSettingsProvider.value = data.provider || 'openai';
                         aiSettingsModel.value = data.model || providerDefaultModel(aiSettingsProvider.value);
+                        aiProviderKeys.value = {
+                            openai: !!data.openai_key_set,
+                            claude: !!data.claude_key_set,
+                            gemini: !!data.gemini_key_set,
+                        };
                     } catch (err) {
                         console.warn(err);
                     }
@@ -2230,6 +2310,11 @@
                         aiSettingsEnabled.value = !!data.enabled;
                         aiSettingsProvider.value = data.provider || aiSettingsProvider.value;
                         aiSettingsModel.value = data.model || aiSettingsModel.value;
+                        aiProviderKeys.value = {
+                            openai: !!data.openai_key_set,
+                            claude: !!data.claude_key_set,
+                            gemini: !!data.gemini_key_set,
+                        };
                         aiOpenaiApiKey.value = '';
                         aiClaudeApiKey.value = '';
                         aiGeminiApiKey.value = '';
@@ -2667,6 +2752,87 @@
                     if (!value) return '';
                     const parsed = new Date(`${value}T00:00:00`);
                     return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+                };
+
+                const clearAIChatPreview = () => {
+                    chatPreviewMessage.value = '';
+                    chatPreviewRedactionCount.value = 0;
+                    chatError.value = '';
+                };
+
+                const previewAIChatMessage = async () => {
+                    if (!chatMessageDraft.value.trim() || chatPreviewLoading.value || chatSending.value) return;
+                    chatPreviewLoading.value = true;
+                    chatError.value = '';
+                    try {
+                        const response = await apiFetch('/api/ai/chat/preview', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify({ message: chatMessageDraft.value }),
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || 'Could not prepare a sanitized preview.');
+                        chatPreviewMessage.value = data.sanitized_message || '';
+                        chatPreviewRedactionCount.value = Number(data.redaction_count || 0);
+                    } catch (err) {
+                        chatError.value = err.message;
+                    } finally {
+                        chatPreviewLoading.value = false;
+                    }
+                };
+
+                const sendAIChatMessage = async () => {
+                    if (!chatPreviewMessage.value || !aiChatReady.value || chatSending.value) return;
+                    chatSending.value = true;
+                    chatError.value = '';
+                    const conversation = [
+                        ...chatMessages.value.slice(-18).map(({ role, content }) => ({ role, content })),
+                        { role: 'user', content: chatPreviewMessage.value },
+                    ];
+                    try {
+                        const response = await apiFetch('/api/ai/chat', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify({ messages: conversation }),
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || 'The AI chat request failed.');
+                        chatMessages.value = [
+                            ...conversation,
+                            { role: 'assistant', content: data.reply || 'I could not prepare a response.', goal_draft: data.goal_draft || null },
+                        ];
+                        chatMessageDraft.value = '';
+                        clearAIChatPreview();
+                    } catch (err) {
+                        chatError.value = err.message;
+                    } finally {
+                        chatSending.value = false;
+                    }
+                };
+
+                const reviewAIChatGoalDraft = (draft) => {
+                    if (!draft || !['debt_payoff', 'savings', 'retirement'].includes(draft.goal_type)) return;
+                    openNewGoalForm();
+                    goalForm.value.goal_type = draft.goal_type;
+                    goalForm.value.name = draft.name || (draft.goal_type === 'retirement' ? 'Retirement goal' : 'Suggested goal');
+                    goalForm.value.account_id = '';
+                    goalForm.value.account_ids = [];
+                    goalForm.value.manual_asset_ids = [];
+                    goalForm.value.target_amount = draft.target_amount == null ? '' : String(draft.target_amount);
+                    goalForm.value.target_date = draft.target_date || '';
+                    goalForm.value.apr_percent = draft.apr_percent == null ? '' : String(draft.apr_percent);
+                    goalForm.value.planned_monthly = draft.planned_monthly == null ? '' : String(draft.planned_monthly);
+                    goalForm.value.retirement_timing_mode = draft.retirement_timing_mode || 'year';
+                    goalForm.value.birth_year = draft.birth_year == null ? '' : String(draft.birth_year);
+                    goalForm.value.target_retirement_age = draft.target_retirement_age == null ? '' : String(draft.target_retirement_age);
+                    goalForm.value.retirement_year = draft.retirement_year == null ? '' : String(draft.retirement_year);
+                    goalForm.value.expected_return_percent = draft.expected_return_percent == null ? '' : String(draft.expected_return_percent);
+                    goalForm.value.inflation_percent = draft.inflation_percent == null ? '' : String(draft.inflation_percent);
+                    goalFormOpen.value = true;
+                    goalError.value = false;
+                    goalMessage.value = 'AI draft loaded. Review its assumptions and select the account sources before saving.';
+                    setView('goals');
+                    goalFormOpen.value = true;
                 };
 
                 const displayedTransactionGroups = computed(() => {
@@ -3261,6 +3427,7 @@
                     selectedGoalSources.value.map((source) => String(source.currency || 'USD').toUpperCase()),
                 ).size > 1);
                 const dashboardGoals = computed(() => goals.value.slice(0, 3));
+                const aiChatReady = computed(() => aiSettingsEnabled.value && !!aiProviderKeys.value[aiSettingsProvider.value]);
 
                 const spendingPiePalette = [
                     '#0284c7', '#0f766e', '#7c3aed', '#c2410c', '#be123c', '#4d7c0f',
@@ -4013,6 +4180,14 @@
                     aiSettingsMessage,
                     aiSettingsError,
                     savingAiSettings,
+                    aiChatReady,
+                    chatMessages,
+                    chatMessageDraft,
+                    chatPreviewMessage,
+                    chatPreviewRedactionCount,
+                    chatPreviewLoading,
+                    chatSending,
+                    chatError,
                     accountTypeOptions,
                     accountTypeMessage,
                     accountTypeError,
@@ -4079,6 +4254,10 @@
                     editGoal,
                     saveGoal,
                     removeGoal,
+                    previewAIChatMessage,
+                    sendAIChatMessage,
+                    clearAIChatPreview,
+                    reviewAIChatGoalDraft,
                     buildCategoryDefaults,
                     buildAiCategoryDefaults,
                     openRecurringEdit,

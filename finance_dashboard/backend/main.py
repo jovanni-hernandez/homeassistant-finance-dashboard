@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import simplefin
 from ai_assistant import build_ai_category_defaults, get_ai_settings, update_ai_settings
+from ai_chat import AIChatError, create_goal_chat_response, preview_chat_message
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
 from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
@@ -133,6 +134,19 @@ class FinancialGoalRequest(BaseModel):
     retirement_year: int | None = None
     expected_return_percent: str | None = Field(default=None, max_length=12)
     inflation_percent: str | None = Field(default=None, max_length=12)
+
+
+class AIChatPreviewRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class AIChatMessageRequest(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class AIChatRequest(BaseModel):
+    messages: list[AIChatMessageRequest] = Field(min_length=1, max_length=20)
 
 
 class PinUnlockRequest(BaseModel):
@@ -724,6 +738,28 @@ def api_set_ai_settings(payload: AiSettingsRequest):
     except Exception as e:
         logger.error(f"Failed to save AI settings: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/ai/chat/preview", dependencies=[Depends(verify_ha_auth)])
+def api_preview_ai_chat_message(payload: AIChatPreviewRequest):
+    try:
+        return preview_chat_message(payload.message)
+    except AIChatError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("AI chat privacy preview failed (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not prepare a sanitized message.") from exc
+
+
+@app.post("/api/ai/chat", dependencies=[Depends(verify_ha_auth)])
+def api_ai_chat(payload: AIChatRequest):
+    try:
+        return create_goal_chat_response([message.dict() for message in payload.messages])
+    except AIChatError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("AI goal chat failed (%s).", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not complete the chat request. No chat content was logged.") from exc
 
 
 @app.get("/api/category-defaults/ai", dependencies=[Depends(verify_ha_auth)])

@@ -431,8 +431,23 @@ def main():
                       const nativeFetch = window.fetch.bind(window);
                       let injectedSourceTransaction = null;
                       window.fetch = async (...args) => {
-                        const response = await nativeFetch(...args);
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
+                        if (url.endsWith("/api/ai/chat")) {
+                          return new Response(JSON.stringify({
+                            reply: "A savings goal draft can help turn that target into a plan.",
+                            goal_draft: {goal_type: "savings", name: "Emergency fund", target_amount: "10000", target_date: "2030-12-31"}
+                          }), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
+                        const response = await nativeFetch(...args);
+                        if (url.endsWith("/api/ai/settings")) {
+                          const payload = await response.clone().json();
+                          payload.enabled = true;
+                          payload.openai_key_set = true;
+                          const headers = new Headers(response.headers);
+                          headers.delete("content-length");
+                          headers.delete("content-encoding");
+                          return new Response(JSON.stringify(payload), {status: response.status, headers});
+                        }
                         if (url.includes("/api/accounts")) {
                           const payload = await response.clone().json();
                           payload.accounts = [
@@ -1462,6 +1477,54 @@ def main():
             goal_checks["goal_can_be_deleted"] = bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goals-empty"]'))
             goals_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
 
+            ai_chat_checks = {
+                "chat_page_opens": False,
+                "sanitized_preview_removes_known_identifiers": False,
+                "sanitized_chat_can_be_sent": False,
+                "goal_draft_opens_review_form": False,
+                "draft_requires_user_save": False,
+            }
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-nav"]').click()
+            ai_chat_page = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="ai-chat-page"]'))
+            )
+            ai_chat_checks["chat_page_opens"] = "AI goal planner" in ai_chat_page.text
+            ai_chat_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-message"]')
+            ai_chat_input.send_keys("Help me plan with Travel Card 123456789 for Groceries and about $500 monthly.")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-preview-button"]').click()
+            sanitized_chat_element = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="chat-sanitized-message"]'))
+            )
+            sanitized_chat_message = sanitized_chat_element.text
+            ai_chat_checks["sanitized_preview_removes_known_identifiers"] = (
+                "Travel Card" not in sanitized_chat_message
+                and "123456789" not in sanitized_chat_message
+                and "Groceries" in sanitized_chat_message
+                and "$500" in sanitized_chat_message
+            )
+            ai_chat_screenshot = screenshot.with_name(screenshot.stem + "-ai-chat-preview" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sanitized_chat_element)
+            driver.save_screenshot(str(ai_chat_screenshot))
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-send-button"]').click()
+            assistant_message = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="ai-chat-assistant-message"]'))
+            )
+            ai_chat_checks["sanitized_chat_can_be_sent"] = (
+                "savings goal draft" in assistant_message.text.lower()
+                and "Travel Card" not in driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-user-message"]').text
+            )
+            draft_button = assistant_message.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-review-goal-draft"]')
+            draft_button.click()
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goals-page"] [data-testid="goal-form"]'))
+            )
+            ai_draft_name = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-name"]').get_attribute("value")
+            ai_draft_amount = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-target-amount"]').get_attribute("value")
+            ai_chat_checks["goal_draft_opens_review_form"] = ai_draft_name == "Emergency fund" and ai_draft_amount == "10000"
+            ai_chat_checks["draft_requires_user_save"] = not driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-card"]')
+            ai_chat_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
+
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
             WebDriverWait(driver, args.timeout).until(
@@ -1636,6 +1699,7 @@ def main():
                 "account_types_and_net_worth": account_type_checks,
                 "settings_navigation": settings_navigation_checks,
                 "financial_goals": goal_checks,
+                "ai_chat_privacy": ai_chat_checks,
                 "manual_assets": manual_asset_checks,
                 "transaction_description_fits_card": transaction_description_fits_card,
                 "ha_theme_auto_detection": theme_checks,
@@ -1645,6 +1709,7 @@ def main():
                 "recurring_no_horizontal_overflow": not recurring_overflow,
                 "settings_no_horizontal_overflow": not settings_overflow,
                 "goals_no_horizontal_overflow": not goals_overflow,
+                "ai_chat_no_horizontal_overflow": not ai_chat_overflow,
                 "show_more_transactions_works": show_more_works,
             }
             ok = (
@@ -1669,6 +1734,7 @@ def main():
                 and all(account_type_checks.values())
                 and all(settings_navigation_checks.values())
                 and all(goal_checks.values())
+                and all(ai_chat_checks.values())
                 and all(manual_asset_checks.values())
                 and transaction_description_fits_card
                 and all(theme_checks.values())
@@ -1678,6 +1744,7 @@ def main():
                 and checks["recurring_no_horizontal_overflow"]
                 and checks["settings_no_horizontal_overflow"]
                 and checks["goals_no_horizontal_overflow"]
+                and checks["ai_chat_no_horizontal_overflow"]
                 and checks["show_more_transactions_works"]
             )
             print(json.dumps({
@@ -1702,6 +1769,7 @@ def main():
                 "dashboard_goals_screenshot": str(dashboard_goals_screenshot),
                 "goal_form_screenshot": str(goal_form_screenshot),
                 "retirement_goal_form_screenshot": str(retirement_goal_form_screenshot),
+                "ai_chat_preview_screenshot": str(ai_chat_screenshot),
                 "sankey_filtered_screenshot": str(sankey_filtered_screenshot) if sankey_filtered_screenshot else None,
                 "sankey_restored_screenshot": str(sankey_restored_screenshot) if sankey_restored_screenshot else None,
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,
