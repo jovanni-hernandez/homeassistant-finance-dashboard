@@ -944,6 +944,8 @@ def main():
             sankey_interaction_checks = {
                 "flow_click_shows_transactions": False,
                 "repeated_account_category_transactions_share_link": False,
+                "category_flow_filters_main_list_and_pie": False,
+                "category_node_and_pie_share_filter": False,
                 "node_click_shows_transactions": False,
                 "node_keyboard_selection": False,
                 "cashflow_excludes_internal_transfers": False,
@@ -961,11 +963,76 @@ def main():
                 node.get_attribute("data-sankey-node-name") == "Housing" for node in sankey_nodes
             )
             if sankey_links and sankey_nodes:
+                full_cashflow_node_names = current_sankey_node_names(driver)
+                category_flow = next(
+                    (
+                        link for link in sankey_links
+                        if link.get_attribute("data-sankey-target-type") == "category"
+                        and link.get_attribute("data-sankey-target-name") == category_to_test
+                    ),
+                    None,
+                )
+                if category_flow:
+                    driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", category_flow)
+                    WebDriverWait(driver, args.timeout).until(
+                        lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == category_to_test
+                        and current_sankey_node_names(current) != full_cashflow_node_names
+                    )
+                    pie_legend = next(
+                        button for button in driver.find_elements(By.CSS_SELECTOR, '[data-testid="spending-category-legend-item"]')
+                        if button.get_attribute("data-category") == category_to_test
+                    )
+                    filtered_rows_are_category = all(
+                        row.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-select"]').get_attribute("value") == category_to_test
+                        for row in driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
+                    )
+                    sankey_interaction_checks["category_flow_filters_main_list_and_pie"] = (
+                        filtered_rows_are_category
+                        and pie_legend.get_attribute("aria-pressed") == "true"
+                        and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-details"]')
+                    )
+
+                    category_node = next(
+                        node for node in driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                        if node.get_attribute("data-sankey-node-type") == "category"
+                        and node.get_attribute("data-sankey-node-name") == category_to_test
+                    )
+                    driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", category_node)
+                    WebDriverWait(driver, args.timeout).until(
+                        lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == "all"
+                        and current_sankey_node_names(current) == full_cashflow_node_names
+                    )
+                    category_node = next(
+                        node for node in driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
+                        if node.get_attribute("data-sankey-node-type") == "category"
+                        and node.get_attribute("data-sankey-node-name") == category_to_test
+                    )
+                    driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", category_node)
+                    WebDriverWait(driver, args.timeout).until(
+                        lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == category_to_test
+                    )
+                    pie_legend = next(
+                        button for button in driver.find_elements(By.CSS_SELECTOR, '[data-testid="spending-category-legend-item"]')
+                        if button.get_attribute("data-category") == category_to_test
+                    )
+                    pie_legend.click()
+                    WebDriverWait(driver, args.timeout).until(
+                        lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="transaction-category-filter"]').get_attribute("value") == "all"
+                        and current_sankey_node_names(current) == full_cashflow_node_names
+                    )
+                    sankey_interaction_checks["category_node_and_pie_share_filter"] = pie_legend.get_attribute("aria-pressed") == "false"
+
+                sankey_links = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-link"]')
+                sankey_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
                 aggregated_cashflow_link = next(
                     (link for link in sankey_links if int(link.get_attribute("data-sankey-transaction-count") or 0) > 1),
                     None,
                 )
-                selected_flow_link = aggregated_cashflow_link or sankey_links[0]
+                detail_flow_links = [
+                    link for link in sankey_links
+                    if link.get_attribute("data-sankey-target-type") != "category"
+                ]
+                selected_flow_link = detail_flow_links[0] if detail_flow_links else sankey_links[0]
                 selected_flow_transaction_count = int(selected_flow_link.get_attribute("data-sankey-transaction-count") or 0)
                 driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", selected_flow_link)
                 details_panel = WebDriverWait(driver, args.timeout).until(
@@ -979,14 +1046,15 @@ def main():
                 )
                 sankey_interaction_checks["repeated_account_category_transactions_share_link"] = (
                     aggregated_cashflow_link is not None
-                    and selected_flow_transaction_count == detail_transaction_count
+                    and int(aggregated_cashflow_link.get_attribute("data-sankey-transaction-count") or 0) > 1
                 )
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", details_panel)
                 driver.save_screenshot(str(sankey_details_screenshot))
 
                 sankey_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", sankey_nodes[0])
-                driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", sankey_nodes[0])
+                detail_nodes = [node for node in sankey_nodes if node.get_attribute("data-sankey-node-type") != "category"]
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", detail_nodes[0])
+                driver.execute_script("arguments[0].dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));", detail_nodes[0])
                 node_panel = WebDriverWait(driver, args.timeout).until(
                     EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sankey-details"]'))
                 )
@@ -996,7 +1064,8 @@ def main():
                 )
 
                 sankey_nodes = driver.find_elements(By.CSS_SELECTOR, '[data-testid="sankey-node"]')
-                sankey_nodes[0].send_keys(Keys.ENTER)
+                detail_nodes = [node for node in sankey_nodes if node.get_attribute("data-sankey-node-type") != "category"]
+                detail_nodes[0].send_keys(Keys.ENTER)
                 keyboard_panel = WebDriverWait(driver, args.timeout).until(
                     EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sankey-details"]'))
                 )

@@ -268,7 +268,9 @@
                                 :class="sankeyMode === 'transfers' ? 'h-[420px] sm:h-[500px] md:h-[520px]' : 'h-[300px] sm:h-[380px] md:h-[420px]'"
                             ></div>
                             <p class="mt-2 text-xs text-slate-500 sm:hidden">Swipe the chart horizontally to view all nodes and labels.</p>
-                            <p v-if="hasSankeyData" class="mt-2 text-xs text-slate-500">Select a node or flow to inspect the transactions behind it.</p>
+                            <p v-if="hasSankeyData" class="mt-2 text-xs text-slate-500">
+                                {{ sankeyMode === 'cashflow' ? 'Select a category node or flow to filter the pie and transaction list. Select an account or income node to inspect transactions.' : 'Select a node or flow to inspect the transactions behind it.' }}
+                            </p>
                             <p v-if="!hasSankeyData" class="mt-3 text-sm text-slate-500">
                                 {{ sankeyMode === 'transfers' ? 'No transfer entries for this period.' : 'Not enough income and expense data yet to draw the flow chart.' }}
                             </p>
@@ -2840,6 +2842,11 @@
                 };
 
                 const selectSankeyLink = (link) => {
+                    if (sankeyMode.value === 'cashflow' && link.target.sankeyNodeType === 'category') {
+                        selectSpendingCategory(link.target.name);
+                        clearSankeyDetails();
+                        return;
+                    }
                     const linkedTransactions = uniqueSankeyTransactions(link.transactions);
                     selectedSankeyDetails.value = {
                         type: 'link',
@@ -2853,6 +2860,11 @@
                 };
 
                 const selectSankeyNode = (node) => {
+                    if (sankeyMode.value === 'cashflow' && node.sankeyNodeType === 'category') {
+                        selectSpendingCategory(node.name);
+                        clearSankeyDetails();
+                        return;
+                    }
                     const connectedLinks = [...(node.sourceLinks || []), ...(node.targetLinks || [])];
                     const linkedTransactions = uniqueSankeyTransactions(connectedLinks.flatMap((link) => link.transactions || []));
                     selectedSankeyDetails.value = {
@@ -2962,17 +2974,19 @@
 
                     const paycheckDeposits = incomeTx.filter((tx) => /payroll|salary|deposit|direct deposit|paycheck/i.test(`${tx.payee || ''} ${tx.description || ''}`));
                     const accountNodes = new Map();
-                    const nodes = [{ name: 'Paycheck deposits' }];
+                    const categoryNodes = new Map();
+                    const nodes = [{ name: 'Paycheck deposits', sankeyNodeType: 'income' }];
                     const links = [];
                     const linksByNodes = new Map();
 
-                    const ensureNode = (name) => {
+                    const ensureNode = (name, nodeType) => {
                         const key = name || 'Uncategorized';
-                        if (!accountNodes.has(key)) {
-                            accountNodes.set(key, nodes.length);
-                            nodes.push({ name: key });
+                        const nodeMap = nodeType === 'category' ? categoryNodes : accountNodes;
+                        if (!nodeMap.has(key)) {
+                            nodeMap.set(key, nodes.length);
+                            nodes.push({ name: key, sankeyNodeType: nodeType });
                         }
-                        return accountNodes.get(key);
+                        return nodeMap.get(key);
                     };
 
                     const addLink = (source, target, value, linkedTransactions = []) => {
@@ -2989,12 +3003,13 @@
                     };
 
                     paycheckDeposits.forEach((tx) => {
-                        addLink(0, ensureNode(transactionAccountName(tx)), Math.abs(parseFloat(tx.amount || 0)), [tx]);
+                        addLink(0, ensureNode(transactionAccountName(tx), 'account'), Math.abs(parseFloat(tx.amount || 0)), [tx]);
                     });
 
                     expenseTx.forEach((tx) => {
-                        const accountNode = ensureNode(transactionAccountName(tx));
-                        addLink(accountNode, ensureNode(categorizeExpense(tx)), Math.abs(parseFloat(tx.amount || 0)), [tx]);
+                        const accountNode = ensureNode(transactionAccountName(tx), 'account');
+                        const categoryNode = ensureNode(categorizeExpense(tx), 'category');
+                        addLink(accountNode, categoryNode, Math.abs(parseFloat(tx.amount || 0)), [tx]);
                     });
 
                     if (!links.length) return null;
@@ -3285,6 +3300,8 @@
                             .join('path')
                             .attr('data-testid', 'sankey-link')
                             .attr('data-sankey-link-type', (d) => d.type || 'cashflow')
+                            .attr('data-sankey-target-name', (d) => d.target.name)
+                            .attr('data-sankey-target-type', (d) => d.target.sankeyNodeType || '')
                             .attr('data-paired-transfer-count', (d) => d.pairedTransferCount || 0)
                             .attr('data-sankey-transaction-count', (d) => (d.transactions || []).length)
                             .attr('d', d3.sankeyLinkHorizontal())
@@ -3294,7 +3311,7 @@
                             .attr('stroke-width', (d) => Math.max(1, d.width))
                             .attr('role', 'button')
                             .attr('tabindex', 0)
-                            .attr('aria-label', (d) => `${d.source.name} to ${d.target.name}, ${formatCurrency(d.value)}, ${(d.transactions || []).length} transaction${(d.transactions || []).length === 1 ? '' : 's'}. Select to inspect transactions.`)
+                            .attr('aria-label', (d) => `${d.source.name} to ${d.target.name}, ${formatCurrency(d.value)}, ${(d.transactions || []).length} transaction${(d.transactions || []).length === 1 ? '' : 's'}. ${sankeyMode.value === 'cashflow' && d.target.sankeyNodeType === 'category' ? 'Select to filter this category.' : 'Select to inspect transactions.'}`)
                             .style('cursor', 'pointer')
                             .on('click', (event, d) => selectSankeyLink(d))
                             .on('keydown', (event, d) => {
@@ -3311,11 +3328,12 @@
                             .data(graph.nodes)
                             .join('g')
                             .attr('data-testid', 'sankey-node')
+                            .attr('data-sankey-node-type', (d) => d.sankeyNodeType || '')
                             .attr('data-sankey-node-side', (d) => d.side || '')
                             .attr('data-sankey-node-name', (d) => d.name)
                             .attr('role', 'button')
                             .attr('tabindex', 0)
-                            .attr('aria-label', (d) => `${d.name}, ${formatCurrency(d.value)} total flow. Select to inspect transactions.`)
+                            .attr('aria-label', (d) => `${d.name}, ${formatCurrency(d.value)} total flow. ${sankeyMode.value === 'cashflow' && d.sankeyNodeType === 'category' ? 'Select to filter this category.' : 'Select to inspect transactions.'}`)
                             .style('cursor', 'pointer')
                             .on('click', (event, d) => selectSankeyNode(d))
                             .on('keydown', (event, d) => {
