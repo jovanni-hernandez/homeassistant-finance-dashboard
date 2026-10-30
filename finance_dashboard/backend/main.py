@@ -239,6 +239,7 @@ class DebtPayoffSettingsRequest(BaseModel):
     current_target_account_id: str = Field(min_length=1, max_length=256)
     strategy: Literal["highest_balance", "lowest_balance", "highest_apr", "manual"] = "highest_balance"
     monthly_budget_override: str | None = Field(default=None, max_length=50)
+    included_account_ids: list[str] = Field(default_factory=list, max_length=100)
     debt_terms: list[DebtPayoffTermRequest] = Field(default_factory=list, max_length=100)
     manual_order: list[str] = Field(default_factory=list, max_length=100)
 

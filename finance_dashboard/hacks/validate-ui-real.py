@@ -436,11 +436,12 @@ def main():
                       const nativeFetch = window.fetch.bind(window);
                       let injectedSourceTransaction = null;
                       const debtPayoffFixture = {
-                        settings: {funding_account_id: "test-account-checking-main", current_target_account_id: "test-debt-large", strategy: "highest_balance", monthly_budget_override: null, manual_order: ["test-debt-large", "test-debt-small"]},
+                        settings: {funding_account_id: "test-account-checking-main", current_target_account_id: "test-debt-large", strategy: "highest_balance", monthly_budget_override: null, included_account_ids: ["test-debt-large", "test-debt-small"], manual_order: ["test-debt-large", "test-debt-small"]},
                         funding_accounts: [{id: "test-account-checking-main", name: "Checking", currency: "USD"}],
                         liabilities: [
-                          {id: "test-debt-large", name: "Travel Card", balance: "5200.00", currency: "USD", apr_percent: "19.9", minimum_payment: "150.00"},
-                          {id: "test-debt-small", name: "Everyday Card", balance: "800.00", currency: "USD", apr_percent: "22.9", minimum_payment: "40.00"}
+                          {id: "test-debt-large", name: "Travel Card", balance: "5200.00", currency: "USD", account_type: "credit_card", apr_percent: "19.9", minimum_payment: "150.00"},
+                          {id: "test-debt-small", name: "Everyday Card", balance: "800.00", currency: "USD", account_type: "credit_card", apr_percent: "22.9", minimum_payment: "40.00"},
+                          {id: "test-debt-mortgage", name: "Home Loan", balance: "150000.00", currency: "USD", account_type: "loan", apr_percent: "", minimum_payment: ""}
                         ],
                         currency: "USD", funding_account_name: "Checking", current_target_name: "Travel Card",
                         effective_target_account_id: "test-debt-large", payoff_order: ["test-debt-large", "test-debt-small"],
@@ -1692,6 +1693,7 @@ def main():
                 "goals_page_opens": False,
                 "debt_payoff_planner_visible": False,
                 "deposit_average_and_milestones_visible": False,
+                "mortgage_opt_in_does_not_require_terms_by_default": False,
                 "debt_payoff_ai_estimate_fills_review_fields": False,
                 "debt_payoff_settings_save": False,
                 "debt_payoff_dark_mode_readable": False,
@@ -1722,6 +1724,11 @@ def main():
                 "1,800.00/month" in planner.text
                 and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-milestone-25"]'))
                 and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]'))
+            )
+            goal_checks["mortgage_opt_in_does_not_require_terms_by_default"] = (
+                bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-inclusion-test-debt-mortgage"]'))
+                and not driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-inclusion-test-debt-mortgage"] input').is_selected()
+                and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-apr-test-debt-mortgage"]')
             )
             Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-funding-account"]')).select_by_value("test-account-checking-main")
             Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-current-target"]')).select_by_value("test-debt-large")

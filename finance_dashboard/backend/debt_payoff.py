@@ -191,6 +191,7 @@ def _normalized_accounts(accounts: list[dict]) -> tuple[list[dict], list[dict]]:
             "name": _display_name(account),
             "currency": str(account.get("currency") or "USD").upper(),
             "balance": _money(abs(_amount(account.get("balance")))) or "0.00",
+            "account_type": kind,
         }
         if kind == "bank_account":
             funding.append(item)
@@ -353,9 +354,22 @@ def get_debt_payoff_plan(accounts: list[dict], history: dict | None = None, *, t
             "apr_percent": str(terms.get("apr_percent") or "").strip(),
             "minimum_payment": str(terms.get("minimum_payment") or "").strip(),
         })
-    same_currency_debts = [
-        debt for debt in all_liabilities
+    active_liabilities = [item for item in all_liabilities if Decimal(item["balance"]) > ZERO]
+    all_liability_ids = {item["id"] for item in all_liabilities}
+    stored_included = settings.get("included_account_ids")
+    if isinstance(stored_included, list):
+        included_ids = list(dict.fromkeys(str(item) for item in stored_included if str(item) in all_liability_ids))
+    else:
+        # Existing planner setups default to active credit cards; other loans are opt-in.
+        included_ids = [item["id"] for item in active_liabilities if item["account_type"] == "credit_card"]
+    included_id_set = set(included_ids)
+    available_same_currency = [
+        debt for debt in active_liabilities
         if funding and debt["currency"] == funding["currency"]
+    ]
+    same_currency_debts = [
+        debt for debt in available_same_currency
+        if debt["id"] in included_id_set
     ]
     debts = []
     missing_terms = []
@@ -369,10 +383,12 @@ def get_debt_payoff_plan(accounts: list[dict], history: dict | None = None, *, t
     strategy = settings.get("strategy") if settings.get("strategy") in STRATEGIES else "highest_balance"
     manual_order = settings.get("manual_order") if isinstance(settings.get("manual_order"), list) else []
     strategy_order = _strategy_order(debts, strategy, manual_order)
-    saved_manual_order = _strategy_order(debts, "manual", manual_order)
-    target_id = str(settings.get("current_target_account_id") or "")
+    saved_manual_order = [str(item) for item in manual_order if str(item) in included_id_set]
+    saved_manual_order += [item for item in included_ids if item not in saved_manual_order]
+    configured_target_id = str(settings.get("current_target_account_id") or "")
     active_ids = {debt["id"] for debt in debts if Decimal(debt["balance"]) > ZERO}
-    effective_target_id = target_id if target_id in active_ids else next((debt["id"] for debt in strategy_order if debt["id"] in active_ids), "")
+    target_id = configured_target_id if configured_target_id in active_ids else ""
+    effective_target_id = target_id or next((debt["id"] for debt in strategy_order if debt["id"] in active_ids), "")
     payoff_order = ([effective_target_id] if effective_target_id else []) + [
         debt["id"] for debt in strategy_order if debt["id"] != effective_target_id
     ]
@@ -388,7 +404,11 @@ def get_debt_payoff_plan(accounts: list[dict], history: dict | None = None, *, t
         for debt in debts if debt["minimum_payment"] and Decimal(debt["balance"]) > ZERO
     ), ZERO)
     baseline_map = settings.get("baseline_balances") if isinstance(settings.get("baseline_balances"), dict) else {}
-    starting_total = sum((_amount(baseline_map.get(debt["id"], debt["balance"])) for debt in debts), ZERO)
+    progress_debts = [
+        debt for debt in all_liabilities
+        if funding and debt["currency"] == funding["currency"] and debt["id"] in included_id_set
+    ]
+    starting_total = sum((_amount(baseline_map.get(debt["id"], debt["balance"])) for debt in progress_debts), ZERO)
     debt_paid = max(ZERO, starting_total - total_balance)
     progress = Decimal("100") if starting_total == ZERO and total_balance == ZERO else (
         max(ZERO, min(Decimal("100"), debt_paid * 100 / starting_total)) if starting_total > ZERO else ZERO
@@ -400,8 +420,10 @@ def get_debt_payoff_plan(accounts: list[dict], history: dict | None = None, *, t
 
     if not funding:
         simulation = {"status": "setup_required", "minimum_total": None, "projected_months": None, "projected_payoff_date": None, "total_interest": None, "debt_results": []}
-    elif not debts:
+    elif not available_same_currency:
         simulation = {"status": "no_debts", "minimum_total": "0.00", "projected_months": 0, "projected_payoff_date": today.isoformat(), "total_interest": "0.00", "debt_results": []}
+    elif not debts:
+        simulation = {"status": "no_included_debts", "minimum_total": "0.00", "projected_months": None, "projected_payoff_date": None, "total_interest": None, "debt_results": []}
     elif not target_id:
         simulation = {"status": "setup_required", "minimum_total": _money(minimum_total), "projected_months": None, "projected_payoff_date": None, "total_interest": None, "debt_results": []}
     elif missing_terms:
@@ -418,10 +440,11 @@ def get_debt_payoff_plan(accounts: list[dict], history: dict | None = None, *, t
             "current_target_account_id": target_id if target_id in {debt["id"] for debt in same_currency_debts} else "",
             "strategy": strategy,
             "monthly_budget_override": _money(override),
-            "manual_order": [item["id"] for item in saved_manual_order],
+            "manual_order": [str(item) for item in saved_manual_order],
+            "included_account_ids": included_ids,
         },
         "funding_accounts": funding_accounts,
-        "liabilities": all_liabilities,
+        "liabilities": active_liabilities,
         "currency": funding["currency"] if funding else None,
         "funding_account_name": funding["name"] if funding else None,
         "current_target_name": available_target["name"] if available_target else None,
@@ -445,16 +468,29 @@ def save_debt_payoff_settings(payload: dict, accounts: list[dict]) -> dict:
     if not isinstance(payload, dict):
         raise DebtPayoffValidationError("Planner settings must be an object.")
     funding_accounts, liabilities = _normalized_accounts(accounts)
-    account_by_id = {str(account.get("id")): account for account in accounts}
     funding_id = str(payload.get("funding_account_id") or "").strip()
     funding = next((item for item in funding_accounts if item["id"] == funding_id), None)
     if not funding:
         raise DebtPayoffValidationError("Choose an existing bank / cash account for payment deposits.")
-    eligible = [item for item in liabilities if item["currency"] == funding["currency"]]
-    eligible_ids = {item["id"] for item in eligible}
+    active_eligible = [
+        item for item in liabilities
+        if item["currency"] == funding["currency"] and Decimal(item["balance"]) > ZERO
+    ]
+    active_eligible_ids = {item["id"] for item in active_eligible}
+    all_liability_ids = {item["id"] for item in liabilities}
+    raw_included = payload.get("included_account_ids")
+    if not isinstance(raw_included, list) or len(raw_included) > len(all_liability_ids):
+        raise DebtPayoffValidationError("Choose valid debts to include in the payoff plan.")
+    included_ids = [str(item) for item in raw_included]
+    if len(included_ids) != len(set(included_ids)) or any(item not in all_liability_ids for item in included_ids):
+        raise DebtPayoffValidationError("Choose valid, unique liability accounts for the payoff plan.")
+    included_id_set = set(included_ids)
+    included_active_ids = active_eligible_ids & included_id_set
+    if not included_active_ids:
+        raise DebtPayoffValidationError("Include at least one outstanding debt in the payoff plan.")
     target_id = str(payload.get("current_target_account_id") or "").strip()
-    if target_id not in eligible_ids:
-        raise DebtPayoffValidationError("Choose a liability in the same currency as the funding account.")
+    if target_id not in included_active_ids:
+        raise DebtPayoffValidationError("Choose an included outstanding debt in the same currency as the funding account.")
     strategy = str(payload.get("strategy") or "highest_balance")
     if strategy not in STRATEGIES:
         raise DebtPayoffValidationError("Choose a supported payoff order.")
@@ -477,12 +513,12 @@ def save_debt_payoff_settings(payload: dict, accounts: list[dict]) -> dict:
         if not isinstance(row, dict):
             raise DebtPayoffValidationError("Debt APR and minimum payment details are invalid.")
         account_id = str(row.get("account_id") or "").strip()
-        if account_id not in eligible_ids or account_id in submitted_term_ids:
-            raise DebtPayoffValidationError("Choose valid, unique liability accounts for debt details.")
+        if account_id not in included_active_ids or account_id in submitted_term_ids:
+            raise DebtPayoffValidationError("APR and minimum details must match included outstanding debts.")
         submitted_term_ids.add(account_id)
         apr = _decimal(row.get("apr_percent"), "APR", required=False, maximum=Decimal("100"))
         minimum = _decimal(row.get("minimum_payment"), "Minimum payment", required=False)
-        account = next(item for item in eligible if item["id"] == account_id)
+        account = next(item for item in active_eligible if item["id"] == account_id)
         if Decimal(account["balance"]) > ZERO and minimum == ZERO:
             raise DebtPayoffValidationError("Minimum payment must be greater than zero for an outstanding debt.")
         terms[account_id] = {
@@ -491,21 +527,22 @@ def save_debt_payoff_settings(payload: dict, accounts: list[dict]) -> dict:
         }
 
     manual_order = payload.get("manual_order") or []
-    if not isinstance(manual_order, list) or len(manual_order) > len(eligible_ids):
+    if not isinstance(manual_order, list) or len(manual_order) > len(included_ids):
         raise DebtPayoffValidationError("Manual payoff order is invalid.")
     manual_order = [str(item) for item in manual_order]
-    if len(manual_order) != len(set(manual_order)) or any(item not in eligible_ids for item in manual_order):
-        raise DebtPayoffValidationError("Manual payoff order must contain unique eligible liability accounts.")
+    if len(manual_order) != len(set(manual_order)) or any(item not in included_id_set for item in manual_order):
+        raise DebtPayoffValidationError("Manual payoff order must contain unique included liability accounts.")
     previous_order = settings.get("manual_order") if isinstance(settings.get("manual_order"), list) else []
-    all_liability_ids = {item["id"] for item in liabilities}
     manual_order += [
         str(item) for item in previous_order
-        if str(item) in all_liability_ids and str(item) not in manual_order
+        if str(item) in included_id_set and str(item) not in manual_order
     ]
-    manual_order += [item["id"] for item in eligible if item["id"] not in manual_order]
+    manual_order += [account_id for account_id in included_ids if account_id not in manual_order]
 
     baseline = settings.get("baseline_balances") if isinstance(settings.get("baseline_balances"), dict) else {}
-    for debt in eligible:
+    for debt in liabilities:
+        if debt["id"] not in included_id_set:
+            continue
         if debt["id"] not in baseline:
             baseline[debt["id"]] = debt["balance"]
     normalized = {
@@ -515,6 +552,7 @@ def save_debt_payoff_settings(payload: dict, accounts: list[dict]) -> dict:
         "monthly_budget_override": _money(override),
         "debt_terms": terms,
         "manual_order": manual_order,
+        "included_account_ids": included_ids,
         "baseline_balances": baseline,
     }
     set_setting(SETTINGS_KEY, json.dumps(normalized, separators=(",", ":"), sort_keys=True))

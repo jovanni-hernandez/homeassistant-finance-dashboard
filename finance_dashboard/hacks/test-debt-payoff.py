@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import sys
 import tempfile
@@ -68,12 +69,16 @@ class DebtPayoffTests(unittest.TestCase):
             {"id": "staging", "name": "Card payment fund", "org": "Test Bank", "balance": "400.00", "currency": "USD", "account_type_suggestion": "bank_account", "transactions": txs},
             {"id": "high-card", "name": "High balance card", "org": "Issuer", "balance": "-5000.00", "currency": "USD", "account_type_suggestion": "credit_card", "transactions": []},
             {"id": "low-card", "name": "Low balance card", "org": "Issuer", "balance": "-1000.00", "currency": "USD", "account_type_suggestion": "credit_card", "transactions": []},
+            {"id": "zero-card", "name": "Unused card", "org": "Issuer", "balance": "0.00", "currency": "USD", "account_type_suggestion": "credit_card", "transactions": []},
+            {"id": "mortgage", "name": "Home loan", "org": "Test Lender", "balance": "-150000.00", "currency": "USD", "account_type_suggestion": "loan", "transactions": []},
             {"id": "euro-card", "name": "Euro card", "org": "Issuer", "balance": "-900.00", "currency": "EUR", "account_type_suggestion": "credit_card", "transactions": []},
         ]})
         self.accounts = [
             {"id": "staging", "name": "Card payment fund", "nickname": "", "balance": "400.00", "currency": "USD", "account_type": "bank_account"},
             {"id": "high-card", "name": "High balance card", "nickname": "", "balance": "-5000.00", "currency": "USD", "account_type": "credit_card"},
             {"id": "low-card", "name": "Low balance card", "nickname": "", "balance": "-1000.00", "currency": "USD", "account_type": "credit_card"},
+            {"id": "zero-card", "name": "Unused card", "nickname": "", "balance": "0.00", "currency": "USD", "account_type": "credit_card"},
+            {"id": "mortgage", "name": "Home loan", "nickname": "", "balance": "-150000.00", "currency": "USD", "account_type": "loan"},
             {"id": "euro-card", "name": "Euro card", "nickname": "", "balance": "-900.00", "currency": "EUR", "account_type": "credit_card"},
         ]
         self.history = {"accounts": [
@@ -88,6 +93,7 @@ class DebtPayoffTests(unittest.TestCase):
             "current_target_account_id": "high-card",
             "strategy": "highest_balance",
             "monthly_budget_override": None,
+            "included_account_ids": ["high-card", "low-card"],
             "debt_terms": [
                 {"account_id": "high-card", "apr_percent": "0", "minimum_payment": "100"},
                 {"account_id": "low-card", "apr_percent": "0", "minimum_payment": "50"},
@@ -96,6 +102,33 @@ class DebtPayoffTests(unittest.TestCase):
         }
         payload.update(overrides)
         return payload
+
+    def test_default_plan_hides_zero_balances_and_opts_out_of_mortgage(self):
+        legacy = self.settings_payload()
+        legacy.pop("included_account_ids")
+        set_setting(SETTINGS_KEY, json.dumps(legacy))
+        plan = get_debt_payoff_plan(self.accounts, self.history, today=self.today)
+        listed_ids = {item["id"] for item in plan["liabilities"]}
+        self.assertNotIn("zero-card", listed_ids)
+        self.assertIn("mortgage", listed_ids)
+        self.assertEqual(plan["settings"]["included_account_ids"], ["high-card", "low-card", "euro-card"])
+        self.assertEqual(plan["total_balance"], "6000.00")
+        self.assertNotIn("mortgage", {item["account_id"] for item in plan["debt_results"]})
+
+    def test_other_debt_can_be_opted_in_and_requires_terms_only_then(self):
+        payload = self.settings_payload(
+            included_account_ids=["high-card", "low-card", "mortgage"],
+            monthly_budget_override="2000",
+            debt_terms=[
+                {"account_id": "high-card", "apr_percent": "0", "minimum_payment": "100"},
+                {"account_id": "low-card", "apr_percent": "0", "minimum_payment": "50"},
+                {"account_id": "mortgage", "apr_percent": "6", "minimum_payment": "1200"},
+            ],
+        )
+        save_debt_payoff_settings(payload, self.accounts)
+        plan = get_debt_payoff_plan(self.accounts, self.history, today=self.today)
+        self.assertEqual(plan["total_balance"], "156000.00")
+        self.assertIn("mortgage", {item["account_id"] for item in plan["debt_results"]})
 
     def test_deposit_average_uses_posted_inflows_and_ignores_staging_balance(self):
         save_debt_payoff_settings(self.settings_payload(), self.accounts)
@@ -147,6 +180,7 @@ class DebtPayoffTests(unittest.TestCase):
             "current_target_account_id": "euro-card",
             "strategy": "highest_balance",
             "monthly_budget_override": None,
+            "included_account_ids": ["euro-card"],
             "debt_terms": [{"account_id": "euro-card", "apr_percent": "12", "minimum_payment": "25"}],
             "manual_order": ["euro-card"],
         }, self.accounts + [
@@ -197,7 +231,7 @@ class DebtPayoffTests(unittest.TestCase):
     def test_invalid_currency_target_and_manual_order_are_rejected(self):
         with self.assertRaisesRegex(DebtPayoffValidationError, "same currency"):
             save_debt_payoff_settings(self.settings_payload(current_target_account_id="euro-card"), self.accounts)
-        with self.assertRaisesRegex(DebtPayoffValidationError, "unique eligible"):
+        with self.assertRaisesRegex(DebtPayoffValidationError, "unique included"):
             save_debt_payoff_settings(self.settings_payload(manual_order=["high-card", "high-card"]), self.accounts)
         with self.assertRaisesRegex(DebtPayoffValidationError, "greater than zero"):
             save_debt_payoff_settings(self.settings_payload(debt_terms=[

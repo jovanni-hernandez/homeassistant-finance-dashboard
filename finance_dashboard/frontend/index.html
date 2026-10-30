@@ -974,10 +974,21 @@
                             </div>
 
                             <div v-if="!debtPayoffPlan?.funding_accounts?.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Classify your staging account as Bank / cash in Settings → General to use it here.</div>
-                            <div v-else-if="!debtPayoffPlan?.liabilities?.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Classify at least one credit card or loan as a liability in Settings → General to build a payoff plan.</div>
-                            <div v-if="debtPayoffForm.funding_account_id && !debtPayoffEligibleLiabilities.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">No classified liabilities use the same currency as this staging account. Choose another funding account or review account classifications.</div>
+                            <div v-else-if="!debtPayoffPlan?.liabilities?.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">No outstanding liability balances were found. Zero-balance debts are hidden from the planner.</div>
+                            <div v-if="debtPayoffForm.funding_account_id && !debtPayoffAvailableLiabilities.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">No outstanding liabilities use the same currency as this staging account. Choose another funding account or review account classifications.</div>
                             <p v-if="debtPayoffPlan?.deposit_average && String(debtPayoffForm.funding_account_id) === String(debtPayoffPlan.settings?.funding_account_id)" data-testid="debt-payoff-deposit-average" class="text-sm text-slate-600">Recent deposits to {{ debtPayoffPlan.funding_account_name }} averaged <strong class="text-slate-800">{{ formatCurrency(debtPayoffPlan.deposit_average.monthly_average, debtPayoffPlan.currency) }}/month</strong> over {{ debtPayoffPlan.deposit_average.window_months }} months ({{ formatCurrency(debtPayoffPlan.deposit_average.total_deposits, debtPayoffPlan.currency) }} total). The staging account’s current balance is not added to the estimate.</p>
                             <p v-else-if="debtPayoffForm.funding_account_id" data-testid="debt-payoff-deposit-average-pending" class="text-sm text-slate-600">Save the selected staging account to calculate its six-month deposit average.</p>
+
+                            <div v-if="debtPayoffAvailableLiabilities.length" data-testid="debt-payoff-inclusions" class="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <div>
+                                    <h4 class="text-sm font-semibold text-slate-800">Debts in this plan</h4>
+                                    <p class="mt-1 text-xs leading-5 text-slate-500">Outstanding credit cards are included by default. Add mortgages, loans, or other liabilities only if you want them in this payoff plan. Zero-balance debts are hidden.</p>
+                                </div>
+                                <label v-for="debt in debtPayoffAvailableLiabilities" :key="debt.id" :data-testid="`debt-payoff-inclusion-${debt.id}`" class="flex min-w-0 items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm">
+                                    <input type="checkbox" :checked="debtPayoffForm.included_account_ids.map(String).includes(String(debt.id))" @change="toggleDebtPayoffInclusion(debt.id, $event.target.checked)" class="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                                    <span class="min-w-0"><span class="block truncate font-medium text-slate-800">{{ debt.name }}</span><span class="block text-xs text-slate-500">{{ debt.account_type === 'credit_card' ? 'Credit card' : debt.account_type === 'loan' ? 'Loan' : 'Other liability' }} · {{ formatCurrency(debt.balance, debt.currency) }}</span></span>
+                                </label>
+                            </div>
 
                             <div v-if="debtPayoffEligibleLiabilities.length" class="space-y-3 border-t border-slate-200 pt-3">
                                 <div>
@@ -1017,7 +1028,7 @@
 
                             <div class="grid gap-3 sm:grid-cols-3">
                                 <div class="rounded-lg bg-slate-50 p-3"><div class="text-xs font-medium text-slate-500">Estimated monthly budget</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ formatCurrency(debtPayoffPlan.monthly_budget || '0', debtPayoffPlan.currency || 'USD') }}</div><div v-if="debtPayoffPlan.settings.monthly_budget_override" class="text-xs text-slate-500">Manual override</div><div v-else class="text-xs text-slate-500">Six-month deposit average</div></div>
-                                <div class="rounded-lg bg-slate-50 p-3"><div class="text-xs font-medium text-slate-500">Outstanding balances</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ formatCurrency(debtPayoffPlan.total_balance || '0', debtPayoffPlan.currency || 'USD') }}</div><div class="text-xs text-slate-500">Across {{ debtPayoffPlan.liabilities?.filter((debt) => Number(debt.balance) > 0 && debt.currency === debtPayoffPlan.currency).length || 0 }} debts</div></div>
+                                <div class="rounded-lg bg-slate-50 p-3"><div class="text-xs font-medium text-slate-500">Outstanding balances</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ formatCurrency(debtPayoffPlan.total_balance || '0', debtPayoffPlan.currency || 'USD') }}</div><div class="text-xs text-slate-500">Across {{ debtPayoffPlan.settings.included_account_ids.filter((id) => debtPayoffPlan.liabilities?.some((debt) => String(debt.id) === String(id) && debt.currency === debtPayoffPlan.currency)).length }} included debts</div></div>
                                 <div class="rounded-lg bg-slate-50 p-3"><div class="text-xs font-medium text-slate-500">Estimated debt-free date</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ debtPayoffPlan.projected_payoff_date ? formatGoalDate(debtPayoffPlan.projected_payoff_date) : 'Not available yet' }}</div><div v-if="debtPayoffPlan.total_interest" class="text-xs text-slate-500">Estimated interest {{ formatCurrency(debtPayoffPlan.total_interest, debtPayoffPlan.currency) }}</div></div>
                             </div>
 
@@ -1950,10 +1961,11 @@
                     current_target_account_id: '',
                     strategy: 'highest_balance',
                     monthly_budget_override: '',
+                    included_account_ids: [],
                     manual_order: [],
                 });
                 const debtPayoffTerms = ref({});
-                const debtPayoffEligibleLiabilities = computed(() => {
+                const debtPayoffAvailableLiabilities = computed(() => {
                     const funding = (debtPayoffPlan.value?.funding_accounts || []).find(
                         (account) => String(account.id) === String(debtPayoffForm.value.funding_account_id),
                     );
@@ -1961,6 +1973,14 @@
                     return (debtPayoffPlan.value?.liabilities || []).filter(
                         (debt) => String(debt.currency || 'USD').toUpperCase() === String(funding.currency || 'USD').toUpperCase(),
                     );
+                });
+                const debtPayoffEligibleLiabilities = computed(() => {
+                    const included = new Set((debtPayoffForm.value.included_account_ids || []).map(String));
+                    return debtPayoffAvailableLiabilities.value.filter((debt) => included.has(String(debt.id)));
+                });
+                const debtPayoffExcludedLiabilities = computed(() => {
+                    const included = new Set((debtPayoffForm.value.included_account_ids || []).map(String));
+                    return debtPayoffAvailableLiabilities.value.filter((debt) => !included.has(String(debt.id)));
                 });
                 const debtPayoffManualOrder = computed(() => {
                     const configured = debtPayoffForm.value.manual_order || [];
@@ -2520,7 +2540,7 @@
                     debtPayoffPlan.value = null;
                     debtPayoffForm.value = {
                         funding_account_id: '', current_target_account_id: '', strategy: 'highest_balance',
-                        monthly_budget_override: '', manual_order: [],
+                        monthly_budget_override: '', included_account_ids: [], manual_order: [],
                     };
                     debtPayoffTerms.value = {};
                     debtPayoffMessage.value = '';
@@ -2812,6 +2832,7 @@
                         debtPayoffForm.value = {
                             ...data.settings,
                             monthly_budget_override: data.settings?.monthly_budget_override ?? '',
+                            included_account_ids: (data.settings?.included_account_ids || []).map(String),
                             manual_order: (data.settings?.manual_order || []).map(String),
                         };
                         debtPayoffTerms.value = Object.fromEntries(
@@ -2833,10 +2854,20 @@
                     if (!eligibleIds.includes(String(debtPayoffForm.value.current_target_account_id))) {
                         debtPayoffForm.value.current_target_account_id = '';
                     }
-                    debtPayoffForm.value.manual_order = [
-                        ...debtPayoffForm.value.manual_order.filter((id) => eligibleIds.includes(String(id))),
-                        ...eligibleIds.filter((id) => !debtPayoffForm.value.manual_order.map(String).includes(id)),
-                    ];
+                };
+
+                const toggleDebtPayoffInclusion = (accountId, included) => {
+                    const id = String(accountId);
+                    const selected = new Set((debtPayoffForm.value.included_account_ids || []).map(String));
+                    if (included) selected.add(id);
+                    else selected.delete(id);
+                    debtPayoffForm.value.included_account_ids = [...selected];
+                    if (!included && String(debtPayoffForm.value.current_target_account_id) === id) {
+                        debtPayoffForm.value.current_target_account_id = '';
+                    }
+                    const order = (debtPayoffForm.value.manual_order || []).map(String).filter((item) => selected.has(item));
+                    if (included && !order.includes(id)) order.push(id);
+                    debtPayoffForm.value.manual_order = order;
                 };
 
                 const moveDebtPayoffDebt = (accountId, direction) => {
@@ -2845,7 +2876,10 @@
                     const nextIndex = index + Number(direction);
                     if (index < 0 || nextIndex < 0 || nextIndex >= order.length) return;
                     [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
-                    debtPayoffForm.value.manual_order = order;
+                    const hiddenIds = (debtPayoffForm.value.manual_order || [])
+                        .map(String)
+                        .filter((id) => !order.includes(id) && (debtPayoffForm.value.included_account_ids || []).map(String).includes(id));
+                    debtPayoffForm.value.manual_order = [...order, ...hiddenIds];
                 };
 
                 const saveDebtPayoffSettings = async () => {
@@ -2874,6 +2908,7 @@
                         debtPayoffForm.value = {
                             ...data.settings,
                             monthly_budget_override: data.settings?.monthly_budget_override ?? '',
+                            included_account_ids: (data.settings?.included_account_ids || []).map(String),
                             manual_order: (data.settings?.manual_order || []).map(String),
                         };
                         debtPayoffTerms.value = Object.fromEntries(
@@ -2933,6 +2968,7 @@
                 const debtPayoffStatusMessage = (plan) => ({
                     setup_required: 'Choose a funding account and your current target debt to build the projection.',
                     no_debts: 'There are no outstanding liabilities in the selected currency. That is worth celebrating.',
+                    no_included_debts: 'Select at least one outstanding debt to include in this payoff plan.',
                     needs_terms: 'Enter an APR and minimum payment for each outstanding debt to estimate interest and payoff timing.',
                     no_budget: 'No incoming deposits were found in the six-month window. Add a monthly budget override to see a projection.',
                     below_minimums: 'The estimated monthly budget is below the configured minimum payments. Review the budget or minimums before relying on a payoff date.',
@@ -5336,10 +5372,13 @@
                     debtPayoffEstimateMessages,
                     debtPayoffForm,
                     debtPayoffTerms,
+                    debtPayoffAvailableLiabilities,
                     debtPayoffEligibleLiabilities,
+                    debtPayoffExcludedLiabilities,
                     debtPayoffManualOrder,
                     fetchDebtPayoffPlan,
                     changeDebtPayoffFunding,
+                    toggleDebtPayoffInclusion,
                     moveDebtPayoffDebt,
                     saveDebtPayoffSettings,
                     estimateDebtTerms,
