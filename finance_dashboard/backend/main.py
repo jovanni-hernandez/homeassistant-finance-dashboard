@@ -32,7 +32,9 @@ from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
 from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
 from debt_payoff import (
+    DebtPayoffEstimateError,
     DebtPayoffValidationError,
+    estimate_debt_terms_with_ai,
     get_debt_payoff_plan,
     save_debt_payoff_settings,
 )
@@ -239,6 +241,10 @@ class DebtPayoffSettingsRequest(BaseModel):
     monthly_budget_override: str | None = Field(default=None, max_length=50)
     debt_terms: list[DebtPayoffTermRequest] = Field(default_factory=list, max_length=100)
     manual_order: list[str] = Field(default_factory=list, max_length=100)
+
+
+class DebtPayoffEstimateRequest(BaseModel):
+    account_id: str = Field(min_length=1, max_length=256)
 
 
 class AIChatMessageRequest(BaseModel):
@@ -762,6 +768,25 @@ def api_save_debt_payoff_plan(payload: DebtPayoffSettingsRequest):
     except Exception as exc:
         logger.error("Failed to save debt payoff settings (%s).", type(exc).__name__)
         raise HTTPException(status_code=400, detail="Could not save the debt payoff settings.") from exc
+
+
+@app.post("/api/debt-payoff/estimate", dependencies=[Depends(verify_ha_auth)])
+def api_estimate_debt_terms(payload: DebtPayoffEstimateRequest):
+    try:
+        account = next(
+            (item for item in get_stored_accounts() if str(item.get("id")) == payload.account_id),
+            None,
+        )
+        if not account:
+            raise HTTPException(status_code=404, detail="Liability account not found.")
+        return estimate_debt_terms_with_ai(account)
+    except DebtPayoffEstimateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Debt payoff estimate failed safely (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not estimate debt terms. No planner fields were changed.") from exc
 
 
 @app.post("/api/goals", dependencies=[Depends(verify_ha_auth)])

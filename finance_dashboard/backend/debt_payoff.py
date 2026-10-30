@@ -2,21 +2,29 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from calendar import monthrange
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from database import get_setting, set_setting
 from models import LIABILITY_ACCOUNT_TYPES, SessionLocal, Transaction
+from ai_assistant import _provider_key, get_ai_settings
 
 SETTINGS_KEY = "debt_payoff_planner"
 CENT = Decimal("0.01")
 ZERO = Decimal("0")
 MAX_PROJECTION_MONTHS = 1200
 STRATEGIES = {"highest_balance", "lowest_balance", "highest_apr", "manual"}
+logger = logging.getLogger("finance_dashboard")
 
 
 class DebtPayoffValidationError(ValueError):
+    pass
+
+
+class DebtPayoffEstimateError(ValueError):
     pass
 
 
@@ -49,6 +57,104 @@ def _amount(value) -> Decimal:
         return result if result.is_finite() else ZERO
     except (InvalidOperation, TypeError, ValueError):
         return ZERO
+
+
+def estimate_minimum_payment(balance, apr_percent) -> Decimal:
+    """Estimate max(25 currency units, 1% principal + monthly interest), capped at payoff."""
+    principal = abs(_amount(balance)).quantize(CENT, rounding=ROUND_HALF_UP)
+    apr = _decimal(apr_percent, "APR", maximum=Decimal("100"))
+    if apr is None:
+        raise DebtPayoffValidationError("APR is required to estimate a minimum payment.")
+    if principal <= ZERO:
+        return ZERO
+    interest = (principal * apr / Decimal("1200")).quantize(CENT, rounding=ROUND_HALF_UP)
+    principal_component = (principal * Decimal("0.01")).quantize(CENT, rounding=ROUND_HALF_UP)
+    estimate = max(Decimal("25"), principal_component + interest)
+    return min(principal + interest, estimate).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def _parse_apr_response(content: str) -> Decimal:
+    text = str(content or "").strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError) as exc:
+        raise DebtPayoffEstimateError("The AI did not return a usable APR estimate. No fields were changed.") from exc
+    if not isinstance(payload, dict):
+        raise DebtPayoffEstimateError("The AI did not return a usable APR estimate. No fields were changed.")
+    try:
+        apr = _decimal(payload.get("apr_percent"), "Estimated APR", maximum=Decimal("100"))
+    except DebtPayoffValidationError as exc:
+        raise DebtPayoffEstimateError("The AI returned an invalid APR estimate. No fields were changed.") from exc
+    if apr is None:
+        raise DebtPayoffEstimateError("The AI could not estimate an APR for this provider. No fields were changed.")
+    return apr
+
+
+def estimate_debt_terms_with_ai(account: dict) -> dict:
+    """Ask the configured LLM for APR using only a distinct institution name; compute minimum locally."""
+    if not isinstance(account, dict) or account.get("account_type") not in LIABILITY_ACCOUNT_TYPES:
+        raise DebtPayoffEstimateError("Choose an account classified as a liability first.")
+
+    institution = str(account.get("org") or "").strip()
+    account_name = str(account.get("name") or "").strip()
+    if not institution or institution.casefold() in {"unknown", "account"} or institution.casefold() == account_name.casefold():
+        raise DebtPayoffEstimateError("A separate institution name is unavailable for this account, so AI estimation was skipped.")
+
+    settings = get_ai_settings()
+    if not settings["enabled"]:
+        raise DebtPayoffEstimateError("Enable AI assistance in Settings before requesting an estimate.")
+    provider = settings["provider"]
+    model = settings["model"]
+    api_key = _provider_key(provider)
+    if not api_key:
+        raise DebtPayoffEstimateError(f"No API key is saved for the selected AI provider ({provider}).")
+
+    system_message = (
+        "Estimate a plausible typical purchase APR for a consumer credit card issued by the named financial institution. "
+        "You do not have access to the customer's specific card terms or live web research. Give one cautious, rough APR "
+        "estimate between 0 and 100 percent. If the institution is not a recognizable card issuer, use a broad current "
+        "consumer-card estimate rather than claiming product-specific knowledge. Return only JSON: "
+        '{"apr_percent": number, "note": "short uncertainty caveat"}. Do not request or infer any customer balance.'
+    )
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": json.dumps({"institution": institution}, separators=(",", ":"))},
+    ]
+    try:
+        from ai_chat import _completion, _unsupported_params
+
+        try:
+            response = _completion(model, api_key, messages)
+        except Exception as exc:
+            unsupported = _unsupported_params(exc) if type(exc).__name__ == "UnsupportedParamsError" else []
+            if type(exc).__name__ != "UnsupportedParamsError" or (unsupported and "temperature" not in unsupported):
+                raise
+            response = _completion(model, api_key, messages, omit_temperature=True)
+        content = response.choices[0].message.content or ""
+        apr = _parse_apr_response(content)
+    except DebtPayoffEstimateError:
+        raise
+    except Exception as exc:
+        try:
+            from ai_chat import _provider_status_code, _safe_provider_error
+            message, _diagnostic = _safe_provider_error(provider, model, _provider_status_code(exc), exc)
+        except Exception:
+            message = "The configured AI provider could not return an estimate. No fields were changed."
+        logger.warning("Debt payoff APR estimate failed (provider=%s, error_type=%s).", provider, type(exc).__name__)
+        raise DebtPayoffEstimateError(message) from None
+
+    balance = abs(_amount(account.get("balance")))
+    minimum = estimate_minimum_payment(balance, apr)
+    return {
+        "apr_percent": _money(apr),
+        "minimum_payment": _money(minimum),
+        "ai_provider": provider,
+        "formula": "max(25 currency units, 1% of balance + one month of interest), capped at balance plus interest",
+        "note": "Rough, unverified estimate. Check your card statement; issuer formulas, fees, and product terms vary.",
+    }
 
 
 def _load_settings() -> dict:

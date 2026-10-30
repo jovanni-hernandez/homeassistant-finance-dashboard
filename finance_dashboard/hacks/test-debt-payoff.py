@@ -8,7 +8,10 @@ import sys
 import tempfile
 import unittest
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
@@ -23,8 +26,11 @@ os.chdir(BACKEND)
 
 from database import get_setting, init_db, save_simplefin_data, set_setting
 from debt_payoff import (
+    DebtPayoffEstimateError,
     DebtPayoffValidationError,
     SETTINGS_KEY,
+    estimate_debt_terms_with_ai,
+    estimate_minimum_payment,
     get_debt_payoff_plan,
     save_debt_payoff_settings,
 )
@@ -199,6 +205,48 @@ class DebtPayoffTests(unittest.TestCase):
                 {"account_id": "high-card", "apr_percent": "19.9", "minimum_payment": "0"},
                 {"account_id": "low-card", "apr_percent": "22", "minimum_payment": "50"},
             ]), self.accounts)
+
+    def test_local_minimum_formula_includes_interest_and_caps_at_amount_owed(self):
+        self.assertEqual(estimate_minimum_payment("5000", "24"), Decimal("150.00"))
+        self.assertEqual(estimate_minimum_payment("500", "0"), Decimal("25.00"))
+        self.assertEqual(estimate_minimum_payment("10", "24"), Decimal("10.20"))
+
+    def test_ai_request_contains_only_institution_name_and_calculates_minimum_locally(self):
+        response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+            content='{"apr_percent":23.5,"note":"rough issuer-level estimate"}',
+        ))])
+        account = {
+            "id": "private-account-id",
+            "name": "My Personal Rewards Card",
+            "org": "Test Issuer",
+            "balance": "12345.67",
+            "currency": "USD",
+            "account_type": "credit_card",
+        }
+        with patch("debt_payoff.get_ai_settings", return_value={"enabled": True, "provider": "openai", "model": "test-model"}), \
+             patch("debt_payoff._provider_key", return_value="test-key"), \
+             patch("ai_chat._completion", return_value=response) as completion:
+            estimate = estimate_debt_terms_with_ai(account)
+
+        request_text = str(completion.call_args.args[2])
+        self.assertIn("Test Issuer", request_text)
+        self.assertNotIn("12345.67", request_text)
+        self.assertNotIn("private-account-id", request_text)
+        self.assertNotIn("My Personal Rewards Card", request_text)
+        self.assertNotIn("USD", request_text)
+        self.assertEqual(estimate["apr_percent"], "23.50")
+        self.assertEqual(estimate["minimum_payment"], format(estimate_minimum_payment("12345.67", "23.5"), "f"))
+        self.assertIn("unverified", estimate["note"].lower())
+
+    def test_ai_estimate_skips_accounts_without_a_distinct_institution_name(self):
+        account = {
+            "id": "private-account-id", "name": "Issuer-branded Card", "org": "Issuer-branded Card",
+            "balance": "500", "currency": "USD", "account_type": "credit_card",
+        }
+        with patch("ai_chat._completion") as completion:
+            with self.assertRaisesRegex(DebtPayoffEstimateError, "institution name is unavailable"):
+                estimate_debt_terms_with_ai(account)
+        completion.assert_not_called()
 
     def test_settings_are_encrypted_in_the_existing_settings_store(self):
         save_debt_payoff_settings(self.settings_payload(), self.accounts)

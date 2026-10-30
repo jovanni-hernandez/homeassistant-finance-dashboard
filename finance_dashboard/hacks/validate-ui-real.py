@@ -460,6 +460,10 @@ def main():
                           }
                           return new Response(JSON.stringify(debtPayoffFixture), {status: 200, headers: {"Content-Type": "application/json"}});
                         }
+                        if (url.endsWith("/api/debt-payoff/estimate")) {
+                          window.__testDebtPayoffEstimateRequest = JSON.parse(args[1]?.body || "{}");
+                          return new Response(JSON.stringify({apr_percent: "23.5", minimum_payment: "153.83", ai_provider: "openai", formula: "max(25 currency units, 1% of balance + one month of interest)", note: "Rough, unverified estimate."}), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
                         if (url.endsWith("/api/planning/inflation/sync")) {
                           const body = JSON.parse(args[1]?.body || "{}");
                           window.__testInflationSyncWindow = body.window_years;
@@ -1688,6 +1692,7 @@ def main():
                 "goals_page_opens": False,
                 "debt_payoff_planner_visible": False,
                 "deposit_average_and_milestones_visible": False,
+                "debt_payoff_ai_estimate_fills_review_fields": False,
                 "debt_payoff_settings_save": False,
                 "debt_payoff_dark_mode_readable": False,
                 "one_goal_creation_entry_point": False,
@@ -1720,6 +1725,18 @@ def main():
             )
             Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-funding-account"]')).select_by_value("test-account-checking-main")
             Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-current-target"]')).select_by_value("test-debt-large")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-estimate-test-debt-large"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-apr-test-debt-large"]').get_property("value") == "23.5"
+                and current.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-minimum-test-debt-large"]').get_property("value") == "153.83"
+            )
+            goal_checks["debt_payoff_ai_estimate_fills_review_fields"] = (
+                driver.execute_script("return window.__testDebtPayoffEstimateRequest?.account_id === 'test-debt-large'")
+                and "review only" in driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-estimate-message-test-debt-large"]').text.lower()
+            )
+            debt_payoff_estimate_screenshot = screenshot.with_name(screenshot.stem + "-debt-payoff-ai-estimate" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-term-row"]'))
+            driver.save_screenshot(str(debt_payoff_estimate_screenshot))
             Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-strategy"]')).select_by_value("highest_apr")
             budget_override = driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-budget-override"]')
             budget_override.clear()
@@ -1735,6 +1752,7 @@ def main():
             goal_checks["debt_payoff_settings_save"] = (
                 "Estimated debt-free date" in driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]').text
                 and "2,500.00" in driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]').text
+                and driver.execute_script("return Number(window.__testDebtPayoffSave?.debt_terms?.find((term) => term.account_id === 'test-debt-large')?.apr_percent) === 23.5")
             )
             debt_planner_screenshot = screenshot.with_name(screenshot.stem + "-debt-payoff-planner" + screenshot.suffix)
             driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", planner)
@@ -2229,6 +2247,7 @@ def main():
                 "ai_prompts_screenshot": str(ai_prompts_screenshot),
                 "goals_screenshot": str(goals_screenshot),
                 "debt_payoff_planner_screenshot": str(debt_planner_screenshot),
+                "debt_payoff_estimate_screenshot": str(debt_payoff_estimate_screenshot),
                 "debt_payoff_results_screenshot": str(debt_payoff_results_screenshot),
                 "debt_payoff_dark_screenshot": str(debt_payoff_dark_screenshot),
                 "dashboard_goals_screenshot": str(dashboard_goals_screenshot),
