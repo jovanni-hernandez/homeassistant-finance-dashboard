@@ -42,16 +42,16 @@ SYNC_WINDOW_SECONDS = (SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS) * 24 * 60 * 60
 ACCOUNT_BACKFILL_WINDOW_SECONDS = ACCOUNT_BACKFILL_WINDOW_DAYS * 24 * 60 * 60
 SIMPLEFIN_REQUEST_BUDGET_KEY = "simplefin_request_budget"
 SIMPLEFIN_SYNC_PROGRESS_KEY = "simplefin_sync_progress"
-SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY = 12
+SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS = 24
 SIMPLEFIN_MIN_REQUEST_INTERVAL_SECONDS = 10
 _simplefin_request_lock = threading.Lock()
 _ACCOUNT_BACKFILL_DAY_SECONDS = 24 * 60 * 60
 
 
 class SimpleFINDailyLimitError(RuntimeError):
-    def __init__(self, message: str, *, requests_today: int, reset_at: str):
+    def __init__(self, message: str, *, requests_last_24h: int, reset_at: str):
         super().__init__(message)
-        self.requests_today = requests_today
+        self.requests_last_24h = requests_last_24h
         self.reset_at = reset_at
 
 
@@ -83,100 +83,145 @@ def _write_request_budget(state: dict):
     set_setting(SIMPLEFIN_REQUEST_BUDGET_KEY, json.dumps(state, separators=(",", ":"), sort_keys=True))
 
 
-def _initialize_request_budget(access_url: str):
-    """Start a fresh quota ledger only when an access URL is newly stored."""
+def _legacy_unknown_budget_state(access_url: str, now: datetime) -> dict:
+    """Respect the prior sync time when upgrading from an untracked ledger."""
+    last_sync = get_setting("last_sync_at")
+    until = None
+    try:
+        if last_sync:
+            parsed = datetime.fromisoformat(str(last_sync).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            until = parsed.timestamp() + 24 * 60 * 60
+    except (TypeError, ValueError):
+        until = None
+    unknown_usage = until is not None and until > now.timestamp()
+    return {
+        "access_url_sha256": _access_url_fingerprint(access_url),
+        "request_timestamps": [],
+        "last_request_at": None,
+        "unknown_usage": unknown_usage,
+        "unknown_until": until if unknown_usage else None,
+    }
+
+
+def _initialize_request_budget(access_url: str, *, fresh: bool = False):
+    """Initialize a new token ledger, or conservatively migrate an old token."""
     fingerprint = _access_url_fingerprint(access_url)
     current = _read_request_budget()
     if current and current.get("access_url_sha256") == fingerprint:
         return
     now = _utc_now()
-    _write_request_budget({
-        "access_url_sha256": fingerprint,
-        "utc_date": now.date().isoformat(),
-        "requests_today": 0,
-        "last_request_at": None,
-        "unknown_usage": False,
-    })
+    state = (
+        {
+            "access_url_sha256": fingerprint,
+            "request_timestamps": [],
+            "last_request_at": None,
+            "unknown_usage": False,
+            "unknown_until": None,
+        }
+        if fresh
+        else _legacy_unknown_budget_state(access_url, now)
+    )
+    _write_request_budget(state)
 
 
 def _request_budget_status(access_url: str | None = None) -> dict:
     now = _utc_now()
     if not access_url:
         return {
-            "requests_today": 0,
-            "daily_limit": SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY,
-            "requests_remaining": SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY,
+            "requests_last_24h": 0,
+            "limit_24h": SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
+            "requests_remaining": SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
             "initialized": False,
             "unknown_usage": False,
-            "utc_day_resets_at": _next_utc_reset(now).isoformat(),
+            "next_request_at": None,
         }
-    state = _read_request_budget()
     fingerprint = _access_url_fingerprint(access_url)
-    if not state or (fingerprint and state.get("access_url_sha256") != fingerprint):
+    state = _read_request_budget()
+    if not state or state.get("access_url_sha256") != fingerprint:
         return {
-            "requests_today": 0,
-            "daily_limit": SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY,
+            "requests_last_24h": SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
+            "limit_24h": SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
             "requests_remaining": 0,
             "initialized": False,
             "unknown_usage": True,
-            "utc_day_resets_at": _next_utc_reset(now).isoformat(),
+            "next_request_at": None,
         }
-    if state.get("utc_date") != now.date().isoformat():
-        count = 0
-        unknown_usage = False
-    else:
-        count = max(0, min(SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY, int(state.get("requests_today", 0) or 0)))
-        unknown_usage = bool(state.get("unknown_usage"))
+    cutoff = now.timestamp() - 24 * 60 * 60
+    timestamps = []
+    for value in state.get("request_timestamps", []):
+        try:
+            timestamp = float(value)
+        except (TypeError, ValueError):
+            continue
+        if timestamp > cutoff:
+            timestamps.append(timestamp)
+    unknown_until = state.get("unknown_until")
+    try:
+        unknown_until = float(unknown_until) if unknown_until is not None else None
+    except (TypeError, ValueError):
+        unknown_until = None
+    unknown_usage = bool(state.get("unknown_usage")) and bool(unknown_until and unknown_until > now.timestamp())
+    count = SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS if unknown_usage else len(timestamps)
+    next_request_at = None
+    if unknown_usage:
+        next_request_at = datetime.fromtimestamp(unknown_until, timezone.utc).isoformat()
+    elif len(timestamps) >= SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS:
+        next_request_at = datetime.fromtimestamp(min(timestamps) + 24 * 60 * 60, timezone.utc).isoformat()
+    elif state.get("last_request_at") is not None:
+        try:
+            ready_at = float(state["last_request_at"]) + SIMPLEFIN_MIN_REQUEST_INTERVAL_SECONDS
+            if ready_at > now.timestamp():
+                next_request_at = datetime.fromtimestamp(ready_at, timezone.utc).isoformat()
+        except (TypeError, ValueError):
+            pass
     return {
-        "requests_today": count,
-        "daily_limit": SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY,
-        "requests_remaining": max(0, SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY - count),
+        "requests_last_24h": min(count, SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS),
+        "limit_24h": SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
+        "requests_remaining": max(0, SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS - count),
         "initialized": True,
         "unknown_usage": unknown_usage,
-        "utc_day_resets_at": _next_utc_reset(now).isoformat(),
+        "next_request_at": next_request_at,
     }
 
 
 def _reserve_simplefin_request(access_url: str) -> dict:
-    """Persist a daily-budget reservation before issuing a Bridge request."""
+    """Persist a rolling-24-hour reservation before issuing a Bridge request."""
     fingerprint = _access_url_fingerprint(access_url)
     with _simplefin_request_lock:
         while True:
             now = _utc_now()
-            today = now.date().isoformat()
             state = _read_request_budget()
             if not state or state.get("access_url_sha256") != fingerprint:
-                # Existing installs may already have made requests today, but
-                # that history was not recorded. Fail closed for this UTC day.
-                state = {
-                    "access_url_sha256": fingerprint,
-                    "utc_date": today,
-                    "requests_today": SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY,
-                    "last_request_at": None,
-                    "unknown_usage": True,
-                }
+                state = _legacy_unknown_budget_state(access_url, now)
                 _write_request_budget(state)
+
+            cutoff = now.timestamp() - 24 * 60 * 60
+            try:
+                timestamps = [float(item) for item in state.get("request_timestamps", []) if float(item) > cutoff]
+            except (TypeError, ValueError):
+                timestamps = []
+            unknown_until = state.get("unknown_until")
+            try:
+                unknown_until = float(unknown_until) if unknown_until is not None else None
+            except (TypeError, ValueError):
+                unknown_until = None
+            unknown_usage = bool(state.get("unknown_usage")) and bool(unknown_until and unknown_until > now.timestamp())
+
+            if unknown_usage:
+                reset_at = datetime.fromtimestamp(unknown_until, timezone.utc).isoformat()
                 raise SimpleFINDailyLimitError(
-                    "SimpleFIN request history is not yet tracked. Sync will resume after the daily quota resets.",
-                    requests_today=SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY,
-                    reset_at=_next_utc_reset(now).isoformat(),
+                    "Previous SimpleFIN request usage was not tracked. Sync is held until that 24-hour window expires.",
+                    requests_last_24h=SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
+                    reset_at=reset_at,
                 )
-
-            if state.get("utc_date") != today:
-                state.update({
-                    "utc_date": today,
-                    "requests_today": 0,
-                    "last_request_at": None,
-                    "unknown_usage": False,
-                })
-
-            count = int(state.get("requests_today", 0) or 0)
-            if state.get("unknown_usage") or count >= SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY:
-                _write_request_budget(state)
+            if len(timestamps) >= SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS:
+                reset_at = datetime.fromtimestamp(min(timestamps) + 24 * 60 * 60, timezone.utc).isoformat()
                 raise SimpleFINDailyLimitError(
-                    "The conservative SimpleFIN daily request budget is exhausted. Sync will resume after the UTC day resets.",
-                    requests_today=min(count, SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY),
-                    reset_at=_next_utc_reset(now).isoformat(),
+                    "The rolling 24-hour SimpleFIN request budget is exhausted; pending ranges remain queued.",
+                    requests_last_24h=len(timestamps),
+                    reset_at=reset_at,
                 )
 
             last_request = state.get("last_request_at")
@@ -188,11 +233,13 @@ def _reserve_simplefin_request(access_url: str) -> dict:
                 time.sleep(wait_seconds)
                 continue
 
+            timestamps.append(now.timestamp())
             state.update({
-                "utc_date": today,
-                "requests_today": count + 1,
+                "access_url_sha256": fingerprint,
+                "request_timestamps": timestamps,
                 "last_request_at": now.timestamp(),
                 "unknown_usage": False,
+                "unknown_until": None,
             })
             _write_request_budget(state)
             return _request_budget_status(access_url)
@@ -251,11 +298,11 @@ def _decode_base64(text: str):
         return None
 
 
-def _store_access_url(access_url: str):
+def _store_access_url(access_url: str, *, fresh: bool = False):
     if not access_url:
         raise ValueError("Empty SimpleFIN access URL.")
     normalized = access_url.strip()
-    _initialize_request_budget(normalized)
+    _initialize_request_budget(normalized, fresh=fresh)
     set_setting(ACCESS_URL_KEY, normalized)
 
 
@@ -320,7 +367,9 @@ def _resolve_candidate(candidate: str):
 
     # If it's a claim URL, claim it once and store the resulting access URL.
     if "/claim/" in decoded or decoded.rstrip("/").endswith("/claim"):
-        return _claim_setup_url(decoded)
+        access_url = _claim_setup_url(decoded)
+        _store_access_url(access_url, fresh=True)
+        return access_url
 
     # If it already looks like an access URL after decoding, accept it.
     if _looks_like_access_url(decoded):
@@ -332,7 +381,7 @@ def _resolve_candidate(candidate: str):
 def set_simplefin_token(token: str):
     """Save a raw SimpleFIN access URL securely to the database settings."""
     logger.info("Saving SimpleFIN access URL to DB...")
-    _store_access_url(token)
+    _store_access_url(token, fresh=True)
     return True
 
 
@@ -353,7 +402,7 @@ def claim_simplefin_setup_token(setup_token: str):
 
         access_url = _claim_setup_url(claim_url)
         logger.info("Successfully received SimpleFIN access URL.")
-        _store_access_url(access_url)
+        _store_access_url(access_url, fresh=True)
         logger.info("SimpleFIN access URL saved.")
         _record_sync_state("success", "SimpleFIN token claimed successfully")
         return {"status": "success", "message": "Successfully claimed SimpleFIN token"}
@@ -370,10 +419,10 @@ def get_dashboard_status():
     budget = _request_budget_status(token)
     if progress:
         progress.update({
-            "requests_today": budget["requests_today"],
-            "daily_request_limit": budget["daily_limit"],
-            "requests_remaining": budget["requests_remaining"],
-            "utc_day_resets_at": budget["utc_day_resets_at"],
+            "requests_last_24h": budget["requests_last_24h"],
+            "request_limit_24h": budget["limit_24h"],
+            "requests_remaining_24h": budget["requests_remaining"],
+            "next_request_at": budget["next_request_at"],
         })
     return {
         "connected": bool(token),
@@ -556,10 +605,10 @@ def _fetch_simplefin_payload(access_url: str, start_ts: int | None = None, end_t
 
     budget = _reserve_simplefin_request(access_url)
     _write_sync_progress(
-        requests_today=budget["requests_today"],
-        daily_request_limit=budget["daily_limit"],
-        requests_remaining=budget["requests_remaining"],
-        utc_day_resets_at=budget["utc_day_resets_at"],
+        requests_last_24h=budget["requests_last_24h"],
+        request_limit_24h=budget["limit_24h"],
+        requests_remaining_24h=budget["requests_remaining"],
+        next_request_at=budget["next_request_at"],
     )
     if on_reserved:
         on_reserved()
@@ -1012,10 +1061,10 @@ def _set_sync_progress(sync_id: str, state: str, phase: str, message: str, warni
         covered_days=history["covered_days"],
         target_days=history["target_days_total"],
         accounts_count=len(history["accounts"]),
-        requests_today=budget["requests_today"],
-        daily_request_limit=budget["daily_limit"],
-        requests_remaining=budget["requests_remaining"],
-        utc_day_resets_at=budget["utc_day_resets_at"],
+        requests_last_24h=budget["requests_last_24h"],
+        request_limit_24h=budget["limit_24h"],
+        requests_remaining_24h=budget["requests_remaining"],
+        next_request_at=budget["next_request_at"],
     )
 
 
@@ -1288,7 +1337,7 @@ def fetch_and_sync_simplefin():
             if pending_sync:
                 message += " Some ranges remain unverified; see Settings → Data History for their status."
             budget = _request_budget_status(access_url)
-            message += f" SimpleFIN requests today: {budget['requests_today']}/{budget['daily_limit']}."
+            message += f" SimpleFIN requests in the last 24 hours: {budget['requests_last_24h']}/{budget['limit_24h']}."
 
             _record_sync_state("pending" if pending_sync else "success", message)
             _set_sync_progress(
@@ -1340,8 +1389,8 @@ def fetch_and_sync_simplefin():
                 "status": "in_progress",
                 "message": message,
                 "rate_limited": True,
-                "requests_today": exc.requests_today,
-                "daily_request_limit": SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY,
+                "requests_last_24h": exc.requests_last_24h,
+                "request_limit_24h": SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
                 "resume_at": exc.reset_at,
                 "sync_progress": _read_sync_progress(),
             }

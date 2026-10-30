@@ -272,18 +272,19 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertEqual(history[0]["gaps"], [])
         self.assertGreater(fetch.call_count, 6)
 
-    def test_daily_request_budget_is_persisted_and_caps_at_twelve(self):
+    def test_rolling_request_budget_is_persisted_and_caps_at_documented_limit(self):
         set_setting(simplefin.SIMPLEFIN_REQUEST_BUDGET_KEY, "")
         simplefin._initialize_request_budget(simplefin.get_simplefin_token())
         with patch.object(simplefin, "SIMPLEFIN_MIN_REQUEST_INTERVAL_SECONDS", 0):
-            for _ in range(simplefin.SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY):
+            for _ in range(simplefin.SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS):
                 simplefin._reserve_simplefin_request(simplefin.get_simplefin_token())
             with self.assertRaises(simplefin.SimpleFINDailyLimitError):
                 simplefin._reserve_simplefin_request(simplefin.get_simplefin_token())
-        self.assertEqual(simplefin._request_budget_status(simplefin.get_simplefin_token())["requests_today"], 12)
+        self.assertEqual(simplefin._request_budget_status(simplefin.get_simplefin_token())["requests_last_24h"], 24)
 
-    def test_unknown_legacy_request_count_fails_closed_until_next_utc_day(self):
+    def test_unknown_legacy_request_count_fails_closed_for_24_hours(self):
         set_setting(simplefin.SIMPLEFIN_REQUEST_BUDGET_KEY, "")
+        set_setting("last_sync_at", simplefin._utc_now().isoformat())
         access_url = simplefin.get_simplefin_token()
         with self.assertRaises(simplefin.SimpleFINDailyLimitError):
             simplefin._reserve_simplefin_request(access_url)
@@ -291,7 +292,7 @@ class SimpleFinSyncTests(unittest.TestCase):
         tomorrow = simplefin._utc_now() + simplefin.timedelta(days=1)
         with patch.object(simplefin, "_utc_now", return_value=tomorrow), patch.object(simplefin, "SIMPLEFIN_MIN_REQUEST_INTERVAL_SECONDS", 0):
             budget = simplefin._reserve_simplefin_request(access_url)
-        self.assertEqual(budget["requests_today"], 1)
+        self.assertEqual(budget["requests_last_24h"], 1)
 
     def test_coverage_uses_successful_responses_not_transaction_activity(self):
         now = int(simplefin._utc_now().timestamp())

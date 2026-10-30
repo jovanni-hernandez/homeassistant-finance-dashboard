@@ -627,18 +627,18 @@ def main():
             driver.execute_script("window.__financeSetSyncProgress(arguments[0]);", {
                 "sync_id": sync_test_id, "state": "running", "phase": "account_backfill",
                 "message": "Backfilling account history", "coverage_percent": 42,
-                "covered_days": 153, "target_days": 365, "requests_today": 3,
-                "daily_request_limit": 12, "requests_remaining": 9,
+                "covered_days": 153, "target_days": 365, "requests_last_24h": 3,
+                "request_limit_24h": 24, "requests_remaining_24h": 21,
             })
             progress_banner = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sync-progress-banner"]'))
             )
             sync_progress_checks["progress_status_is_displayed"] = (
                 "153 of 365 account-days verified" in progress_banner.text
-                and "3/12 today" in progress_banner.text
+                and "3/24 in the last 24 hours" in progress_banner.text
             )
             driver.save_screenshot(str(sync_progress_screenshot))
-            driver.find_element(By.CSS_SELECTOR, '[data-testid="sync-progress-dismiss"]').click()
+            driver.execute_script("document.querySelector('[data-testid=\"sync-progress-dismiss\"]')?.click()")
             WebDriverWait(driver, args.timeout).until(
                 lambda current: not current.find_elements(By.CSS_SELECTOR, '[data-testid="sync-progress-banner"]')
             )
@@ -646,14 +646,14 @@ def main():
             driver.execute_script("window.__financeSetSyncProgress(arguments[0]);", {
                 "sync_id": sync_test_id + "-next", "state": "paused", "phase": "account_backfill",
                 "message": "Waiting for daily request budget", "coverage_percent": 42,
-                "covered_days": 153, "target_days": 365, "requests_today": 12,
-                "daily_request_limit": 12, "requests_remaining": 0,
+                "covered_days": 153, "target_days": 365, "requests_last_24h": 24,
+                "request_limit_24h": 24, "requests_remaining_24h": 0,
             })
             WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sync-progress-banner"]'))
             )
             sync_progress_checks["new_sync_reappears_after_dismissal"] = True
-            driver.find_element(By.CSS_SELECTOR, '[data-testid="sync-progress-dismiss"]').click()
+            driver.execute_script("document.querySelector('[data-testid=\"sync-progress-dismiss\"]')?.click()")
             driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight)")
             header_scroll_checks = driver.execute_script("""
                 const compactBar = document.querySelector('#app > div.sticky');
@@ -670,8 +670,10 @@ def main():
             theme_checks = {
                 "dark_ha_theme_detected": True,
                 "light_ha_theme_detected": True,
+                "dark_data_history_has_no_horizontal_overflow": True,
             }
             dark_mode_screenshot = None
+            dark_data_history_screenshot = None
             if test_mode == "real-fastapi-isolated-db":
                 original_primary_background = driver.execute_script(
                     "return document.documentElement.style.getPropertyValue('--primary-background-color');"
@@ -685,6 +687,19 @@ def main():
                 )
                 dark_mode_screenshot = screenshot.with_name(screenshot.stem + "-dark-mode" + screenshot.suffix)
                 driver.save_screenshot(str(dark_mode_screenshot))
+                driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+                driver.find_element(By.CSS_SELECTOR, '[data-testid="settings-nav-data-history"]').click()
+                dark_history_panel = WebDriverWait(driver, args.timeout).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="data-history-settings"]'))
+                )
+                dark_data_history_screenshot = screenshot.with_name(screenshot.stem + "-data-history-dark" + screenshot.suffix)
+                driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", dark_history_panel)
+                driver.save_screenshot(str(dark_data_history_screenshot))
+                theme_checks["dark_data_history_has_no_horizontal_overflow"] = driver.execute_script(
+                    "return document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
+                )
+                driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+                driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
                 driver.execute_script("document.documentElement.style.setProperty('--primary-background-color', '#fafafa');")
                 WebDriverWait(driver, args.timeout).until(
                     lambda current: "finance-dark-mode" not in current.find_element(By.TAG_NAME, "html").get_attribute("class")
@@ -2125,6 +2140,7 @@ def main():
                 "account_filter_screenshot": str(account_filter_screenshot) if account_filter_screenshot else None,
                 "spending_pie_screenshot": str(spending_pie_screenshot) if spending_pie_screenshot else None,
                 "dark_mode_screenshot": str(dark_mode_screenshot) if dark_mode_screenshot else None,
+                "dark_data_history_screenshot": str(dark_data_history_screenshot) if dark_data_history_screenshot else None,
                 "assets_screenshot": str(assets_screenshot) if assets_screenshot else None,
                 "checks": checks,
                 "external_script_urls": external_script_urls,

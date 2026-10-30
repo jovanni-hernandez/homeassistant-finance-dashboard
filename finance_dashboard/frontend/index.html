@@ -40,20 +40,39 @@
         html.finance-dark-mode input::placeholder,
         html.finance-dark-mode textarea::placeholder { color: #94a3b8 !important; }
         html.finance-dark-mode .bg-emerald-50 { background-color: #052e25 !important; }
+        html.finance-dark-mode .text-emerald-950 { color: #d1fae5 !important; }
+        html.finance-dark-mode .text-emerald-900,
+        html.finance-dark-mode .text-emerald-800 { color: #a7f3d0 !important; }
         html.finance-dark-mode .text-emerald-700 { color: #6ee7b7 !important; }
         html.finance-dark-mode .border-emerald-200 { border-color: #065f46 !important; }
         html.finance-dark-mode .bg-amber-50 { background-color: #422006 !important; }
+        html.finance-dark-mode .text-amber-950 { color: #fef3c7 !important; }
+        html.finance-dark-mode .text-amber-900 { color: #fde68a !important; }
+        html.finance-dark-mode .text-amber-800 { color: #fcd34d !important; }
+        html.finance-dark-mode .text-amber-600 { color: #fbbf24 !important; }
         html.finance-dark-mode .text-amber-700 { color: #fcd34d !important; }
         html.finance-dark-mode .border-amber-200 { border-color: #92400e !important; }
         html.finance-dark-mode .bg-sky-50 { background-color: #082f49 !important; }
+        html.finance-dark-mode .text-sky-950 { color: #e0f2fe !important; }
+        html.finance-dark-mode .text-sky-900 { color: #bae6fd !important; }
+        html.finance-dark-mode .text-sky-800 { color: #7dd3fc !important; }
         html.finance-dark-mode .text-sky-700,
         html.finance-dark-mode .text-sky-600 { color: #7dd3fc !important; }
         html.finance-dark-mode .border-sky-200 { border-color: #075985 !important; }
         html.finance-dark-mode .bg-violet-50 { background-color: #2e1065 !important; }
+        html.finance-dark-mode .text-violet-950 { color: #ede9fe !important; }
+        html.finance-dark-mode .text-violet-900 { color: #ddd6fe !important; }
+        html.finance-dark-mode .text-violet-800 { color: #c4b5fd !important; }
         html.finance-dark-mode .text-violet-700 { color: #c4b5fd !important; }
         html.finance-dark-mode .border-violet-200 { border-color: #5b21b6 !important; }
         html.finance-dark-mode .bg-red-50,
         html.finance-dark-mode .bg-rose-50 { background-color: #450a0a !important; }
+        html.finance-dark-mode .text-red-950,
+        html.finance-dark-mode .text-rose-950 { color: #ffe4e6 !important; }
+        html.finance-dark-mode .text-red-900,
+        html.finance-dark-mode .text-rose-900 { color: #fecdd3 !important; }
+        html.finance-dark-mode .text-red-800,
+        html.finance-dark-mode .text-rose-800 { color: #fda4af !important; }
         html.finance-dark-mode .text-red-700,
         html.finance-dark-mode .text-rose-700 { color: #fca5a5 !important; }
         html.finance-dark-mode .border-red-200,
@@ -281,8 +300,8 @@
                     </div>
                 </div>
                 <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-800">
-                    <span>SimpleFIN requests {{ status.sync_progress.requests_today ?? 0 }}/{{ status.sync_progress.daily_request_limit ?? 12 }} today</span>
-                    <span v-if="status.sync_progress.state === 'paused' && status.sync_progress.utc_day_resets_at">Next budget reset {{ formatDateTime(status.sync_progress.utc_day_resets_at) }}</span>
+                    <span>SimpleFIN requests {{ status.sync_progress.requests_last_24h ?? 0 }}/{{ status.sync_progress.request_limit_24h ?? 24 }} in the last 24 hours</span>
+                    <span v-if="status.sync_progress.state === 'paused' && status.sync_progress.next_request_at">Next request {{ formatDateTime(status.sync_progress.next_request_at) }}</span>
                 </div>
                 <p v-if="status.sync_progress.warning" data-testid="sync-progress-warning" class="mt-2 text-xs font-medium text-amber-900">{{ status.sync_progress.warning }}</p>
                 <button type="button" @click="setView('settings-data-history')" class="mt-3 text-xs font-semibold text-sky-800 underline decoration-sky-300 underline-offset-2">View account coverage and gaps</button>
@@ -1196,8 +1215,8 @@
                             <button type="button" data-testid="data-history-refresh" @click="fetchDataHistory" :disabled="dataHistoryLoading" class="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{{ dataHistoryLoading ? 'Refreshing…' : 'Refresh status' }}</button>
                         </div>
                         <div data-testid="data-history-request-budget" class="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
-                            SimpleFIN requests today: {{ status.simplefin_request_budget?.requests_today ?? 0 }}/{{ status.simplefin_request_budget?.daily_limit ?? 12 }} UTC-day budget · minimum 10 seconds between requests.
-                            <span v-if="status.simplefin_request_budget?.unknown_usage"> The previous request count was not tracked; sync is held until the next UTC-day reset.</span>
+                            SimpleFIN requests in the last 24 hours: {{ status.simplefin_request_budget?.requests_last_24h ?? 0 }}/{{ status.simplefin_request_budget?.limit_24h ?? 24 }} · minimum 10 seconds between requests.
+                            <span v-if="status.simplefin_request_budget?.unknown_usage"> Previous usage was not tracked; sync is held until the prior request window expires.</span>
                         </div>
                         <div v-if="dataHistoryMessage" data-testid="data-history-message" role="status" class="rounded-lg border px-4 py-3 text-sm" :class="dataHistoryError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ dataHistoryMessage }}</div>
                         <div v-if="dataHistoryLoading && !dataHistory.accounts.length" class="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Loading account history coverage…</div>
@@ -1211,7 +1230,7 @@
                                     </h3>
                                     <p class="mt-1 text-xs text-slate-500">{{ account.institution }} · {{ account.currency }} · Last received {{ account.last_received_at ? formatDateTime(account.last_received_at) : 'never' }}</p>
                                 </div>
-                                <strong class="text-sm text-slate-700">{{ account.coverage_percent }}% of last 12 months verified</strong>
+                                <strong class="text-sm text-slate-700">{{ account.coverage_percent }}% of 12 months verified as of {{ formatDateTime(account.coverage_as_of) }}</strong>
                             </div>
                             <div class="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" :aria-valuenow="account.coverage_percent" aria-valuemin="0" aria-valuemax="100" :aria-label="`${account.name} history coverage`">
                                 <div class="h-full rounded-full bg-sky-500" :style="{ width: `${account.coverage_percent}%` }"></div>
