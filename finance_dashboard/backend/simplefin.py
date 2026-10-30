@@ -76,7 +76,36 @@ def _read_request_budget() -> dict | None:
         state = json.loads(raw)
     except (TypeError, ValueError):
         return None
-    return state if isinstance(state, dict) else None
+    if not isinstance(state, dict):
+        return None
+    if "request_timestamps" not in state:
+        now = _utc_now()
+        legacy_count = max(0, min(SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS, int(state.get("requests_today", 0) or 0)))
+        legacy_last = state.get("last_request_at")
+        try:
+            legacy_last = float(legacy_last) if legacy_last is not None else None
+        except (TypeError, ValueError):
+            legacy_last = None
+        unknown = bool(state.get("unknown_usage"))
+        unknown_until = state.get("unknown_until")
+        try:
+            unknown_until = float(unknown_until) if unknown_until is not None else None
+        except (TypeError, ValueError):
+            unknown_until = None
+        if legacy_count and legacy_last is None and not unknown:
+            unknown = True
+        if unknown and unknown_until is None:
+            unknown_until = now.timestamp() + 24 * 60 * 60
+        timestamps = [legacy_last] * legacy_count if legacy_last is not None and not unknown else []
+        state = {
+            "access_url_sha256": state.get("access_url_sha256"),
+            "request_timestamps": timestamps,
+            "last_request_at": legacy_last,
+            "unknown_usage": unknown,
+            "unknown_until": unknown_until,
+        }
+        _write_request_budget(state)
+    return state
 
 
 def _write_request_budget(state: dict):

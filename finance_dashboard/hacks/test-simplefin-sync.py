@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import sys
 import tempfile
@@ -281,6 +282,22 @@ class SimpleFinSyncTests(unittest.TestCase):
             with self.assertRaises(simplefin.SimpleFINDailyLimitError):
                 simplefin._reserve_simplefin_request(simplefin.get_simplefin_token())
         self.assertEqual(simplefin._request_budget_status(simplefin.get_simplefin_token())["requests_last_24h"], 24)
+
+    def test_legacy_daily_budget_is_migrated_without_losing_usage(self):
+        access_url = simplefin.get_simplefin_token()
+        now = simplefin._utc_now()
+        set_setting(simplefin.SIMPLEFIN_REQUEST_BUDGET_KEY, json.dumps({
+            "access_url_sha256": simplefin._access_url_fingerprint(access_url),
+            "utc_date": now.date().isoformat(),
+            "requests_today": 8,
+            "last_request_at": now.timestamp() - 60,
+            "unknown_usage": False,
+        }))
+        budget = simplefin._request_budget_status(access_url)
+        self.assertEqual(budget["requests_last_24h"], 8)
+        self.assertEqual(budget["requests_remaining"], 16)
+        migrated = json.loads(get_setting(simplefin.SIMPLEFIN_REQUEST_BUDGET_KEY))
+        self.assertEqual(len(migrated["request_timestamps"]), 8)
 
     def test_unknown_legacy_request_count_fails_closed_for_24_hours(self):
         set_setting(simplefin.SIMPLEFIN_REQUEST_BUDGET_KEY, "")
