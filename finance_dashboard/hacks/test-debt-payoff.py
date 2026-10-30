@@ -26,7 +26,6 @@ os.chdir(BACKEND)
 
 from database import get_setting, init_db, save_simplefin_data, set_setting
 from debt_payoff import (
-    DebtPayoffEstimateError,
     DebtPayoffValidationError,
     SETTINGS_KEY,
     estimate_debt_terms_with_ai,
@@ -238,15 +237,24 @@ class DebtPayoffTests(unittest.TestCase):
         self.assertEqual(estimate["minimum_payment"], format(estimate_minimum_payment("12345.67", "23.5"), "f"))
         self.assertIn("unverified", estimate["note"].lower())
 
-    def test_ai_estimate_skips_accounts_without_a_distinct_institution_name(self):
+    def test_ai_estimate_uses_account_display_name_when_institution_is_not_distinct(self):
+        response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+            content='{"apr_percent":21,"note":"rough estimate"}',
+        ))])
         account = {
             "id": "private-account-id", "name": "Issuer-branded Card", "org": "Issuer-branded Card",
-            "balance": "500", "currency": "USD", "account_type": "credit_card",
+            "nickname": "Household Card", "balance": "500", "currency": "USD", "account_type": "credit_card",
         }
-        with patch("ai_chat._completion") as completion:
-            with self.assertRaisesRegex(DebtPayoffEstimateError, "institution name is unavailable"):
-                estimate_debt_terms_with_ai(account)
-        completion.assert_not_called()
+        with patch("debt_payoff.get_ai_settings", return_value={"enabled": True, "provider": "openai", "model": "test-model"}), \
+             patch("debt_payoff._provider_key", return_value="test-key"), \
+             patch("ai_chat._completion", return_value=response) as completion:
+            estimate_debt_terms_with_ai(account)
+        request_text = str(completion.call_args.args[2])
+        self.assertIn("Household Card", request_text)
+        self.assertNotIn("Issuer-branded Card", request_text)
+        self.assertNotIn("private-account-id", request_text)
+        self.assertNotIn("500", request_text)
+        self.assertNotIn("USD", request_text)
 
     def test_settings_are_encrypted_in_the_existing_settings_store(self):
         save_debt_payoff_settings(self.settings_payload(), self.accounts)

@@ -94,14 +94,16 @@ def _parse_apr_response(content: str) -> Decimal:
 
 
 def estimate_debt_terms_with_ai(account: dict) -> dict:
-    """Ask the configured LLM for APR using only a distinct institution name; compute minimum locally."""
+    """Ask the configured LLM for APR using an issuer/display name; compute minimum locally."""
     if not isinstance(account, dict) or account.get("account_type") not in LIABILITY_ACCOUNT_TYPES:
         raise DebtPayoffEstimateError("Choose an account classified as a liability first.")
 
+    account_name = str(account.get("nickname") or account.get("name") or "").strip()
     institution = str(account.get("org") or "").strip()
-    account_name = str(account.get("name") or "").strip()
-    if not institution or institution.casefold() in {"unknown", "account"} or institution.casefold() == account_name.casefold():
-        raise DebtPayoffEstimateError("A separate institution name is unavailable for this account, so AI estimation was skipped.")
+    if not institution or institution.casefold() in {"unknown", "account"} or institution.casefold() == str(account.get("name") or "").strip().casefold():
+        institution = account_name
+    if not institution or institution.casefold() in {"unknown", "account"}:
+        raise DebtPayoffEstimateError("No institution or account name is available for this estimate.")
 
     settings = get_ai_settings()
     if not settings["enabled"]:
@@ -113,7 +115,7 @@ def estimate_debt_terms_with_ai(account: dict) -> dict:
         raise DebtPayoffEstimateError(f"No API key is saved for the selected AI provider ({provider}).")
 
     system_message = (
-        "Estimate a plausible typical purchase APR for a consumer credit card issued by the named financial institution. "
+        "Estimate a plausible typical purchase APR for a consumer credit card issued by the named financial institution or account label. "
         "You do not have access to the customer's specific card terms or live web research. Give one cautious, rough APR "
         "estimate between 0 and 100 percent. If the institution is not a recognizable card issuer, use a broad current "
         "consumer-card estimate rather than claiming product-specific knowledge. Return only JSON: "
