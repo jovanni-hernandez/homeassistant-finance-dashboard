@@ -1032,21 +1032,22 @@
                     <aside data-testid="ai-goal-assistant" class="min-w-0 space-y-4">
                         <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
                             <h2 class="text-xl font-semibold text-slate-800">AI goal planner</h2>
-                            <p class="mt-1 text-sm text-slate-500">Talk through options for savings, debt payoff, or retirement.</p>
-                            <div class="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-950">
-                                <div class="font-semibold">What is shared</div>
-                                <p class="mt-1">The provider receives 12-month monthly totals by category and currency, balances grouped by account type and currency, and unnamed goal summaries. Account and institution names, IDs, manual-asset and goal names, and transaction payees/descriptions are not included.</p>
-                                <p class="mt-1">Your conversation is checked against known local identifiers and long account-like numbers. Review the complete request—including system instructions, aggregate snapshot, and sanitized conversation—before sending; unknown names may not be detected. The selected AI provider receives that request under its own data-retention terms. The exact preview is held in app memory for up to five minutes so sending uses what you reviewed; chat history remains browser-session-only.</p>
-                            </div>
+                            <p class="mt-1 text-sm text-slate-500">Plan savings, debt payoff, or retirement. Preview is optional.</p>
+                            <details data-testid="ai-chat-privacy-details" class="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-950">
+                                <summary class="cursor-pointer font-medium">Privacy & data sent</summary>
+                                <div class="pt-2">
+                                    The provider receives a minimized 12-month financial snapshot and sanitized conversation. Account and institution names, IDs, assets/goals names, and transaction payees/descriptions are excluded. Known local identifiers and long account-like numbers are redacted; unknown names may remain. Reviewing the full request is optional. The API key is never shown. Chat history stays in this browser session; a review preview is held in app memory for up to five minutes.
+                                </div>
+                            </details>
                             <div v-if="!aiChatReady" data-testid="ai-chat-setup-notice" class="mt-4 space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                                 <p>Enable AI assistance and configure a key for the selected provider in AI settings to start a chat.</p>
                                 <button type="button" @click="setView('settings-ai')" class="min-h-10 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium hover:bg-amber-100">Open AI settings</button>
                             </div>
                         </div>
 
-                        <div class="min-h-48 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4" aria-live="polite">
-                            <div v-if="!chatMessages.length" data-testid="ai-chat-welcome" class="rounded-xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-600">
-                                Ask about a savings pace, a debt payoff date, or what assumptions you need for retirement. I can suggest a draft; you choose its sources and save it yourself.
+                        <div ref="aiChatTranscript" data-testid="ai-chat-transcript" class="max-h-[50vh] min-h-32 space-y-3 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4" aria-live="polite">
+                            <div v-if="!chatMessages.length" data-testid="ai-chat-welcome" class="rounded-xl border border-slate-200 bg-white p-3 text-sm leading-5 text-slate-600">
+                                Tell me what you’re aiming for. I’ll suggest a draft; you choose sources and save it.
                             </div>
                             <article v-for="(message, index) in chatMessages" :key="index" :data-testid="message.role === 'user' ? 'ai-chat-user-message' : 'ai-chat-assistant-message'" class="max-w-[96%] rounded-2xl border p-3 text-sm" :class="message.role === 'user' ? 'ml-auto border-sky-200 bg-sky-50 text-slate-800' : 'border-slate-200 bg-white text-slate-700'">
                                 <div class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ message.role === 'user' ? 'You · sanitized' : 'Goal planner' }}</div>
@@ -1060,12 +1061,13 @@
                             </article>
                         </div>
 
-                        <form data-testid="ai-chat-composer" @submit.prevent="previewAIChatMessage" class="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+                        <form data-testid="ai-chat-composer" @submit.prevent="sendAIChatMessage" class="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
                             <label for="ai-chat-message" class="block text-sm font-medium text-slate-700">Message</label>
                             <textarea id="ai-chat-message" data-testid="ai-chat-message" v-model="chatMessageDraft" @input="clearAIChatPreview" maxlength="2000" rows="3" placeholder="Describe what you’re aiming for—avoid adding names the local filter may not know." class="mt-2 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm outline-none placeholder:text-slate-400 focus:border-sky-500 focus:ring-2 focus:ring-sky-100"></textarea>
                             <div class="mt-2 flex flex-col gap-2 sm:items-start sm:justify-between">
                                 <span class="text-xs text-slate-500">{{ chatMessageDraft.length }}/2000 characters · {{ aiSettingsProvider }} · {{ aiSettingsModel }}</span>
-                                <button type="submit" data-testid="ai-chat-preview-button" :disabled="chatPreviewLoading || chatSending || !chatMessageDraft.trim()" class="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{{ chatPreviewLoading ? 'Building preview…' : 'Preview everything sent' }}</button>
+                                <button type="submit" data-testid="ai-chat-send-button" :disabled="chatPreviewLoading || chatSending || !chatMessageDraft.trim() || !aiChatReady" class="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">{{ chatSending ? 'Sending…' : chatPreviewId ? `Send reviewed request to ${chatPreviewProvider}` : `Send to ${aiSettingsProvider}` }}</button>
+                                <button type="button" data-testid="ai-chat-preview-button" @click="previewAIChatMessage" :disabled="chatPreviewLoading || chatSending || !chatMessageDraft.trim() || !aiChatReady" class="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">{{ chatPreviewLoading ? 'Building preview…' : 'Preview full request (optional)' }}</button>
                             </div>
                             <div v-if="chatPreviewId" data-testid="chat-sanitized-preview" class="mt-4 space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
                                 <div>
@@ -1078,10 +1080,7 @@
                                         <pre :data-testid="message.role === 'system' ? 'chat-system-preview' : 'chat-conversation-preview'" class="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-slate-100 px-3 py-3 text-xs leading-5 text-slate-700">{{ message.content }}</pre>
                                     </details>
                                 </div>
-                                <div class="mt-3 flex flex-col gap-2">
-                                    <button type="button" data-testid="ai-chat-send-button" @click="sendAIChatMessage" :disabled="chatSending || !aiChatReady" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">{{ chatSending ? 'Sending…' : `Send this request to ${chatPreviewProvider}` }}</button>
-                                    <button type="button" @click="clearAIChatPreview" :disabled="chatSending" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
-                                </div>
+                                <button type="button" data-testid="ai-chat-preview-close" @click="clearAIChatPreview" :disabled="chatSending" class="inline-flex min-h-10 w-full items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Close preview</button>
                             </div>
                             <div v-if="chatError" data-testid="ai-chat-error" role="alert" class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{{ chatError }}</div>
                         </form>
@@ -1779,6 +1778,7 @@
                     gemini: aiGeminiApiKey.value,
                 })[aiSettingsProvider.value] || '');
                 const chatMessages = ref([]);
+                const aiChatTranscript = ref(null);
                 const chatMessageDraft = ref('');
                 const chatPreviewId = ref('');
                 const chatPreviewMessages = ref([]);
@@ -3025,29 +3025,37 @@
                     chatError.value = '';
                 };
 
+                const currentAIChatConversation = () => [
+                    ...chatMessages.value.slice(-18).map(({ role, content }) => ({ role, content })),
+                    { role: 'user', content: chatMessageDraft.value },
+                ];
+
+                const requestAIChatPreview = async (conversation) => {
+                    const response = await apiFetch('/api/ai/chat/preview', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        body: JSON.stringify({ messages: conversation }),
+                    });
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(data.detail || 'Could not prepare the AI request.');
+                    return data;
+                };
+
+                const showAIChatPreview = (data) => {
+                    chatPreviewId.value = data.preview_id || '';
+                    chatPreviewMessages.value = Array.isArray(data.messages) ? data.messages : [];
+                    chatPreviewProvider.value = data.provider || aiSettingsProvider.value;
+                    chatPreviewModel.value = data.model || aiSettingsModel.value;
+                    chatPreviewRedactionCount.value = Number(data.redaction_count || 0);
+                };
+
                 const previewAIChatMessage = async () => {
                     if (!chatMessageDraft.value.trim() || chatPreviewLoading.value || chatSending.value) return;
-                    chatPreviewLoading.value = true;
-                    chatError.value = '';
                     clearAIChatPreview();
                     chatPreviewLoading.value = true;
-                    const conversation = [
-                        ...chatMessages.value.slice(-18).map(({ role, content }) => ({ role, content })),
-                        { role: 'user', content: chatMessageDraft.value },
-                    ];
                     try {
-                        const response = await apiFetch('/api/ai/chat/preview', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                            body: JSON.stringify({ messages: conversation }),
-                        });
-                        const data = await response.json().catch(() => ({}));
-                        if (!response.ok) throw new Error(data.detail || 'Could not prepare the complete provider preview.');
-                        chatPreviewId.value = data.preview_id || '';
-                        chatPreviewMessages.value = Array.isArray(data.messages) ? data.messages : [];
-                        chatPreviewProvider.value = data.provider || aiSettingsProvider.value;
-                        chatPreviewModel.value = data.model || aiSettingsModel.value;
-                        chatPreviewRedactionCount.value = Number(data.redaction_count || 0);
+                        const data = await requestAIChatPreview(currentAIChatConversation());
+                        showAIChatPreview(data);
                     } catch (err) {
                         chatError.value = err.message;
                     } finally {
@@ -3056,15 +3064,28 @@
                 };
 
                 const sendAIChatMessage = async () => {
-                    if (!chatPreviewId.value || !aiChatReady.value || chatSending.value) return;
+                    if (!chatMessageDraft.value.trim() || !aiChatReady.value || chatSending.value || chatPreviewLoading.value) return;
                     chatSending.value = true;
                     chatError.value = '';
-                    const conversation = chatPreviewMessages.value.slice(1).map(({ role, content }) => ({ role, content }));
+                    let previewId = chatPreviewId.value;
+                    let conversation;
                     try {
+                        if (previewId) {
+                            conversation = chatPreviewMessages.value.slice(1).map(({ role, content }) => ({ role, content }));
+                        } else {
+                            // Preview remains optional: the server still sanitizes and prepares
+                            // the exact same payload before sending it to the provider.
+                            const data = await requestAIChatPreview(currentAIChatConversation());
+                            previewId = data.preview_id || '';
+                            conversation = Array.isArray(data.messages)
+                                ? data.messages.slice(1).map(({ role, content }) => ({ role, content }))
+                                : [];
+                            if (!previewId || !conversation.length) throw new Error('Could not prepare the AI request.');
+                        }
                         const response = await apiFetch('/api/ai/chat', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                            body: JSON.stringify({ preview_id: chatPreviewId.value }),
+                            body: JSON.stringify({ preview_id: previewId }),
                         });
                         const data = await response.json().catch(() => ({}));
                         if (!response.ok) throw new Error(data.detail || 'The AI chat request failed.');
@@ -3074,6 +3095,8 @@
                         ];
                         chatMessageDraft.value = '';
                         clearAIChatPreview();
+                        await nextTick();
+                        if (aiChatTranscript.value) aiChatTranscript.value.scrollTop = aiChatTranscript.value.scrollHeight;
                     } catch (err) {
                         chatError.value = err.message;
                     } finally {
@@ -4487,6 +4510,7 @@
                     aiPromptMessage,
                     aiChatReady,
                     chatMessages,
+                    aiChatTranscript,
                     chatMessageDraft,
                     chatPreviewId,
                     chatPreviewMessages,

@@ -444,11 +444,14 @@ def main():
                             {role: "system", content: "You help with goals. Sanitized aggregate financial snapshot (JSON): " + JSON.stringify({monthly_activity: [{currency: "USD", spending_by_category: [{category: "Groceries", amount: 500}]}]})},
                             ...conversation
                           ];
-                          window.__testAiChatPreviewId = "test-preview-capability-1234567890abcdef";
+                          window.__testAiChatPreviewSequence = (window.__testAiChatPreviewSequence || 0) + 1;
+                          window.__testAiChatPreviewId = `test-preview-capability-${window.__testAiChatPreviewSequence}-1234567890abcdef`;
+                          window.__testAiChatPreviewConversations = [...(window.__testAiChatPreviewConversations || []), conversation];
                           return new Response(JSON.stringify({preview_id: window.__testAiChatPreviewId, provider: "openai", model: "gpt-4o-mini", messages, redaction_count: 2}), {status: 200, headers: {"Content-Type": "application/json"}});
                         }
                         if (url.endsWith("/api/ai/chat")) {
                           window.__testAiChatSentPreviewId = JSON.parse(args[1]?.body || "{}").preview_id;
+                          window.__testAiChatSentPreviewIds = [...(window.__testAiChatSentPreviewIds || []), window.__testAiChatSentPreviewId];
                           return new Response(JSON.stringify({
                             reply: "A savings goal draft can help turn that target into a plan.",
                             goal_draft: {goal_type: "savings", name: "Emergency fund", target_amount: "10000", target_date: "2030-12-31"}
@@ -1635,8 +1638,10 @@ def main():
 
             ai_chat_checks = {
                 "assistant_is_embedded_in_goals": False,
+                "send_without_review_succeeds": False,
                 "preview_shows_system_prompt_and_financial_context": False,
                 "sanitized_preview_removes_known_identifiers": False,
+                "multi_turn_history_is_preserved": False,
                 "send_uses_the_reviewed_preview": False,
                 "sanitized_chat_can_be_sent": False,
                 "goal_draft_opens_review_form": False,
@@ -1652,16 +1657,44 @@ def main():
             )
             ai_chat_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-message"]')
             ai_chat_input.send_keys("Help me plan with Travel Card 123456789 for Groceries and about $500 monthly.")
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); arguments[0].click();", driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-send-button"]'))
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: len(current.find_elements(By.CSS_SELECTOR, '[data-testid="ai-chat-assistant-message"]')) == 1
+            )
+            direct_user_message = driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-user-message"]').text
+            ai_chat_checks["send_without_review_succeeds"] = (
+                not driver.find_elements(By.CSS_SELECTOR, '[data-testid="chat-sanitized-preview"]')
+                and driver.execute_script("return window.__testAiChatSentPreviewIds.length") == 1
+                and driver.execute_script("return window.__testAiChatSentPreviewIds[0]")
+                == driver.execute_script("return window.__testAiChatPreviewConversations[0] && window.__testAiChatPreviewId")
+                and "Travel Card" not in direct_user_message
+                and "123456789" not in direct_user_message
+            )
+            ai_chat_checks["sanitized_chat_can_be_sent"] = (
+                "savings goal draft" in driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-assistant-message"]').text.lower()
+                and "Travel Card" not in direct_user_message
+            )
+
+            ai_chat_input = driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-message"]')
+            ai_chat_input.send_keys("Can you refine that plan and account for a longer retirement horizon?")
             driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-preview-button"]').click()
             system_preview = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="chat-system-preview"]'))
             )
-            driver.find_element(By.XPATH, "//details[.//summary[contains(., 'Conversation')]]/summary").click()
+            conversation_summaries = driver.find_elements(By.XPATH, "//details[.//summary[contains(., 'Conversation')]]/summary")
+            for summary in conversation_summaries:
+                summary.click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: len(current.find_elements(By.CSS_SELECTOR, '[data-testid="chat-conversation-preview"]')) >= 3
+            )
             sanitized_chat_element = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="chat-conversation-preview"]'))
             )
             system_preview_text = system_preview.text
-            sanitized_chat_message = sanitized_chat_element.text
+            conversation_preview_texts = [
+                element.text for element in driver.find_elements(By.CSS_SELECTOR, '[data-testid="chat-conversation-preview"]')
+            ]
+            sanitized_chat_message = conversation_preview_texts[0] if conversation_preview_texts else ""
             ai_chat_checks["preview_shows_system_prompt_and_financial_context"] = (
                 "You help with goals" in system_preview_text
                 and "monthly_activity" in system_preview_text
@@ -1674,24 +1707,26 @@ def main():
                 and "Groceries" in sanitized_chat_message
                 and "$500" in sanitized_chat_message
             )
+            ai_chat_checks["multi_turn_history_is_preserved"] = (
+                len(conversation_preview_texts) >= 3
+                and "savings goal draft" in " ".join(conversation_preview_texts).lower()
+                and "longer retirement horizon" in " ".join(conversation_preview_texts).lower()
+            )
             ai_chat_screenshot = screenshot.with_name(screenshot.stem + "-ai-chat-preview" + screenshot.suffix)
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sanitized_chat_element)
             driver.save_screenshot(str(ai_chat_screenshot))
-            driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-send-button"]').click()
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); arguments[0].click();", driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-send-button"]'))
             WebDriverWait(driver, args.timeout).until(
-                lambda current: current.execute_script("return !!window.__testAiChatSentPreviewId")
+                lambda current: current.execute_script("return window.__testAiChatSentPreviewIds.length") == 2
             )
             ai_chat_checks["send_uses_the_reviewed_preview"] = (
-                driver.execute_script("return window.__testAiChatSentPreviewId")
+                driver.execute_script("return window.__testAiChatSentPreviewIds[1]")
                 == driver.execute_script("return window.__testAiChatPreviewId")
             )
-            assistant_message = WebDriverWait(driver, args.timeout).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="ai-chat-assistant-message"]'))
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: len(current.find_elements(By.CSS_SELECTOR, '[data-testid="ai-chat-assistant-message"]')) == 2
             )
-            ai_chat_checks["sanitized_chat_can_be_sent"] = (
-                "savings goal draft" in assistant_message.text.lower()
-                and "Travel Card" not in driver.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-user-message"]').text
-            )
+            assistant_message = driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-chat-assistant-message"]')[-1]
             draft_button = assistant_message.find_element(By.CSS_SELECTOR, '[data-testid="ai-chat-review-goal-draft"]')
             draft_button.click()
             WebDriverWait(driver, args.timeout).until(
