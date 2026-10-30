@@ -1540,6 +1540,7 @@ def main():
             settings_navigation_checks["data_history_page_has_coverage_and_retry"] = (
                 bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-request-budget"]'))
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-account"]'))
+                and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="account-stale-warning"]'))
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-gap"]'))
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-retry"]'))
             )
