@@ -934,6 +934,108 @@
                         </div>
                     </div>
 
+                    <section data-testid="debt-payoff-planner" class="space-y-4 rounded-2xl border border-sky-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <div class="text-xs font-semibold uppercase tracking-wide text-sky-700">Your payoff journey</div>
+                                <h3 class="mt-1 text-lg font-semibold text-slate-900">Debt snowball planner</h3>
+                                <p class="mt-1 max-w-3xl text-sm leading-5 text-slate-600">Estimate your payoff pace from deposits to your dedicated payment account. Linked balances update with SimpleFIN; APRs and minimums are your assumptions.</p>
+                            </div>
+                            <span v-if="debtPayoffPlan?.progress_percent > 0" data-testid="debt-payoff-progress-badge" class="inline-flex w-fit items-center rounded-full border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-800">{{ debtPayoffPlan.progress_percent }}% of this journey complete</span>
+                        </div>
+
+                        <div v-if="debtPayoffMessage" data-testid="debt-payoff-message" role="status" class="rounded-lg border px-3 py-2 text-sm" :class="debtPayoffError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ debtPayoffMessage }}</div>
+
+                        <form data-testid="debt-payoff-settings" @submit.prevent="saveDebtPayoffSettings" class="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+                            <div class="grid gap-3 sm:grid-cols-2">
+                                <label class="block text-sm font-medium text-slate-700">Payment staging account
+                                    <select data-testid="debt-payoff-funding-account" v-model="debtPayoffForm.funding_account_id" @change="changeDebtPayoffFunding" required class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm">
+                                        <option value="">Choose a bank / cash account</option>
+                                        <option v-for="account in debtPayoffPlan?.funding_accounts || []" :key="account.id" :value="String(account.id)">{{ account.name }} · {{ account.currency }}</option>
+                                    </select>
+                                </label>
+                                <label class="block text-sm font-medium text-slate-700">Current target debt
+                                    <select data-testid="debt-payoff-current-target" v-model="debtPayoffForm.current_target_account_id" :disabled="!debtPayoffEligibleLiabilities.length" required class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm disabled:bg-slate-100">
+                                        <option value="">Choose a liability</option>
+                                        <option v-for="debt in debtPayoffEligibleLiabilities" :key="debt.id" :value="String(debt.id)">{{ debt.name }} · {{ formatCurrency(debt.balance, debt.currency) }}</option>
+                                    </select>
+                                </label>
+                                <label class="block text-sm font-medium text-slate-700">Next-debt strategy
+                                    <select data-testid="debt-payoff-strategy" v-model="debtPayoffForm.strategy" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm">
+                                        <option value="highest_balance">Highest balance first</option>
+                                        <option value="lowest_balance">Lowest balance first</option>
+                                        <option value="highest_apr">Highest APR first</option>
+                                        <option value="manual">My custom order</option>
+                                    </select>
+                                </label>
+                                <label class="block text-sm font-medium text-slate-700">Monthly payment budget override (optional)
+                                    <input data-testid="debt-payoff-budget-override" v-model="debtPayoffForm.monthly_budget_override" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="Use six-month deposit average" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" />
+                                </label>
+                            </div>
+
+                            <div v-if="!debtPayoffPlan?.funding_accounts?.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Classify your staging account as Bank / cash in Settings → General to use it here.</div>
+                            <div v-else-if="!debtPayoffPlan?.liabilities?.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Classify at least one credit card or loan as a liability in Settings → General to build a payoff plan.</div>
+                            <div v-if="debtPayoffForm.funding_account_id && !debtPayoffEligibleLiabilities.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">No classified liabilities use the same currency as this staging account. Choose another funding account or review account classifications.</div>
+                            <p v-if="debtPayoffPlan?.deposit_average && String(debtPayoffForm.funding_account_id) === String(debtPayoffPlan.settings?.funding_account_id)" data-testid="debt-payoff-deposit-average" class="text-sm text-slate-600">Recent deposits to {{ debtPayoffPlan.funding_account_name }} averaged <strong class="text-slate-800">{{ formatCurrency(debtPayoffPlan.deposit_average.monthly_average, debtPayoffPlan.currency) }}/month</strong> over {{ debtPayoffPlan.deposit_average.window_months }} months ({{ formatCurrency(debtPayoffPlan.deposit_average.total_deposits, debtPayoffPlan.currency) }} total). The staging account’s current balance is not added to the estimate.</p>
+                            <p v-else-if="debtPayoffForm.funding_account_id" data-testid="debt-payoff-deposit-average-pending" class="text-sm text-slate-600">Save the selected staging account to calculate its six-month deposit average.</p>
+
+                            <div v-if="debtPayoffEligibleLiabilities.length" class="space-y-3 border-t border-slate-200 pt-3">
+                                <div>
+                                    <h4 class="text-sm font-semibold text-slate-800">Debt assumptions</h4>
+                                    <p class="mt-1 text-xs leading-5 text-slate-500">Enter each debt’s APR and required monthly minimum. We pay all minimums first and direct the remaining budget to your target.</p>
+                                </div>
+                                <div class="grid gap-3 md:grid-cols-2">
+                                    <div v-for="debt in debtPayoffEligibleLiabilities" :key="debt.id" data-testid="debt-payoff-term-row" class="grid min-w-0 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr),minmax(6rem,0.7fr),minmax(7rem,0.8fr)] sm:items-end">
+                                        <div class="min-w-0 sm:pb-2"><div class="truncate text-sm font-medium text-slate-800">{{ debt.name }}</div><div class="text-xs text-slate-500">Balance {{ formatCurrency(debt.balance, debt.currency) }}</div></div>
+                                        <label class="block text-xs font-medium text-slate-600">APR %<input :data-testid="`debt-payoff-apr-${debt.id}`" v-model="debtPayoffTerms[String(debt.id)].apr_percent" type="number" min="0" max="100" step="0.01" inputmode="decimal" required class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2.5 text-sm text-slate-800" /></label>
+                                        <label class="block text-xs font-medium text-slate-600">Minimum / month<input :data-testid="`debt-payoff-minimum-${debt.id}`" v-model="debtPayoffTerms[String(debt.id)].minimum_payment" type="number" min="0.01" step="0.01" inputmode="decimal" required class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2.5 text-sm text-slate-800" /></label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div v-if="debtPayoffForm.strategy === 'manual' && debtPayoffManualOrder.length" class="space-y-2 border-t border-slate-200 pt-3">
+                                <h4 class="text-sm font-semibold text-slate-800">Custom next-debt order</h4>
+                                <div v-for="(debt, index) in debtPayoffManualOrder" :key="debt.id" class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                                    <span class="min-w-0 truncate text-sm font-medium text-slate-700">{{ index + 1 }}. {{ debt.name }}</span>
+                                    <div class="flex shrink-0 gap-1"><button type="button" :aria-label="`Move ${debt.name} up`" @click="moveDebtPayoffDebt(debt.id, -1)" :disabled="index === 0" class="min-h-9 rounded border border-slate-300 px-2 text-sm text-slate-700 disabled:opacity-40">↑</button><button type="button" :aria-label="`Move ${debt.name} down`" @click="moveDebtPayoffDebt(debt.id, 1)" :disabled="index === debtPayoffManualOrder.length - 1" class="min-h-9 rounded border border-slate-300 px-2 text-sm text-slate-700 disabled:opacity-40">↓</button></div>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                <button data-testid="debt-payoff-save" type="submit" :disabled="savingDebtPayoff || debtPayoffLoading || !debtPayoffPlan?.funding_accounts?.length || !debtPayoffEligibleLiabilities.length" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50">{{ savingDebtPayoff ? 'Saving…' : 'Save payoff plan' }}</button>
+                                <span class="text-xs leading-5 text-slate-500">{{ debtPayoffPlan?.deposit_average?.history_complete ? 'Six-month deposit history is verified.' : 'Check Settings → Data History if older deposits are still being backfilled.' }}</span>
+                            </div>
+                        </form>
+
+                        <div v-if="debtPayoffPlan && debtPayoffPlan.settings?.funding_account_id" data-testid="debt-payoff-results" class="space-y-4 rounded-xl border border-sky-200 bg-white p-4 sm:p-5">
+                            <p class="text-sm leading-5 text-slate-700">{{ debtPayoffStatusMessage(debtPayoffPlan) }}</p>
+                            <p v-if="debtPayoffPlan.history_warning" data-testid="debt-payoff-history-warning" role="status" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-5 text-amber-900">Deposit history may be incomplete or stale, so the estimated monthly budget could be understated. Review Data History before relying on the date.</p>
+                            <div v-if="debtPayoffPlan.missing_term_account_ids?.length" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">Complete the APR and minimum-payment fields above for every outstanding debt.</div>
+                            <div v-if="debtPayoffPlan.status === 'below_minimums'" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">Estimated budget {{ formatCurrency(debtPayoffPlan.monthly_budget, debtPayoffPlan.currency) }} · configured minimums {{ formatCurrency(debtPayoffPlan.minimum_total, debtPayoffPlan.currency) }}.</div>
+
+                            <div class="grid gap-3 sm:grid-cols-3">
+                                <div class="rounded-lg bg-slate-50 p-3"><div class="text-xs font-medium text-slate-500">Estimated monthly budget</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ formatCurrency(debtPayoffPlan.monthly_budget || '0', debtPayoffPlan.currency || 'USD') }}</div><div v-if="debtPayoffPlan.settings.monthly_budget_override" class="text-xs text-slate-500">Manual override</div><div v-else class="text-xs text-slate-500">Six-month deposit average</div></div>
+                                <div class="rounded-lg bg-slate-50 p-3"><div class="text-xs font-medium text-slate-500">Outstanding balances</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ formatCurrency(debtPayoffPlan.total_balance || '0', debtPayoffPlan.currency || 'USD') }}</div><div class="text-xs text-slate-500">Across {{ debtPayoffPlan.liabilities?.filter((debt) => Number(debt.balance) > 0 && debt.currency === debtPayoffPlan.currency).length || 0 }} debts</div></div>
+                                <div class="rounded-lg bg-slate-50 p-3"><div class="text-xs font-medium text-slate-500">Estimated debt-free date</div><div class="mt-1 text-lg font-semibold text-slate-900">{{ debtPayoffPlan.projected_payoff_date ? formatGoalDate(debtPayoffPlan.projected_payoff_date) : 'Not available yet' }}</div><div v-if="debtPayoffPlan.total_interest" class="text-xs text-slate-500">Estimated interest {{ formatCurrency(debtPayoffPlan.total_interest, debtPayoffPlan.currency) }}</div></div>
+                            </div>
+
+                            <div v-if="debtPayoffPlan.starting_total_balance > 0" class="space-y-2">
+                                <div class="flex items-center justify-between gap-3 text-sm"><span class="font-medium text-slate-700">Debt-free progress</span><span class="font-semibold text-slate-800">{{ debtPayoffPlan.progress_percent }}%</span></div>
+                                <div class="h-3 overflow-hidden rounded-full bg-slate-100" role="progressbar" :aria-valuenow="debtPayoffPlan.progress_percent" aria-valuemin="0" aria-valuemax="100" aria-label="Debt payoff journey progress"><div class="h-full rounded-full bg-sky-600 transition-all" :style="{ width: `${debtPayoffPlan.progress_percent}%` }"></div></div>
+                                <div class="flex flex-wrap gap-2" aria-label="Debt payoff milestones"><span v-for="milestone in debtPayoffPlan.milestones" :key="milestone.percent" :data-testid="`debt-payoff-milestone-${milestone.percent}`" class="rounded-full border px-2.5 py-1 text-xs font-medium" :class="milestone.achieved ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-slate-50 text-slate-500'">{{ milestone.achieved ? 'Reached' : 'Next' }} · {{ milestone.percent }}%</span></div>
+                            </div>
+
+                            <div v-if="debtPayoffPlan.debt_results?.length" class="space-y-2 border-t border-slate-200 pt-3">
+                                <h4 class="text-sm font-semibold text-slate-800">Projected payoff checkpoints</h4>
+                                <div v-for="(debt, index) in debtPayoffPlan.debt_results" :key="debt.account_id" class="flex flex-col gap-1 rounded-lg border border-slate-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                    <span class="min-w-0 text-sm font-medium text-slate-800"><span class="mr-1 text-xs font-semibold text-sky-700">{{ index + 1 }}</span>{{ debt.name }}<span v-if="debt.account_id === debtPayoffPlan.effective_target_account_id" class="ml-2 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800">Current target</span></span>
+                                    <span class="text-sm text-slate-600">{{ debt.payoff_date ? formatGoalDate(debt.payoff_date) : 'Beyond estimate horizon' }}</span>
+                                </div>
+                            </div>
+                            <p class="text-xs leading-5 text-slate-500">Illustrative estimate only. Actual issuer minimums, payment timing, new charges, rate changes, fees, and incomplete account history can change results. This planner does not make payments.</p>
+                        </div>
+                    </section>
+
                     <div v-if="goalMessage" data-testid="goal-message" class="rounded-lg border px-4 py-3 text-sm" :class="goalError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ goalMessage }}</div>
 
                     <div v-if="goalCreationMode === 'choose'" data-testid="goal-method-choice" class="grid gap-4 sm:grid-cols-2">
@@ -1834,6 +1936,35 @@
                 const manualAssetError = ref(false);
                 const goals = ref([]);
                 const goalsLoading = ref(false);
+                const debtPayoffPlan = ref(null);
+                const debtPayoffLoading = ref(false);
+                const savingDebtPayoff = ref(false);
+                const debtPayoffMessage = ref('');
+                const debtPayoffError = ref(false);
+                const debtPayoffForm = ref({
+                    funding_account_id: '',
+                    current_target_account_id: '',
+                    strategy: 'highest_balance',
+                    monthly_budget_override: '',
+                    manual_order: [],
+                });
+                const debtPayoffTerms = ref({});
+                const debtPayoffEligibleLiabilities = computed(() => {
+                    const funding = (debtPayoffPlan.value?.funding_accounts || []).find(
+                        (account) => String(account.id) === String(debtPayoffForm.value.funding_account_id),
+                    );
+                    if (!funding) return [];
+                    return (debtPayoffPlan.value?.liabilities || []).filter(
+                        (debt) => String(debt.currency || 'USD').toUpperCase() === String(funding.currency || 'USD').toUpperCase(),
+                    );
+                });
+                const debtPayoffManualOrder = computed(() => {
+                    const configured = debtPayoffForm.value.manual_order || [];
+                    const rank = new Map(configured.map((id, index) => [String(id), index]));
+                    return [...debtPayoffEligibleLiabilities.value].sort((left, right) =>
+                        (rank.get(String(left.id)) ?? configured.length) - (rank.get(String(right.id)) ?? configured.length),
+                    );
+                });
                 const goalCreationMode = ref('closed');
                 const goalFormOpen = ref(false);
                 const editingGoalId = ref('');
@@ -2382,6 +2513,14 @@
                     dataHistoryError.value = false;
                     accounts.value = [];
                     transactions.value = [];
+                    debtPayoffPlan.value = null;
+                    debtPayoffForm.value = {
+                        funding_account_id: '', current_target_account_id: '', strategy: 'highest_balance',
+                        monthly_budget_override: '', manual_order: [],
+                    };
+                    debtPayoffTerms.value = {};
+                    debtPayoffMessage.value = '';
+                    debtPayoffError.value = false;
                     selectedAccountIds.value = [];
                     recurringItems.value = [];
                     recurringSummary.value = { subscription_count: 0, recurring_bill_count: 0, recurring_income_count: 0, other_count: 0 };
@@ -2655,6 +2794,104 @@
                     }
                 };
 
+                const fetchDebtPayoffPlan = async () => {
+                    if (!pinStatus.value.session_active) return;
+                    debtPayoffLoading.value = true;
+                    try {
+                        const response = await apiFetch('/api/debt-payoff');
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || 'Could not load the payoff planner.');
+                        debtPayoffPlan.value = data;
+                        debtPayoffForm.value = {
+                            ...data.settings,
+                            monthly_budget_override: data.settings?.monthly_budget_override ?? '',
+                            manual_order: (data.settings?.manual_order || []).map(String),
+                        };
+                        debtPayoffTerms.value = Object.fromEntries(
+                            (data.liabilities || []).map((debt) => [String(debt.id), {
+                                apr_percent: debt.apr_percent ?? '',
+                                minimum_payment: debt.minimum_payment ?? '',
+                            }]),
+                        );
+                    } catch (err) {
+                        debtPayoffError.value = true;
+                        debtPayoffMessage.value = err.message || 'Could not load the payoff planner.';
+                    } finally {
+                        debtPayoffLoading.value = false;
+                    }
+                };
+
+                const changeDebtPayoffFunding = () => {
+                    const eligibleIds = debtPayoffEligibleLiabilities.value.map((debt) => String(debt.id));
+                    if (!eligibleIds.includes(String(debtPayoffForm.value.current_target_account_id))) {
+                        debtPayoffForm.value.current_target_account_id = '';
+                    }
+                    debtPayoffForm.value.manual_order = [
+                        ...debtPayoffForm.value.manual_order.filter((id) => eligibleIds.includes(String(id))),
+                        ...eligibleIds.filter((id) => !debtPayoffForm.value.manual_order.map(String).includes(id)),
+                    ];
+                };
+
+                const moveDebtPayoffDebt = (accountId, direction) => {
+                    const order = debtPayoffManualOrder.value.map((debt) => String(debt.id));
+                    const index = order.indexOf(String(accountId));
+                    const nextIndex = index + Number(direction);
+                    if (index < 0 || nextIndex < 0 || nextIndex >= order.length) return;
+                    [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
+                    debtPayoffForm.value.manual_order = order;
+                };
+
+                const saveDebtPayoffSettings = async () => {
+                    savingDebtPayoff.value = true;
+                    debtPayoffMessage.value = '';
+                    debtPayoffError.value = false;
+                    try {
+                        const debtTerms = debtPayoffEligibleLiabilities.value.map((debt) => ({
+                            account_id: String(debt.id),
+                            apr_percent: debtPayoffTerms.value[String(debt.id)]?.apr_percent ?? '',
+                            minimum_payment: debtPayoffTerms.value[String(debt.id)]?.minimum_payment ?? '',
+                        }));
+                        const response = await apiFetch('/api/debt-payoff', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                ...debtPayoffForm.value,
+                                debt_terms: debtTerms,
+                                manual_order: debtPayoffForm.value.manual_order.map(String),
+                            }),
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || 'Could not save payoff planner settings.');
+                        debtPayoffPlan.value = data;
+                        debtPayoffForm.value = {
+                            ...data.settings,
+                            monthly_budget_override: data.settings?.monthly_budget_override ?? '',
+                            manual_order: (data.settings?.manual_order || []).map(String),
+                        };
+                        debtPayoffTerms.value = Object.fromEntries(
+                            (data.liabilities || []).map((debt) => [String(debt.id), {
+                                apr_percent: debt.apr_percent ?? '', minimum_payment: debt.minimum_payment ?? '',
+                            }]),
+                        );
+                        debtPayoffMessage.value = 'Payoff plan saved. Your projection uses the latest linked balances and the assumptions shown.';
+                    } catch (err) {
+                        debtPayoffError.value = true;
+                        debtPayoffMessage.value = err.message || 'Could not save payoff planner settings.';
+                    } finally {
+                        savingDebtPayoff.value = false;
+                    }
+                };
+
+                const debtPayoffStatusMessage = (plan) => ({
+                    setup_required: 'Choose a funding account and your current target debt to build the projection.',
+                    no_debts: 'There are no outstanding liabilities in the selected currency. That is worth celebrating.',
+                    needs_terms: 'Enter an APR and minimum payment for each outstanding debt to estimate interest and payoff timing.',
+                    no_budget: 'No incoming deposits were found in the six-month window. Add a monthly budget override to see a projection.',
+                    below_minimums: 'The estimated monthly budget is below the configured minimum payments. Review the budget or minimums before relying on a payoff date.',
+                    beyond_horizon: 'At this pace, the debts are not projected to clear within the 100-year estimate window.',
+                    projected: 'Minimums are covered; the remaining estimated payment is directed to your current target, then rolled to the next debt.',
+                }[plan?.status] || 'Choose the planner assumptions and save to see your projection.');
+
                 const fetchDataHistory = async ({ background = false } = {}) => {
                     if (!pinStatus.value.session_active) return;
                     dataHistoryLoading.value = !background;
@@ -2696,7 +2933,7 @@
                 };
 
                 const fetchProtectedState = async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAppLogSettings(), fetchPlanningSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals(), fetchDataHistory()]);
+                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAppLogSettings(), fetchPlanningSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals(), fetchDebtPayoffPlan(), fetchDataHistory()]);
                     await nextTick();
                     renderSankey();
                     renderSpendingPie();
@@ -5042,6 +5279,20 @@
                     setView,
                     syncData,
                     fetchDataHistory,
+                    debtPayoffPlan,
+                    debtPayoffLoading,
+                    savingDebtPayoff,
+                    debtPayoffMessage,
+                    debtPayoffError,
+                    debtPayoffForm,
+                    debtPayoffTerms,
+                    debtPayoffEligibleLiabilities,
+                    debtPayoffManualOrder,
+                    fetchDebtPayoffPlan,
+                    changeDebtPayoffFunding,
+                    moveDebtPayoffDebt,
+                    saveDebtPayoffSettings,
+                    debtPayoffStatusMessage,
                     retryAccountHistoryGap,
                     fetchRecurringRules,
                     fetchRecurringPayments,

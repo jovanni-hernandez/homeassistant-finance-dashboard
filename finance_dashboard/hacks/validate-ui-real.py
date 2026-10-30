@@ -167,6 +167,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/data-history",
         "api/manual-assets",
         "api/goals",
+        "api/debt-payoff",
         "api/transactions",
         "api/category-rules",
         "api/recurring-rules",
@@ -434,8 +435,31 @@ def main():
                     "source": r'''(() => {
                       const nativeFetch = window.fetch.bind(window);
                       let injectedSourceTransaction = null;
+                      const debtPayoffFixture = {
+                        settings: {funding_account_id: "test-account-checking-main", current_target_account_id: "test-debt-large", strategy: "highest_balance", monthly_budget_override: null, manual_order: ["test-debt-large", "test-debt-small"]},
+                        funding_accounts: [{id: "test-account-checking-main", name: "Checking", currency: "USD"}],
+                        liabilities: [
+                          {id: "test-debt-large", name: "Travel Card", balance: "5200.00", currency: "USD", apr_percent: "19.9", minimum_payment: "150.00"},
+                          {id: "test-debt-small", name: "Everyday Card", balance: "800.00", currency: "USD", apr_percent: "22.9", minimum_payment: "40.00"}
+                        ],
+                        currency: "USD", funding_account_name: "Checking", current_target_name: "Travel Card",
+                        effective_target_account_id: "test-debt-large", payoff_order: ["test-debt-large", "test-debt-small"],
+                        deposit_average: {monthly_average: "1800.00", total_deposits: "10800.00", deposit_count: 12, window_start: "2026-04-30", window_end: "2026-10-30", window_months: 6, history_complete: true, history_stale: false},
+                        monthly_budget: "1800.00", total_balance: "6000.00", total_minimum_payment: "190.00", starting_total_balance: "8000.00", debt_paid: "2000.00", progress_percent: 25,
+                        milestones: [{percent: 25, achieved: true}, {percent: 50, achieved: false}, {percent: 75, achieved: false}, {percent: 100, achieved: false}],
+                        missing_term_account_ids: [], history_warning: false, status: "projected", minimum_total: "190.00", projected_months: 5, projected_payoff_date: "2027-03-30", total_interest: "420.00",
+                        debt_results: [{account_id: "test-debt-large", name: "Travel Card", starting_balance: "5200.00", payoff_month: 4, payoff_date: "2027-02-28", paid_off: true}, {account_id: "test-debt-small", name: "Everyday Card", starting_balance: "800.00", payoff_month: 5, payoff_date: "2027-03-30", paid_off: true}]
+                      };
                       window.fetch = async (...args) => {
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
+                        if (url.endsWith("/api/debt-payoff")) {
+                          if (args[1]?.method === "PUT") {
+                            window.__testDebtPayoffSave = JSON.parse(args[1]?.body || "{}");
+                            debtPayoffFixture.settings = {...window.__testDebtPayoffSave};
+                            debtPayoffFixture.monthly_budget = debtPayoffFixture.settings.monthly_budget_override || "1800.00";
+                          }
+                          return new Response(JSON.stringify(debtPayoffFixture), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
                         if (url.endsWith("/api/planning/inflation/sync")) {
                           const body = JSON.parse(args[1]?.body || "{}");
                           window.__testInflationSyncWindow = body.window_years;
@@ -1662,6 +1686,10 @@ def main():
 
             goal_checks = {
                 "goals_page_opens": False,
+                "debt_payoff_planner_visible": False,
+                "deposit_average_and_milestones_visible": False,
+                "debt_payoff_settings_save": False,
+                "debt_payoff_dark_mode_readable": False,
                 "one_goal_creation_entry_point": False,
                 "add_button_hides_during_creation": False,
                 "debt_goal_fields_visible": False,
@@ -1677,12 +1705,80 @@ def main():
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goals-page"]'))
             )
             goal_checks["goals_page_opens"] = "Financial goals" in goals_page.text
+            planner = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="debt-payoff-planner"]'))
+            )
+            goal_checks["debt_payoff_planner_visible"] = (
+                "Debt snowball planner" in planner.text
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-current-target"]'))
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-strategy"]'))
+            )
+            goal_checks["deposit_average_and_milestones_visible"] = (
+                "1,800.00/month" in planner.text
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-milestone-25"]'))
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]'))
+            )
+            Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-funding-account"]')).select_by_value("test-account-checking-main")
+            Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-current-target"]')).select_by_value("test-debt-large")
+            Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-strategy"]')).select_by_value("highest_apr")
+            budget_override = driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-budget-override"]')
+            budget_override.clear()
+            budget_override.send_keys("2500")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-save"]').click()
+            try:
+                WebDriverWait(driver, args.timeout).until(
+                    lambda current: current.execute_script("return window.__testDebtPayoffSave?.strategy === 'highest_apr' && Number(window.__testDebtPayoffSave?.monthly_budget_override) === 2500")
+                )
+            except Exception:
+                driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-debt-payoff-failed" + screenshot.suffix)))
+                raise
+            goal_checks["debt_payoff_settings_save"] = (
+                "Estimated debt-free date" in driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]').text
+                and "2,500.00" in driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]').text
+            )
+            debt_planner_screenshot = screenshot.with_name(screenshot.stem + "-debt-payoff-planner" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", planner)
+            driver.save_screenshot(str(debt_planner_screenshot))
+            debt_payoff_results_screenshot = screenshot.with_name(screenshot.stem + "-debt-payoff-results" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]'))
+            driver.save_screenshot(str(debt_payoff_results_screenshot))
+            original_theme_background = driver.execute_script("return document.documentElement.style.getPropertyValue('--primary-background-color')")
+            driver.execute_script("document.documentElement.style.setProperty('--primary-background-color', '#111111')")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: "finance-dark-mode" in current.find_element(By.TAG_NAME, "html").get_attribute("class")
+            )
+            debt_planner_dark = driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-planner"]')
+            contrast = driver.execute_script(r"""
+                const luminance = (color) => {
+                  const values = color.match(/[\d.]+/g)?.slice(0, 3).map(Number) || [];
+                  if (values.length !== 3) return null;
+                  const channels = values.map((value) => {
+                    const normalized = value / 255;
+                    return normalized <= 0.04045 ? normalized / 12.92 : Math.pow((normalized + 0.055) / 1.055, 2.4);
+                  });
+                  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+                };
+                const text = getComputedStyle(document.querySelector('[data-testid="debt-payoff-planner"] .text-sky-700')).color;
+                const background = getComputedStyle(document.querySelector('[data-testid="debt-payoff-planner"]')).backgroundColor;
+                const a = luminance(text), b = luminance(background);
+                return a === null || b === null ? 0 : (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+            """)
+            goal_checks["debt_payoff_dark_mode_readable"] = float(contrast) >= 4.5
+            debt_payoff_dark_screenshot = screenshot.with_name(screenshot.stem + "-debt-payoff-dark" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", debt_planner_dark)
+            driver.save_screenshot(str(debt_payoff_dark_screenshot))
+            driver.execute_script("document.documentElement.style.setProperty('--primary-background-color', arguments[0] || '#fafafa')", original_theme_background)
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: "finance-dark-mode" not in current.find_element(By.TAG_NAME, "html").get_attribute("class")
+            )
             goal_checks["one_goal_creation_entry_point"] = (
                 len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-add-button"]')) == 1
                 and not driver.find_elements(By.XPATH, "//button[normalize-space()='Create your first goal']")
                 and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-goal-assistant"]')
             )
-            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]').click()
+            goal_add_button = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", goal_add_button)
+            goal_add_button.click()
             WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goal-method-choice"]'))
             )
@@ -1789,7 +1885,9 @@ def main():
             goals_page = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goals-page"]'))
             )
-            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]').click()
+            goal_add_button = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", goal_add_button)
+            goal_add_button.click()
             driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-method-ai"]').click()
             WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="ai-goal-assistant"]'))
@@ -2130,6 +2228,9 @@ def main():
                 "ai_settings_screenshot": str(screenshot.with_name(screenshot.stem + "-settings-ai" + screenshot.suffix)),
                 "ai_prompts_screenshot": str(ai_prompts_screenshot),
                 "goals_screenshot": str(goals_screenshot),
+                "debt_payoff_planner_screenshot": str(debt_planner_screenshot),
+                "debt_payoff_results_screenshot": str(debt_payoff_results_screenshot),
+                "debt_payoff_dark_screenshot": str(debt_payoff_dark_screenshot),
                 "dashboard_goals_screenshot": str(dashboard_goals_screenshot),
                 "goal_form_screenshot": str(goal_form_screenshot),
                 "goal_method_screenshot": str(goal_method_screenshot),

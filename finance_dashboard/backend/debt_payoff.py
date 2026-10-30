@@ -1,0 +1,413 @@
+"""Snowball-style payoff projections based on a dedicated funding account."""
+from __future__ import annotations
+
+import json
+from calendar import monthrange
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+from database import get_setting, set_setting
+from models import LIABILITY_ACCOUNT_TYPES, SessionLocal, Transaction
+
+SETTINGS_KEY = "debt_payoff_planner"
+CENT = Decimal("0.01")
+ZERO = Decimal("0")
+MAX_PROJECTION_MONTHS = 1200
+STRATEGIES = {"highest_balance", "lowest_balance", "highest_apr", "manual"}
+
+
+class DebtPayoffValidationError(ValueError):
+    pass
+
+
+def _decimal(value, label: str, *, required: bool = True, maximum: Decimal | None = None) -> Decimal | None:
+    if value is None or str(value).strip() == "":
+        if required:
+            raise DebtPayoffValidationError(f"{label} is required.")
+        return None
+    try:
+        amount = Decimal(str(value).strip())
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise DebtPayoffValidationError(f"{label} must be a number.") from exc
+    if not amount.is_finite() or amount < ZERO or (maximum is not None and amount > maximum):
+        qualifier = f"between 0 and {maximum}" if maximum is not None else "zero or greater"
+        raise DebtPayoffValidationError(f"{label} must be {qualifier}.")
+    if amount.adjusted() > 30 or amount.as_tuple().exponent < -18:
+        raise DebtPayoffValidationError(f"{label} is outside the supported range.")
+    return amount
+
+
+def _money(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value.quantize(CENT, rounding=ROUND_HALF_UP), "f")
+
+
+def _amount(value) -> Decimal:
+    try:
+        result = Decimal(str(value or "0"))
+        return result if result.is_finite() else ZERO
+    except (InvalidOperation, TypeError, ValueError):
+        return ZERO
+
+
+def _load_settings() -> dict:
+    raw = get_setting(SETTINGS_KEY)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+        return value if isinstance(value, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _subtract_months(value: date, months: int) -> date:
+    month_index = value.year * 12 + value.month - 1 - months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    return date(year, month, min(value.day, monthrange(year, month)[1]))
+
+
+def _display_name(account: dict) -> str:
+    return str(account.get("nickname") or account.get("name") or "Account")
+
+
+def _normalized_accounts(accounts: list[dict]) -> tuple[list[dict], list[dict]]:
+    funding = []
+    liabilities = []
+    for account in accounts:
+        kind = account.get("account_type")
+        item = {
+            "id": str(account.get("id") or ""),
+            "name": _display_name(account),
+            "currency": str(account.get("currency") or "USD").upper(),
+            "balance": _money(abs(_amount(account.get("balance")))) or "0.00",
+        }
+        if kind == "bank_account":
+            funding.append(item)
+        elif kind in LIABILITY_ACCOUNT_TYPES:
+            liabilities.append(item)
+    return funding, liabilities
+
+
+def _deposit_average(account_id: str, *, today: date, history: dict | None) -> dict:
+    start_date = _subtract_months(today, 6)
+    start_ts = int(datetime.combine(start_date, time.min, timezone.utc).timestamp())
+    end_ts = int(datetime.combine(today + timedelta(days=1), time.min, timezone.utc).timestamp())
+    db = SessionLocal()
+    deposits = ZERO
+    deposit_count = 0
+    try:
+        rows = db.query(Transaction).filter(
+            Transaction.account_id == str(account_id),
+            Transaction.date >= start_ts,
+            Transaction.date < end_ts,
+            Transaction.pending.is_(False),
+        ).all()
+        for row in rows:
+            amount = _amount(row.amount)
+            if amount > ZERO:
+                deposits += amount
+                deposit_count += 1
+    finally:
+        db.close()
+
+    history_row = next(
+        (item for item in (history or {}).get("accounts", []) if str(item.get("account_id")) == str(account_id)),
+        None,
+    )
+    gaps = (history_row or {}).get("gaps", [])
+    has_gap = any(
+        int(gap.get("start_ts") or 0) < end_ts and int(gap.get("end_ts") or 0) > start_ts
+        for gap in gaps
+    )
+    history_complete = bool(history_row is not None and not has_gap)
+    average = (deposits / Decimal("6")).quantize(CENT, rounding=ROUND_HALF_UP)
+    return {
+        "monthly_average": _money(average),
+        "total_deposits": _money(deposits),
+        "deposit_count": deposit_count,
+        "window_start": start_date.isoformat(),
+        "window_end": today.isoformat(),
+        "window_months": 6,
+        "history_complete": history_complete,
+        "history_stale": bool(history_row.get("stale")) if history_row else True,
+    }
+
+
+def _strategy_order(debts: list[dict], strategy: str, manual_order: list[str]) -> list[dict]:
+    if strategy == "lowest_balance":
+        return sorted(debts, key=lambda debt: (Decimal(debt["balance"]), debt["name"].casefold(), debt["id"]))
+    if strategy == "highest_apr":
+        return sorted(debts, key=lambda debt: (-Decimal(debt["apr_percent"] or "0"), debt["name"].casefold(), debt["id"]))
+    if strategy == "manual":
+        rank = {str(account_id): index for index, account_id in enumerate(manual_order)}
+        return sorted(debts, key=lambda debt: (rank.get(debt["id"], len(rank)), debt["name"].casefold(), debt["id"]))
+    return sorted(debts, key=lambda debt: (-Decimal(debt["balance"]), debt["name"].casefold(), debt["id"]))
+
+
+def _month_date(start: date, month_offset: int) -> date:
+    month_index = start.year * 12 + start.month - 1 + month_offset
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    return date(year, month, min(start.day, monthrange(year, month)[1]))
+
+
+def _simulate(debts: list[dict], budget: Decimal, ordered_ids: list[str], today: date) -> dict:
+    balances = {debt["id"]: Decimal(debt["balance"]).quantize(CENT) for debt in debts}
+    terms = {debt["id"]: debt for debt in debts}
+    initial_total = sum(balances.values(), ZERO)
+    monthly_minimum = sum(
+        min(balances[debt["id"]], Decimal(debt["minimum_payment"]))
+        for debt in debts
+    )
+    if budget < monthly_minimum:
+        return {
+            "status": "below_minimums",
+            "minimum_total": _money(monthly_minimum),
+            "projected_months": None,
+            "projected_payoff_date": None,
+            "total_interest": None,
+            "debt_results": [],
+        }
+
+    paid_off_month: dict[str, int] = {}
+    total_interest = ZERO
+    for month in range(1, MAX_PROJECTION_MONTHS + 1):
+        due_by_id = {}
+        for account_id, balance in balances.items():
+            if balance <= ZERO:
+                continue
+            interest = (balance * Decimal(terms[account_id]["apr_percent"]) / Decimal("1200")).quantize(CENT, rounding=ROUND_HALF_UP)
+            total_interest += interest
+            due_by_id[account_id] = balance + interest
+
+        actual_minimums = ZERO
+        for account_id, due in due_by_id.items():
+            payment = min(due, Decimal(terms[account_id]["minimum_payment"]))
+            balances[account_id] = due - payment
+            actual_minimums += payment
+
+        extra = max(ZERO, budget - actual_minimums)
+        for account_id in ordered_ids:
+            if extra <= ZERO:
+                break
+            if balances.get(account_id, ZERO) <= ZERO:
+                continue
+            payment = min(balances[account_id], extra)
+            balances[account_id] -= payment
+            extra -= payment
+
+        for account_id, balance in balances.items():
+            if balance <= ZERO:
+                balances[account_id] = ZERO
+                paid_off_month.setdefault(account_id, month)
+        if sum(balances.values(), ZERO) <= ZERO:
+            break
+
+    projected_months = max(paid_off_month.values(), default=None)
+    complete = projected_months is not None
+    debt_results = []
+    for debt in debts:
+        payoff_month = paid_off_month.get(debt["id"])
+        debt_results.append({
+            "account_id": debt["id"],
+            "name": debt["name"],
+            "starting_balance": debt["balance"],
+            "payoff_month": payoff_month,
+            "payoff_date": _month_date(today, payoff_month).isoformat() if payoff_month else None,
+            "paid_off": payoff_month is not None,
+        })
+    debt_results.sort(key=lambda item: item["payoff_month"] or MAX_PROJECTION_MONTHS + 1)
+    return {
+        "status": "projected" if complete else "beyond_horizon",
+        "minimum_total": _money(monthly_minimum),
+        "projected_months": projected_months,
+        "projected_payoff_date": _month_date(today, projected_months).isoformat() if complete else None,
+        "total_interest": _money(total_interest) if complete else None,
+        "debt_results": debt_results,
+    }
+
+
+def get_debt_payoff_plan(accounts: list[dict], history: dict | None = None, *, today: date | None = None) -> dict:
+    today = today or datetime.now(timezone.utc).date()
+    settings = _load_settings()
+    funding_accounts, liabilities = _normalized_accounts(accounts)
+    funding_id = str(settings.get("funding_account_id") or "")
+    funding = next((account for account in funding_accounts if account["id"] == funding_id), None)
+    selected_terms = settings.get("debt_terms") if isinstance(settings.get("debt_terms"), dict) else {}
+    all_liabilities = []
+    for item in liabilities:
+        terms = selected_terms.get(item["id"], {})
+        all_liabilities.append({
+            **item,
+            "apr_percent": str(terms.get("apr_percent") or "").strip(),
+            "minimum_payment": str(terms.get("minimum_payment") or "").strip(),
+        })
+    same_currency_debts = [
+        debt for debt in all_liabilities
+        if funding and debt["currency"] == funding["currency"]
+    ]
+    debts = []
+    missing_terms = []
+    for item in same_currency_debts:
+        apr = item["apr_percent"]
+        minimum = item["minimum_payment"]
+        if Decimal(item["balance"]) > ZERO and (not apr or not minimum):
+            missing_terms.append(item["id"])
+        debts.append({**item, "apr_percent": apr, "minimum_payment": minimum})
+
+    strategy = settings.get("strategy") if settings.get("strategy") in STRATEGIES else "highest_balance"
+    manual_order = settings.get("manual_order") if isinstance(settings.get("manual_order"), list) else []
+    strategy_order = _strategy_order(debts, strategy, manual_order)
+    saved_manual_order = _strategy_order(debts, "manual", manual_order)
+    target_id = str(settings.get("current_target_account_id") or "")
+    active_ids = {debt["id"] for debt in debts if Decimal(debt["balance"]) > ZERO}
+    effective_target_id = target_id if target_id in active_ids else next((debt["id"] for debt in strategy_order if debt["id"] in active_ids), "")
+    payoff_order = ([effective_target_id] if effective_target_id else []) + [
+        debt["id"] for debt in strategy_order if debt["id"] != effective_target_id
+    ]
+    order_rank = {account_id: index for index, account_id in enumerate(payoff_order)}
+    debts.sort(key=lambda debt: order_rank.get(debt["id"], len(order_rank)))
+
+    deposit_data = _deposit_average(funding_id, today=today, history=history) if funding else None
+    override = _decimal(settings.get("monthly_budget_override"), "Monthly payment override", required=False)
+    monthly_budget = override if override is not None else _amount(deposit_data.get("monthly_average")) if deposit_data else None
+    total_balance = sum((Decimal(debt["balance"]) for debt in debts), ZERO)
+    minimum_total = sum((
+        min(Decimal(debt["balance"]), _amount(debt["minimum_payment"]))
+        for debt in debts if debt["minimum_payment"] and Decimal(debt["balance"]) > ZERO
+    ), ZERO)
+    baseline_map = settings.get("baseline_balances") if isinstance(settings.get("baseline_balances"), dict) else {}
+    starting_total = sum((_amount(baseline_map.get(debt["id"], debt["balance"])) for debt in debts), ZERO)
+    debt_paid = max(ZERO, starting_total - total_balance)
+    progress = Decimal("100") if starting_total == ZERO and total_balance == ZERO else (
+        max(ZERO, min(Decimal("100"), debt_paid * 100 / starting_total)) if starting_total > ZERO else ZERO
+    )
+    milestones = [
+        {"percent": percent, "achieved": progress >= Decimal(percent)}
+        for percent in (25, 50, 75, 100)
+    ]
+
+    if not funding:
+        simulation = {"status": "setup_required", "minimum_total": None, "projected_months": None, "projected_payoff_date": None, "total_interest": None, "debt_results": []}
+    elif not debts:
+        simulation = {"status": "no_debts", "minimum_total": "0.00", "projected_months": 0, "projected_payoff_date": today.isoformat(), "total_interest": "0.00", "debt_results": []}
+    elif not target_id:
+        simulation = {"status": "setup_required", "minimum_total": _money(minimum_total), "projected_months": None, "projected_payoff_date": None, "total_interest": None, "debt_results": []}
+    elif missing_terms:
+        simulation = {"status": "needs_terms", "minimum_total": _money(minimum_total), "projected_months": None, "projected_payoff_date": None, "total_interest": None, "debt_results": []}
+    elif monthly_budget is None or monthly_budget <= ZERO:
+        simulation = {"status": "no_budget", "minimum_total": _money(minimum_total), "projected_months": None, "projected_payoff_date": None, "total_interest": None, "debt_results": []}
+    else:
+        simulation = _simulate(debts, monthly_budget, payoff_order, today)
+
+    available_target = next((item for item in same_currency_debts if item["id"] == effective_target_id), None)
+    return {
+        "settings": {
+            "funding_account_id": funding_id if funding else "",
+            "current_target_account_id": target_id if target_id in {debt["id"] for debt in same_currency_debts} else "",
+            "strategy": strategy,
+            "monthly_budget_override": _money(override),
+            "manual_order": [item["id"] for item in saved_manual_order],
+        },
+        "funding_accounts": funding_accounts,
+        "liabilities": all_liabilities,
+        "currency": funding["currency"] if funding else None,
+        "funding_account_name": funding["name"] if funding else None,
+        "current_target_name": available_target["name"] if available_target else None,
+        "effective_target_account_id": effective_target_id,
+        "payoff_order": payoff_order,
+        "deposit_average": deposit_data,
+        "monthly_budget": _money(monthly_budget),
+        "total_balance": _money(total_balance),
+        "total_minimum_payment": _money(minimum_total),
+        "starting_total_balance": _money(starting_total),
+        "debt_paid": _money(debt_paid),
+        "progress_percent": round(float(progress), 1),
+        "milestones": milestones,
+        "missing_term_account_ids": missing_terms,
+        "history_warning": bool(deposit_data and (not deposit_data["history_complete"] or deposit_data["history_stale"])),
+        **simulation,
+    }
+
+
+def save_debt_payoff_settings(payload: dict, accounts: list[dict]) -> dict:
+    if not isinstance(payload, dict):
+        raise DebtPayoffValidationError("Planner settings must be an object.")
+    funding_accounts, liabilities = _normalized_accounts(accounts)
+    account_by_id = {str(account.get("id")): account for account in accounts}
+    funding_id = str(payload.get("funding_account_id") or "").strip()
+    funding = next((item for item in funding_accounts if item["id"] == funding_id), None)
+    if not funding:
+        raise DebtPayoffValidationError("Choose an existing bank / cash account for payment deposits.")
+    eligible = [item for item in liabilities if item["currency"] == funding["currency"]]
+    eligible_ids = {item["id"] for item in eligible}
+    target_id = str(payload.get("current_target_account_id") or "").strip()
+    if target_id not in eligible_ids:
+        raise DebtPayoffValidationError("Choose a liability in the same currency as the funding account.")
+    strategy = str(payload.get("strategy") or "highest_balance")
+    if strategy not in STRATEGIES:
+        raise DebtPayoffValidationError("Choose a supported payoff order.")
+    override = _decimal(payload.get("monthly_budget_override"), "Monthly payment override", required=False)
+    if override is not None and override <= ZERO:
+        raise DebtPayoffValidationError("Monthly payment override must be greater than zero, or left blank.")
+
+    terms_payload = payload.get("debt_terms") or []
+    if not isinstance(terms_payload, list) or len(terms_payload) > 100:
+        raise DebtPayoffValidationError("Debt APR and minimum payment details are invalid.")
+    settings = _load_settings()
+    existing_terms = settings.get("debt_terms") if isinstance(settings.get("debt_terms"), dict) else {}
+    terms = {
+        str(account_id): value
+        for account_id, value in existing_terms.items()
+        if isinstance(value, dict)
+    }
+    submitted_term_ids = set()
+    for row in terms_payload:
+        if not isinstance(row, dict):
+            raise DebtPayoffValidationError("Debt APR and minimum payment details are invalid.")
+        account_id = str(row.get("account_id") or "").strip()
+        if account_id not in eligible_ids or account_id in submitted_term_ids:
+            raise DebtPayoffValidationError("Choose valid, unique liability accounts for debt details.")
+        submitted_term_ids.add(account_id)
+        apr = _decimal(row.get("apr_percent"), "APR", required=False, maximum=Decimal("100"))
+        minimum = _decimal(row.get("minimum_payment"), "Minimum payment", required=False)
+        account = next(item for item in eligible if item["id"] == account_id)
+        if Decimal(account["balance"]) > ZERO and minimum == ZERO:
+            raise DebtPayoffValidationError("Minimum payment must be greater than zero for an outstanding debt.")
+        terms[account_id] = {
+            "apr_percent": _money(apr),
+            "minimum_payment": _money(minimum),
+        }
+
+    manual_order = payload.get("manual_order") or []
+    if not isinstance(manual_order, list) or len(manual_order) > len(eligible_ids):
+        raise DebtPayoffValidationError("Manual payoff order is invalid.")
+    manual_order = [str(item) for item in manual_order]
+    if len(manual_order) != len(set(manual_order)) or any(item not in eligible_ids for item in manual_order):
+        raise DebtPayoffValidationError("Manual payoff order must contain unique eligible liability accounts.")
+    previous_order = settings.get("manual_order") if isinstance(settings.get("manual_order"), list) else []
+    all_liability_ids = {item["id"] for item in liabilities}
+    manual_order += [
+        str(item) for item in previous_order
+        if str(item) in all_liability_ids and str(item) not in manual_order
+    ]
+    manual_order += [item["id"] for item in eligible if item["id"] not in manual_order]
+
+    baseline = settings.get("baseline_balances") if isinstance(settings.get("baseline_balances"), dict) else {}
+    for debt in eligible:
+        if debt["id"] not in baseline:
+            baseline[debt["id"]] = debt["balance"]
+    normalized = {
+        "funding_account_id": funding_id,
+        "current_target_account_id": target_id,
+        "strategy": strategy,
+        "monthly_budget_override": _money(override),
+        "debt_terms": terms,
+        "manual_order": manual_order,
+        "baseline_balances": baseline,
+    }
+    set_setting(SETTINGS_KEY, json.dumps(normalized, separators=(",", ":"), sort_keys=True))
+    return normalized

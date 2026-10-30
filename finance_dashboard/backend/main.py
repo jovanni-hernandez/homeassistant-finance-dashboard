@@ -31,6 +31,11 @@ from ai_prompts import AIPromptValidationError, get_ai_prompt_settings, save_ai_
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
 from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
+from debt_payoff import (
+    DebtPayoffValidationError,
+    get_debt_payoff_plan,
+    save_debt_payoff_settings,
+)
 from planning import PlanningSettingsError, get_planning_settings, save_planning_settings, sync_bls_inflation
 from database import (
     init_db,
@@ -219,6 +224,21 @@ class FinancialGoalRequest(BaseModel):
     inflation_percent: str | None = Field(default=None, max_length=12)
     monthly_income_target: str | None = Field(default=None, max_length=50)
     withdrawal_rate_percent: str | None = Field(default=None, max_length=12)
+
+
+class DebtPayoffTermRequest(BaseModel):
+    account_id: str = Field(min_length=1, max_length=256)
+    apr_percent: str | None = Field(default=None, max_length=20)
+    minimum_payment: str | None = Field(default=None, max_length=50)
+
+
+class DebtPayoffSettingsRequest(BaseModel):
+    funding_account_id: str = Field(min_length=1, max_length=256)
+    current_target_account_id: str = Field(min_length=1, max_length=256)
+    strategy: Literal["highest_balance", "lowest_balance", "highest_apr", "manual"] = "highest_balance"
+    monthly_budget_override: str | None = Field(default=None, max_length=50)
+    debt_terms: list[DebtPayoffTermRequest] = Field(default_factory=list, max_length=100)
+    manual_order: list[str] = Field(default_factory=list, max_length=100)
 
 
 class AIChatMessageRequest(BaseModel):
@@ -721,6 +741,27 @@ def api_get_goals():
     except Exception as exc:
         logger.error("Failed to query financial goals (%s).", type(exc).__name__)
         raise HTTPException(status_code=500, detail="Could not load financial goals.") from exc
+
+
+@app.get("/api/debt-payoff", dependencies=[Depends(verify_ha_auth)])
+def api_get_debt_payoff_plan():
+    try:
+        return get_debt_payoff_plan(get_stored_accounts(), simplefin.get_account_data_history())
+    except Exception as exc:
+        logger.error("Failed to calculate debt payoff plan (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not load the debt payoff plan.") from exc
+
+
+@app.put("/api/debt-payoff", dependencies=[Depends(verify_ha_auth)])
+def api_save_debt_payoff_plan(payload: DebtPayoffSettingsRequest):
+    try:
+        save_debt_payoff_settings(payload.dict(), get_stored_accounts())
+        return get_debt_payoff_plan(get_stored_accounts(), simplefin.get_account_data_history())
+    except DebtPayoffValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Failed to save debt payoff settings (%s).", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Could not save the debt payoff settings.") from exc
 
 
 @app.post("/api/goals", dependencies=[Depends(verify_ha_auth)])
