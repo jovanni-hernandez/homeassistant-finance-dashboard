@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey, Boolean, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from security import encrypt_value, decrypt_value
 
@@ -201,3 +201,23 @@ class Transaction(Base):
             "category": self.category or "Uncategorized",
             "pending": 1 if self.pending else 0
         }
+
+
+class AccountDataCoverage(Base):
+    """Audit of which account/date windows were requested and verified."""
+    __tablename__ = "account_data_coverage"
+    __table_args__ = (
+        UniqueConstraint("account_id", "start_ts", "end_ts", name="uq_account_coverage_window"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(String, index=True, nullable=False)
+    start_ts = Column(Integer, nullable=False)
+    end_ts = Column(Integer, nullable=False)
+    status = Column(String, default="pending", nullable=False)
+    source = Column(String, default="backfill", nullable=False)
+    attempts = Column(Integer, default=0, nullable=False)
+    error_code = Column(String, nullable=True)
+    last_attempt_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    retry_after = Column(DateTime, nullable=True)

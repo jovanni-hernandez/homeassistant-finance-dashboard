@@ -225,6 +225,14 @@
                         >
                             <span class="font-medium">AI</span>
                         </button>
+                        <button
+                            data-testid="settings-nav-data-history"
+                            @click="setView('settings-data-history')"
+                            class="flex w-full items-center rounded-lg px-4 py-2.5 text-left text-sm transition"
+                            :class="view === 'settings-data-history' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
+                        >
+                            <span class="font-medium">Data History</span>
+                        </button>
                     </div>
                     </div>
                     <button
@@ -254,6 +262,31 @@
             <div v-if="syncMessage" class="mb-4 rounded-lg border px-4 py-3 text-sm" :class="syncError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">
                 {{ syncMessage }}
             </div>
+
+            <section v-if="syncProgressBannerVisible" data-testid="sync-progress-banner" role="status" aria-live="polite" class="mb-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm sm:p-5">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <h2 class="text-sm font-semibold text-sky-950">{{ status.sync_progress.state === 'paused' ? 'History sync paused' : 'Syncing account history' }}</h2>
+                        <p class="mt-1 text-sm text-sky-900">{{ status.sync_progress.message }}</p>
+                    </div>
+                    <button type="button" data-testid="sync-progress-dismiss" @click="dismissSyncProgress" aria-label="Dismiss sync progress" title="Hide sync progress for this browser session" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sky-800 hover:bg-sky-100">×</button>
+                </div>
+                <div v-if="status.sync_progress.target_days > 0" class="mt-3">
+                    <div class="flex justify-between gap-3 text-xs text-sky-900">
+                        <span>{{ status.sync_progress.covered_days }} of {{ status.sync_progress.target_days }} account-days verified</span>
+                        <span>{{ status.sync_progress.coverage_percent }}%</span>
+                    </div>
+                    <div class="mt-1.5 h-2.5 overflow-hidden rounded-full bg-white" role="progressbar" :aria-valuenow="status.sync_progress.coverage_percent || 0" aria-valuemin="0" aria-valuemax="100" aria-label="Verified account history">
+                        <div class="h-full rounded-full bg-sky-600 transition-all" :style="{ width: `${status.sync_progress.coverage_percent || 0}%` }"></div>
+                    </div>
+                </div>
+                <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-800">
+                    <span>SimpleFIN requests {{ status.sync_progress.requests_today ?? 0 }}/{{ status.sync_progress.daily_request_limit ?? 12 }} today</span>
+                    <span v-if="status.sync_progress.state === 'paused' && status.sync_progress.utc_day_resets_at">Next budget reset {{ formatDateTime(status.sync_progress.utc_day_resets_at) }}</span>
+                </div>
+                <p v-if="status.sync_progress.warning" data-testid="sync-progress-warning" class="mt-2 text-xs font-medium text-amber-900">{{ status.sync_progress.warning }}</p>
+                <button type="button" @click="setView('settings-data-history')" class="mt-3 text-xs font-semibold text-sky-800 underline decoration-sky-300 underline-offset-2">View account coverage and gaps</button>
+            </section>
 
             <div v-if="loading" class="py-12 text-center text-slate-500">Loading financial data…</div>
 
@@ -441,7 +474,7 @@
                                 data-testid="account-filter-card"
                                 :data-account-id="account.id"
                                 :aria-pressed="selectedAccountIds.includes(String(account.id))"
-                                :aria-label="`Filter transactions by ${account.nickname || account.name} at ${account.org}${selectedAccountIds.includes(String(account.id)) ? ', selected' : ''}`"
+                                :aria-label="`Filter transactions by ${account.nickname || account.name} at ${account.org}${account.data_history?.stale ? ', data may be stale' : ''}${selectedAccountIds.includes(String(account.id)) ? ', selected' : ''}`"
                                 @click="toggleAccountFilter(account.id)"
                                 class="min-w-0 cursor-pointer rounded-xl border bg-white p-2.5 text-left shadow-sm transition sm:p-3"
                                 :class="selectedAccountIds.includes(String(account.id)) ? 'border-sky-500 ring-2 ring-sky-200' : 'border-slate-200 hover:border-sky-300'"
@@ -451,7 +484,10 @@
                                         <div class="truncate text-[10px] uppercase tracking-wide text-slate-500">{{ account.org }}</div>
                                         <div class="mt-0.5 truncate text-sm font-semibold text-slate-900">{{ account.nickname || account.name }}</div>
                                     </div>
-                                    <div data-testid="account-balance" class="shrink-0 whitespace-nowrap text-right text-sm font-bold" :class="accountBalanceClass(account)">{{ displayAccountBalance(account) }}</div>
+                                    <div class="flex shrink-0 items-center gap-1 whitespace-nowrap text-right">
+                                        <span v-if="account.data_history?.stale" data-testid="account-stale-warning" :title="account.data_history.last_received_at ? `Last successful account response ${formatDateTime(account.data_history.last_received_at)}` : 'No successful account response recorded yet'" class="text-amber-600" aria-label="Account data may be stale">▲</span>
+                                        <div data-testid="account-balance" class="text-sm font-bold" :class="accountBalanceClass(account)">{{ displayAccountBalance(account) }}</div>
+                                    </div>
                                 </div>
                                 <div class="mt-1 flex min-w-0 items-center justify-between gap-1">
                                     <span class="truncate text-[10px] text-slate-500">{{ accountTypeLabel(account.account_type) }}</span>
@@ -1141,18 +1177,55 @@
                     </div>
                 </section>
 
-                <section v-else-if="['settings-general', 'settings-categories', 'settings-ai'].includes(view)" class="space-y-6">
+                <section v-else-if="['settings-general', 'settings-categories', 'settings-ai', 'settings-data-history'].includes(view)" class="space-y-6">
                     <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                         <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                             <div>
-                                <h2 class="text-xl font-semibold text-slate-800">{{ view === 'settings-general' ? 'General settings' : view === 'settings-categories' ? 'Categories' : 'AI' }}</h2>
-                                <p class="mt-1 text-sm text-slate-500">{{ view === 'settings-general' ? 'Connection management, account classification, and security.' : view === 'settings-categories' ? 'Manage categories and the rules that assign them to transactions.' : 'Configure AI providers for category assistance and future AI features.' }}</p>
+                                <h2 class="text-xl font-semibold text-slate-800">{{ view === 'settings-general' ? 'General settings' : view === 'settings-categories' ? 'Categories' : view === 'settings-ai' ? 'AI' : 'Data History' }}</h2>
+                                <p class="mt-1 text-sm text-slate-500">{{ view === 'settings-general' ? 'Connection management, account classification, and security.' : view === 'settings-categories' ? 'Manage categories and the rules that assign them to transactions.' : view === 'settings-ai' ? 'Configure AI providers for category assistance and future AI features.' : 'See which account history ranges have been verified and retry gaps.' }}</p>
                             </div>
                             <button v-if="view === 'settings-general'" @click="syncData" :disabled="syncing" class="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 disabled:opacity-60">
                                 {{ syncing ? 'Syncing…' : 'Run sync now' }}
                             </button>
                         </div>
                     </div>
+
+                    <section v-if="view === 'settings-data-history'" data-testid="data-history-settings" class="space-y-4">
+                        <div class="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                        <div class="text-sm text-slate-600">Coverage means SimpleFIN successfully returned that account for the requested date range without an incomplete-data error. An empty range may simply have no transactions; it is not itself a gap. This verifies the response, not that an institution exposed every older record.</div>
+                            <button type="button" data-testid="data-history-refresh" @click="fetchDataHistory" :disabled="dataHistoryLoading" class="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{{ dataHistoryLoading ? 'Refreshing…' : 'Refresh status' }}</button>
+                        </div>
+                        <div data-testid="data-history-request-budget" class="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+                            SimpleFIN requests today: {{ status.simplefin_request_budget?.requests_today ?? 0 }}/{{ status.simplefin_request_budget?.daily_limit ?? 12 }} UTC-day budget · minimum 10 seconds between requests.
+                            <span v-if="status.simplefin_request_budget?.unknown_usage"> The previous request count was not tracked; sync is held until the next UTC-day reset.</span>
+                        </div>
+                        <div v-if="dataHistoryMessage" data-testid="data-history-message" role="status" class="rounded-lg border px-4 py-3 text-sm" :class="dataHistoryError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ dataHistoryMessage }}</div>
+                        <div v-if="dataHistoryLoading && !dataHistory.accounts.length" class="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Loading account history coverage…</div>
+                        <div v-else-if="!dataHistory.accounts.length" class="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-600">Connect an account to track its history coverage.</div>
+                        <article v-for="account in dataHistory.accounts" :key="account.account_id" data-testid="data-history-account" :data-account-id="account.account_id" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <h3 class="flex items-center gap-2 break-words text-base font-semibold text-slate-900">
+                                        {{ account.name }}
+                                        <span v-if="account.stale" data-testid="account-stale-warning" :title="account.last_received_at ? `Last successful account response ${formatDateTime(account.last_received_at)}` : 'No successful account response recorded yet'" :aria-label="account.stale ? 'Account data may be stale' : ''" class="text-amber-600">▲</span>
+                                    </h3>
+                                    <p class="mt-1 text-xs text-slate-500">{{ account.institution }} · {{ account.currency }} · Last received {{ account.last_received_at ? formatDateTime(account.last_received_at) : 'never' }}</p>
+                                </div>
+                                <strong class="text-sm text-slate-700">{{ account.coverage_percent }}% of last 12 months verified</strong>
+                            </div>
+                            <div class="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" :aria-valuenow="account.coverage_percent" aria-valuemin="0" aria-valuemax="100" :aria-label="`${account.name} history coverage`">
+                                <div class="h-full rounded-full bg-sky-500" :style="{ width: `${account.coverage_percent}%` }"></div>
+                            </div>
+                            <p v-if="account.latest_error_code" class="mt-2 text-xs text-amber-800">Latest provider status: {{ account.latest_error_code }}. The affected range remains unverified.</p>
+                            <div v-if="account.gaps.length" class="mt-3 space-y-2">
+                                <div v-for="gap in account.gaps" :key="`${gap.start_ts}-${gap.end_ts}`" data-testid="data-history-gap" class="flex flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <span class="text-xs text-amber-950">{{ gap.start_date }} – {{ gap.end_date }} · {{ gap.days }} day(s) · {{ gap.status }}<span v-if="gap.error_code"> ({{ gap.error_code }})</span></span>
+                                    <button v-if="gap.status !== 'pending'" type="button" data-testid="data-history-retry" @click="retryAccountHistoryGap(account, gap)" :disabled="!status.connected || status.sync_progress?.state === 'running' || retryingCoverageAccount === account.account_id" class="inline-flex min-h-9 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50">{{ retryingCoverageAccount === account.account_id ? 'Queueing…' : 'Retry this range' }}</button>
+                                </div>
+                            </div>
+                            <p v-else class="mt-3 text-sm text-emerald-700">No unverified gaps in the tracked 12-month window.</p>
+                        </article>
+                    </section>
 
                     <div v-if="view === 'settings-general'" class="grid gap-6 lg:grid-cols-2">
                         <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -1726,6 +1799,11 @@
                 const nowTick = ref(Date.now());
                 const currentYear = new Date().getFullYear();
                 const accounts = ref([]);
+                const dataHistory = ref({ accounts: [], overall_coverage_percent: 0, target_days: 365 });
+                const dataHistoryLoading = ref(false);
+                const dataHistoryMessage = ref('');
+                const dataHistoryError = ref(false);
+                const retryingCoverageAccount = ref('');
                 const transactions = ref([]);
                 const manualAssets = ref([]);
                 const manualAssetName = ref('');
@@ -1832,6 +1910,8 @@
                     session_timeout_minutes: 480,
                 });
                 const pinSessionToken = ref(sessionStorage.getItem(PIN_SESSION_KEY) || '');
+                const SYNC_PROGRESS_DISMISSED_KEY = 'finance-sync-progress-dismissed';
+                const syncProgressDismissedId = ref(sessionStorage.getItem(SYNC_PROGRESS_DISMISSED_KEY) || '');
                 const pinUnlockValue = ref('');
                 const pinLockMessage = ref('');
                 const pinLockError = ref(false);
@@ -1851,6 +1931,8 @@
                 const lastActivityAt = ref(Date.now());
                 let idleMonitor = null;
                 let clockInterval = null;
+                let lastSyncProgressPollAt = 0;
+                let syncStartupPollUntil = 0;
                 const categoryRulesText = ref('');
                 const categoryRulesMessage = ref('');
                 const categoryRulesError = ref(false);
@@ -2042,7 +2124,25 @@
                     last_sync_status: 'never',
                     last_sync_message: '',
                     last_sync_at: null,
+                    sync_progress: null,
+                    simplefin_request_budget: null,
                 });
+                const syncProgressBannerVisible = computed(() => {
+                    const progress = status.value.sync_progress;
+                    return view.value === 'dashboard'
+                        && ['running', 'paused'].includes(progress?.state)
+                        && progress?.sync_id !== syncProgressDismissedId.value;
+                });
+                const dismissSyncProgress = () => {
+                    const syncId = status.value.sync_progress?.sync_id;
+                    if (!syncId) return;
+                    syncProgressDismissedId.value = syncId;
+                    try {
+                        sessionStorage.setItem(SYNC_PROGRESS_DISMISSED_KEY, syncId);
+                    } catch (err) {
+                        // Dismissal is best effort; session storage may be unavailable.
+                    }
+                };
                 const sankeyEl = ref(null);
                 const spendingPieEl = ref(null);
                 const sankeyMode = ref('cashflow');
@@ -2258,6 +2358,9 @@
                         inflation_synced_at: null,
                         inflation_latest_yoy_percent: null,
                     };
+                    dataHistory.value = { accounts: [], overall_coverage_percent: 0, target_days: 365 };
+                    dataHistoryMessage.value = '';
+                    dataHistoryError.value = false;
                     accounts.value = [];
                     transactions.value = [];
                     selectedAccountIds.value = [];
@@ -2276,6 +2379,8 @@
                         last_sync_status: 'never',
                         last_sync_message: '',
                         last_sync_at: null,
+                        sync_progress: null,
+                        simplefin_request_budget: null,
                     };
                 };
 
@@ -2324,14 +2429,14 @@
                     pinSettingsSessionTimeout.value = Number(payload.session_timeout_minutes || 480);
                 };
 
-                const apiFetch = async (endpoint, options = {}, { auth = true } = {}) => {
+                const apiFetch = async (endpoint, options = {}, { auth = true, activity = true } = {}) => {
                     const headers = new Headers(options.headers || {});
                     headers.set('Accept', 'application/json');
                     if (auth && pinSessionToken.value) {
                         headers.set('X-Finance-Session', pinSessionToken.value);
                     }
 
-                    if (auth) recordActivity();
+                    if (auth && activity) recordActivity();
 
                     const res = await fetch(getApiUrl(endpoint), { ...options, headers });
                     if ((res.status === 401 || res.status === 403) && auth) {
@@ -2531,8 +2636,48 @@
                     }
                 };
 
+                const fetchDataHistory = async ({ background = false } = {}) => {
+                    if (!pinStatus.value.session_active) return;
+                    dataHistoryLoading.value = !background;
+                    try {
+                        const res = await apiFetch('/api/data-history', {}, { activity: !background });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Failed to load account history coverage.');
+                        dataHistory.value = data;
+                        dataHistoryError.value = false;
+                        if (background) dataHistoryMessage.value = '';
+                    } catch (err) {
+                        dataHistoryError.value = true;
+                        dataHistoryMessage.value = err.message;
+                    } finally {
+                        if (!background) dataHistoryLoading.value = false;
+                    }
+                };
+
+                const retryAccountHistoryGap = async (account, gap) => {
+                    retryingCoverageAccount.value = String(account.account_id);
+                    dataHistoryMessage.value = '';
+                    dataHistoryError.value = false;
+                    try {
+                        const res = await apiFetch('/api/data-history/retry', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ account_id: account.account_id, start_ts: gap.start_ts, end_ts: gap.end_ts }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Could not queue the missing history range.');
+                        dataHistoryMessage.value = data.message || 'Missing history queued for retry.';
+                        await fetchDataHistory({ background: true });
+                    } catch (err) {
+                        dataHistoryError.value = true;
+                        dataHistoryMessage.value = err.message;
+                    } finally {
+                        retryingCoverageAccount.value = '';
+                    }
+                };
+
                 const fetchProtectedState = async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAppLogSettings(), fetchPlanningSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals()]);
+                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAppLogSettings(), fetchPlanningSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals(), fetchDataHistory()]);
                     await nextTick();
                     renderSankey();
                     renderSpendingPie();
@@ -3439,11 +3584,12 @@
                     view.value = nextView;
                     drawerOpen.value = false;
                     if (nextView === 'assets' || nextView === 'goals' || nextView.startsWith('settings-')) window.scrollTo(0, 0);
+                    if (nextView === 'settings-data-history') fetchDataHistory();
                 };
 
-                const fetchStatus = async () => {
+                const fetchStatus = async ({ background = false } = {}) => {
                     try {
-                        const res = await apiFetch('/api/status');
+                        const res = await apiFetch('/api/status', {}, { activity: !background });
                         if (!res.ok) throw new Error('Failed to load connection status');
                         status.value = await res.json();
                     } catch (err) {
@@ -4634,8 +4780,10 @@
                 });
 
                 onMounted(async () => {
+                    syncStartupPollUntil = Date.now() + 30000;
                     if (window.__FINANCE_TESTING__ === true) {
                         window.__financeSankeyNodeOrderByTransactionCount = sankeyNodeOrderByTransactionCount;
+                        window.__financeSetSyncProgress = (progress) => { status.value.sync_progress = progress; };
                     }
                     syncFinanceTheme();
                     if (window.matchMedia) {
@@ -4648,6 +4796,15 @@
                     clockInterval = window.setInterval(() => {
                         nowTick.value = Date.now();
                         syncFinanceTheme();
+                        const progressState = status.value.sync_progress?.state;
+                        const pollInterval = progressState === 'running' ? 5000 : progressState === 'paused' ? 60000 : 0;
+                        const startupPoll = status.value.connected && Date.now() < syncStartupPollUntil;
+                        if ((pollInterval || startupPoll) && pinStatus.value.session_active && !pinStatus.value.locked
+                            && Date.now() - lastSyncProgressPollAt >= (pollInterval || 5000)) {
+                            lastSyncProgressPollAt = Date.now();
+                            fetchStatus({ background: true });
+                            if (view.value === 'settings-data-history') fetchDataHistory({ background: true });
+                        }
                     }, 1000);
 
                     await refreshPinStatus();
@@ -4677,6 +4834,11 @@
                     accounts,
                     transactions,
                     manualAssets,
+                    dataHistory,
+                    dataHistoryLoading,
+                    dataHistoryMessage,
+                    dataHistoryError,
+                    retryingCoverageAccount,
                     goals,
                     goalsLoading,
                     goalCreationMode,
@@ -4844,6 +5006,8 @@
                     categoryOptions,
                     relockCountdownText,
                     status,
+                    syncProgressBannerVisible,
+                    dismissSyncProgress,
                     sankeyEl,
                     sankeyMode,
                     cashflowKpis,
@@ -4858,6 +5022,8 @@
                     clearSankeyDetails,
                     setView,
                     syncData,
+                    fetchDataHistory,
+                    retryAccountHistoryGap,
                     fetchRecurringRules,
                     fetchRecurringPayments,
                     claimToken,

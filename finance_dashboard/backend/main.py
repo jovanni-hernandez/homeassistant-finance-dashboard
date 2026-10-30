@@ -75,6 +75,8 @@ _periodic_sync_lock = threading.Lock()
 _simplefin_sync_lock = threading.Lock()
 _startup_sync_thread = None
 _startup_sync_lock = threading.Lock()
+_history_retry_thread = None
+_history_retry_lock = threading.Lock()
 
 
 def _serialized_simplefin_sync(source: str, *, wait: bool = False):
@@ -94,7 +96,9 @@ def _serialized_simplefin_sync(source: str, *, wait: bool = False):
 def _run_startup_sync():
     try:
         result = _serialized_simplefin_sync("startup", wait=True)
-        if result.get("status") != "success":
+        if result.get("status") == "in_progress":
+            logger.info("Startup SimpleFIN sync paused: %s", result.get("message", "request budget reached"))
+        elif result.get("status") != "success":
             logger.error("Startup SimpleFIN sync did not complete: %s", result.get("message", "unknown error"))
     except Exception as exc:
         logger.exception("Startup SimpleFIN sync failed: %s", exc)
@@ -111,6 +115,28 @@ def _start_startup_sync():
             daemon=True,
         )
         _startup_sync_thread.start()
+
+
+def _run_history_retry_sync():
+    try:
+        result = _serialized_simplefin_sync("history retry", wait=True)
+        if result.get("status") not in {"success", "in_progress"}:
+            logger.error("Queued history retry did not complete: %s", result.get("message", "unknown error"))
+    except Exception as exc:
+        logger.exception("Queued account-history retry failed: %s", exc)
+
+
+def _start_history_retry_sync():
+    global _history_retry_thread
+    with _history_retry_lock:
+        if _history_retry_thread and _history_retry_thread.is_alive():
+            return
+        _history_retry_thread = threading.Thread(
+            target=_run_history_retry_sync,
+            name="finance-simplefin-history-retry",
+            daemon=True,
+        )
+        _history_retry_thread.start()
 
 
 def _run_periodic_sync_once():
@@ -268,6 +294,12 @@ class PlanningSettingsRequest(BaseModel):
 
 class InflationSyncRequest(BaseModel):
     window_years: Literal[5, 10, 20] = 10
+
+
+class DataHistoryRetryRequest(BaseModel):
+    account_id: str = Field(min_length=1, max_length=256)
+    start_ts: int = Field(ge=0)
+    end_ts: int = Field(ge=1)
 
 
 @app.on_event("startup")
@@ -635,10 +667,42 @@ def api_set_pin_settings(payload: PinSettingsRequest, finance_session: str | Non
 def api_get_accounts():
     """Retrieve financial accounts from primary database."""
     try:
-        return {"accounts": get_stored_accounts()}
+        history = simplefin.get_account_data_history()
+        history_by_id = {item["account_id"]: item for item in history["accounts"]}
+        accounts = [
+            {**account, "data_history": history_by_id.get(str(account.get("id")))}
+            for account in get_stored_accounts()
+        ]
+        return {"accounts": accounts}
     except Exception as e:
         logger.error(f"Failed to query accounts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/data-history", dependencies=[Depends(verify_ha_auth)])
+def api_get_data_history():
+    try:
+        return simplefin.get_account_data_history()
+    except Exception as exc:
+        logger.error("Failed to read account data-history coverage (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not load account history coverage.") from exc
+
+
+@app.post("/api/data-history/retry", dependencies=[Depends(verify_ha_auth)])
+def api_retry_data_history(payload: DataHistoryRetryRequest):
+    try:
+        queued = simplefin.queue_account_history_retry(payload.account_id, payload.start_ts, payload.end_ts)
+        _start_history_retry_sync()
+        return {
+            "status": "queued",
+            "message": "The selected missing range has been queued. It will respect the SimpleFIN request budget.",
+            **queued,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Could not queue an account history retry (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not queue the requested history retry.") from exc
 
 
 @app.get("/api/manual-assets", dependencies=[Depends(verify_ha_auth)])

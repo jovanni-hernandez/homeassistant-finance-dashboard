@@ -13,6 +13,7 @@ from models import (
     SessionLocal,
     Base,
     Account,
+    AccountDataCoverage,
     ManualAsset,
     Transaction,
     Setting,

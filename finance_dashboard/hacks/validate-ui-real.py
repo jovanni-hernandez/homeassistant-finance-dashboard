@@ -164,6 +164,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/status",
         "api/pin/status",
         "api/accounts",
+        "api/data-history",
         "api/manual-assets",
         "api/goals",
         "api/transactions",
@@ -615,6 +616,44 @@ def main():
                 wait.until(lambda current, item=section: item in current.find_element(By.TAG_NAME, "body").text)
             driver.save_screenshot(str(screenshot))
             dashboard_ratio = screenshot_content_ratio(screenshot)
+            sync_progress_checks = {
+                "progress_status_is_displayed": False,
+                "close_hides_current_sync": False,
+                "new_sync_reappears_after_dismissal": False,
+            }
+            sync_progress_screenshot = screenshot.with_name(screenshot.stem + "-sync-progress" + screenshot.suffix)
+            driver.execute_script("sessionStorage.removeItem('finance-sync-progress-dismissed');")
+            sync_test_id = f"test-sync-progress-{driver.execute_script('return Date.now()')}"
+            driver.execute_script("window.__financeSetSyncProgress(arguments[0]);", {
+                "sync_id": sync_test_id, "state": "running", "phase": "account_backfill",
+                "message": "Backfilling account history", "coverage_percent": 42,
+                "covered_days": 153, "target_days": 365, "requests_today": 3,
+                "daily_request_limit": 12, "requests_remaining": 9,
+            })
+            progress_banner = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sync-progress-banner"]'))
+            )
+            sync_progress_checks["progress_status_is_displayed"] = (
+                "153 of 365 account-days verified" in progress_banner.text
+                and "3/12 today" in progress_banner.text
+            )
+            driver.save_screenshot(str(sync_progress_screenshot))
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="sync-progress-dismiss"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: not current.find_elements(By.CSS_SELECTOR, '[data-testid="sync-progress-banner"]')
+            )
+            sync_progress_checks["close_hides_current_sync"] = True
+            driver.execute_script("window.__financeSetSyncProgress(arguments[0]);", {
+                "sync_id": sync_test_id + "-next", "state": "paused", "phase": "account_backfill",
+                "message": "Waiting for daily request budget", "coverage_percent": 42,
+                "covered_days": 153, "target_days": 365, "requests_today": 12,
+                "daily_request_limit": 12, "requests_remaining": 0,
+            })
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sync-progress-banner"]'))
+            )
+            sync_progress_checks["new_sync_reappears_after_dismissal"] = True
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="sync-progress-dismiss"]').click()
             driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight)")
             header_scroll_checks = driver.execute_script("""
                 const compactBar = document.querySelector('#app > div.sticky');
@@ -1332,7 +1371,8 @@ def main():
                 ),
                 "categories_page_has_category_panel_only": False,
                 "ai_page_has_ai_panel_only": False,
-                "settings_menu_has_three_entries": False,
+                "data_history_page_has_coverage_and_retry": False,
+                "settings_menu_has_four_entries": False,
                 "log_level_defaults_to_info": False,
                 "debug_level_warns_and_saves": False,
                 "info_level_can_be_restored": False,
@@ -1442,9 +1482,9 @@ def main():
             driver.execute_script("window.scrollTo(0, 0)")
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-general" + screenshot.suffix)))
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
-            settings_navigation_checks["settings_menu_has_three_entries"] = all(
+            settings_navigation_checks["settings_menu_has_four_entries"] = all(
                 driver.find_elements(By.CSS_SELECTOR, f'[data-testid="{test_id}"]')
-                for test_id in ("settings-nav-general", "settings-nav-categories", "settings-nav-ai")
+                for test_id in ("settings-nav-general", "settings-nav-categories", "settings-nav-ai", "settings-nav-data-history")
             )
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-menu" + screenshot.suffix)))
             driver.find_element(By.CSS_SELECTOR, '[data-testid="settings-nav-categories"]').click()
@@ -1492,6 +1532,24 @@ def main():
                 and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="category-management-settings"]')
                 and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="account-type-settings"]')
             )
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="settings-nav-data-history"]').click()
+            history_panel = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="data-history-settings"]'))
+            )
+            settings_navigation_checks["data_history_page_has_coverage_and_retry"] = (
+                bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-request-budget"]'))
+                and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-account"]'))
+                and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-gap"]'))
+                and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-retry"]'))
+            )
+            driver.execute_script("window.scrollTo(0, 0)")
+            driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-data-history" + screenshot.suffix)))
+            history_account = history_panel.find_element(By.CSS_SELECTOR, '[data-testid="data-history-account"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", history_account)
+            driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-data-history-account" + screenshot.suffix)))
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="settings-nav-ai"]').click()
             ai_settings_checks = {
                 "only_selected_provider_key_is_visible": False,
                 "saved_key_loads_model_choices": False,
@@ -1960,6 +2018,7 @@ def main():
 
             checks = {
                 "dashboard_sections": {item: item in dashboard_text for item in dashboard_sections},
+                "sync_progress": sync_progress_checks,
                 "recurring_sections": {item: item in recurring_text for item in recurring_sections},
                 "api_statuses": api_statuses,
                 "index_html_no_store_cache": index_html_no_store_cache,
@@ -1999,6 +2058,7 @@ def main():
             }
             ok = (
                 all(checks["dashboard_sections"].values())
+                and all(sync_progress_checks.values())
                 and all(checks["recurring_sections"].values())
                 and all(status == 200 for status in api_statuses.values())
                 and index_html_no_store_cache

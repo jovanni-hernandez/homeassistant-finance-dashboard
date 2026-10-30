@@ -26,7 +26,7 @@ os.chdir(BACKEND)
 import main  # noqa: E402
 import simplefin  # noqa: E402
 from database import get_setting, init_db, set_setting  # noqa: E402
-from models import Account, SessionLocal, Setting, Transaction  # noqa: E402
+from models import Account, AccountDataCoverage, SessionLocal, Setting, Transaction  # noqa: E402
 
 init_db()
 
@@ -36,6 +36,7 @@ class SimpleFinSyncTests(unittest.TestCase):
         db = SessionLocal()
         try:
             db.query(Transaction).delete()
+            db.query(AccountDataCoverage).delete()
             db.query(Account).delete()
             db.query(Setting).delete()
             db.commit()
@@ -43,7 +44,7 @@ class SimpleFinSyncTests(unittest.TestCase):
             db.close()
         simplefin.set_simplefin_token("https://test-user:test-password@example.test/access")
 
-    def seed_latest_transaction(self, timestamp: int):
+    def seed_latest_transaction(self, timestamp: int, *, history_migrated: bool = True):
         db = SessionLocal()
         try:
             db.add(Account(id="account-1", org="Test Bank", name="Checking", balance="0", currency="USD"))
@@ -58,6 +59,8 @@ class SimpleFinSyncTests(unittest.TestCase):
                 pending=False,
             ))
             db.commit()
+            if history_migrated:
+                set_setting(simplefin.ACCOUNT_BACKFILL_VERSION_KEY, simplefin.ACCOUNT_BACKFILL_VERSION)
         finally:
             db.close()
 
@@ -129,7 +132,7 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         self.assertEqual(result["incoming_transaction_count"], 0)
         self.assertIsNone(result["latest_incoming_transaction_date"])
-        self.assertEqual(result["account_backfill_windows"], 89)
+        self.assertEqual(result["account_backfill_windows"], 5)
         self.assertIn("Freshness NOT verified: SimpleFIN returned no transactions", result["message"])
 
     def test_sync_requests_exactly_one_day(self):
@@ -144,28 +147,30 @@ class SimpleFinSyncTests(unittest.TestCase):
         end_timestamp = fetch.call_args.kwargs["end_ts"]
         self.assertEqual(end_timestamp - start_timestamp, 24 * 60 * 60)
 
-    def test_new_accounts_get_90_days_in_one_sync_for_each_discovered_account(self):
+    def test_new_accounts_get_12_months_in_90_day_windows(self):
         day = simplefin.SYNC_WINDOW_SECONDS
         account_ids = ("new-checking", "new-savings")
 
-        def fetch_window(_access_url, start_ts, end_ts):
-            self.assertEqual(end_ts - start_ts, day)
+        def fetch_window(_access_url, start_ts, end_ts, *, on_reserved=None):
+            self.assertLessEqual(end_ts - start_ts, simplefin.ACCOUNT_BACKFILL_WINDOW_SECONDS)
+            if on_reserved:
+                on_reserved()
             return self.new_account_payload(start_ts, account_ids)
 
         with patch.object(simplefin, "_fetch_simplefin_payload", side_effect=fetch_window) as fetch:
             result = simplefin.fetch_and_sync_simplefin()
 
         calls = fetch.call_args_list
-        self.assertEqual(len(calls), simplefin.ACCOUNT_BACKFILL_DAYS)
-        self.assertEqual(result["account_backfill_windows"], 89)
-        self.assertEqual(result["sync_windows"], 90)
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(result["account_backfill_windows"], 5)
+        self.assertEqual(result["sync_windows"], 6)
         self.assertFalse(result["account_backfill_pending"])
         self.assertEqual(result["account_backfill_remaining_days"], 0)
         self.assertEqual(get_setting(simplefin.ACCOUNT_BACKFILL_SETTING_KEY), "{}")
 
         rolling_call = calls[0].kwargs
         account_backfill_calls = [call.kwargs for call in calls[1:]]
-        self.assertEqual(account_backfill_calls[0]["start_ts"], rolling_call["start_ts"] - 89 * day)
+        self.assertEqual(account_backfill_calls[0]["start_ts"], rolling_call["start_ts"] - 364 * day)
         self.assertEqual(account_backfill_calls[-1]["end_ts"], rolling_call["start_ts"])
         for previous, following in zip(account_backfill_calls, account_backfill_calls[1:]):
             self.assertEqual(previous["end_ts"], following["start_ts"])
@@ -173,28 +178,41 @@ class SimpleFinSyncTests(unittest.TestCase):
         db = SessionLocal()
         try:
             self.assertEqual(db.query(Account).count(), len(account_ids))
-            self.assertEqual(db.query(Transaction).count(), 90 * len(account_ids))
+            self.assertEqual(db.query(Transaction).count(), 6 * len(account_ids))
         finally:
             db.close()
 
-    def test_existing_accounts_do_not_trigger_account_backfill(self):
+    def test_existing_accounts_get_one_time_12_month_backfill(self):
         now_timestamp = int(simplefin.datetime.now(simplefin.timezone.utc).timestamp())
-        self.seed_latest_transaction(now_timestamp - simplefin.SYNC_WINDOW_SECONDS)
+        self.seed_latest_transaction(now_timestamp - simplefin.SYNC_WINDOW_SECONDS, history_migrated=False)
         set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(now_timestamp))
 
         with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as fetch:
             result = simplefin.fetch_and_sync_simplefin()
 
-        self.assertEqual(fetch.call_count, 1)
-        self.assertEqual(result["account_backfill_windows"], 0)
+        self.assertEqual(fetch.call_count, 6)
+        self.assertEqual(result["account_backfill_windows"], 5)
         self.assertFalse(result["account_backfill_pending"])
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])) as next_fetch:
+            next_result = simplefin.fetch_and_sync_simplefin()
+        self.assertEqual(next_fetch.call_count, 1)
+        self.assertEqual(next_result["account_backfill_windows"], 0)
+
+        coverage = simplefin.get_account_data_history()["accounts"]
+        self.assertEqual(len(coverage), 1)
+        self.assertEqual(coverage[0]["coverage_percent"], 100.0)
+        self.assertEqual(coverage[0]["gaps"], [])
+        self.assertFalse(coverage[0]["stale"])
 
     def test_new_account_backfill_progress_resumes_after_request_failure(self):
         calls = 0
 
-        def fail_after_three_backfill_windows(_access_url, start_ts, end_ts):
+        def fail_after_three_backfill_windows(_access_url, start_ts, end_ts, *, on_reserved=None):
             nonlocal calls
             calls += 1
+            if on_reserved:
+                on_reserved()
             if calls == 5:
                 raise RuntimeError("simulated SimpleFIN interruption")
             return self.new_account_payload(start_ts)
@@ -215,16 +233,120 @@ class SimpleFinSyncTests(unittest.TestCase):
         with patch.object(
             simplefin,
             "_fetch_simplefin_payload",
-            side_effect=lambda _access_url, start_ts, end_ts: self.new_account_payload(start_ts),
+            side_effect=lambda _access_url, start_ts, end_ts, **kwargs: self.new_account_payload(start_ts),
         ) as fetch:
             resumed_result = simplefin.fetch_and_sync_simplefin()
 
         self.assertEqual(resumed_result["status"], "success")
-        self.assertEqual(resumed_result["account_backfill_windows"], 86)
+        self.assertEqual(resumed_result["account_backfill_windows"], 2)
         self.assertFalse(resumed_result["account_backfill_pending"])
         self.assertEqual(get_setting(simplefin.ACCOUNT_BACKFILL_SETTING_KEY), "{}")
         resumed_windows = [call.kwargs for call in fetch.call_args_list[1:]]
         self.assertEqual(resumed_windows[0]["start_ts"], saved_cursor)
+
+    def test_missing_data_error_splits_range_and_only_verified_children_count_as_coverage(self):
+        calls = 0
+
+        def incomplete_first_history_window(_access_url, start_ts, end_ts, *, on_reserved=None):
+            nonlocal calls
+            calls += 1
+            if on_reserved:
+                on_reserved()
+            payload = self.new_account_payload(start_ts)
+            if calls == 2:
+                payload["errlist"] = [{
+                    "code": "act.missingdata",
+                    "account_id": "new-account",
+                    "msg": "incomplete batch example",
+                }]
+            return payload
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", side_effect=incomplete_first_history_window) as fetch:
+            result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertEqual(result["status"], "success")
+        self.assertFalse(result["account_backfill_pending"])
+        self.assertIn("incomplete transaction listing", result["message"])
+        history = simplefin.get_account_data_history()["accounts"]
+        self.assertEqual(history[0]["coverage_percent"], 100.0)
+        self.assertEqual(history[0]["gaps"], [])
+        self.assertGreater(fetch.call_count, 6)
+
+    def test_daily_request_budget_is_persisted_and_caps_at_twelve(self):
+        set_setting(simplefin.SIMPLEFIN_REQUEST_BUDGET_KEY, "")
+        simplefin._initialize_request_budget(simplefin.get_simplefin_token())
+        with patch.object(simplefin, "SIMPLEFIN_MIN_REQUEST_INTERVAL_SECONDS", 0):
+            for _ in range(simplefin.SIMPLEFIN_MAX_REQUESTS_PER_UTC_DAY):
+                simplefin._reserve_simplefin_request(simplefin.get_simplefin_token())
+            with self.assertRaises(simplefin.SimpleFINDailyLimitError):
+                simplefin._reserve_simplefin_request(simplefin.get_simplefin_token())
+        self.assertEqual(simplefin._request_budget_status(simplefin.get_simplefin_token())["requests_today"], 12)
+
+    def test_unknown_legacy_request_count_fails_closed_until_next_utc_day(self):
+        set_setting(simplefin.SIMPLEFIN_REQUEST_BUDGET_KEY, "")
+        access_url = simplefin.get_simplefin_token()
+        with self.assertRaises(simplefin.SimpleFINDailyLimitError):
+            simplefin._reserve_simplefin_request(access_url)
+
+        tomorrow = simplefin._utc_now() + simplefin.timedelta(days=1)
+        with patch.object(simplefin, "_utc_now", return_value=tomorrow), patch.object(simplefin, "SIMPLEFIN_MIN_REQUEST_INTERVAL_SECONDS", 0):
+            budget = simplefin._reserve_simplefin_request(access_url)
+        self.assertEqual(budget["requests_today"], 1)
+
+    def test_coverage_uses_successful_responses_not_transaction_activity(self):
+        now = int(simplefin._utc_now().timestamp())
+        start = now - simplefin.ACCOUNT_BACKFILL_DAYS * simplefin._ACCOUNT_BACKFILL_DAY_SECONDS
+        simplefin.save_simplefin_data(self.payload([]))
+        simplefin._coverage_attempt(["account-1"], start, now, "test")
+        simplefin._coverage_result(["account-1"], start, now, returned_ids=["account-1"], source="test")
+
+        account = simplefin.get_account_data_history()["accounts"][0]
+        self.assertEqual(account["coverage_percent"], 100.0)
+        self.assertEqual(account["gaps"], [])
+        self.assertFalse(account["stale"])
+
+    def test_staleness_uses_last_successful_account_response(self):
+        now = int(simplefin._utc_now().timestamp()) - (49 * 60 * 60)
+        start = now - simplefin.ACCOUNT_BACKFILL_DAYS * simplefin._ACCOUNT_BACKFILL_DAY_SECONDS
+        simplefin.save_simplefin_data(self.payload([]))
+        simplefin._coverage_attempt(["account-1"], start, now, "test")
+        simplefin._coverage_result(["account-1"], start, now, returned_ids=["account-1"], source="test")
+        db = SessionLocal()
+        try:
+            row = db.query(AccountDataCoverage).filter_by(account_id="account-1", start_ts=start, end_ts=now).one()
+            row.last_success_at = simplefin._coverage_time(now)
+            db.commit()
+        finally:
+            db.close()
+
+        report = simplefin.get_account_data_history()["accounts"][0]
+        self.assertEqual(report["coverage_percent"], 100.0)
+        self.assertTrue(report["stale"])
+        self.assertGreaterEqual(report["hours_since_last_received"], 49)
+
+    def test_history_page_can_queue_an_exact_missing_gap(self):
+        now = int(simplefin._utc_now().timestamp())
+        day = simplefin._ACCOUNT_BACKFILL_DAY_SECONDS
+        start = now - simplefin.ACCOUNT_BACKFILL_DAYS * day
+        gap_start = start + 100 * day
+        gap_end = gap_start + 10 * day
+        self.seed_latest_transaction(now - day)
+        for left, right in ((start, gap_start), (gap_end, now)):
+            simplefin._coverage_attempt(["account-1"], left, right, "test")
+            simplefin._coverage_result(["account-1"], left, right, returned_ids=["account-1"], source="test")
+        simplefin._coverage_attempt(["account-1"], gap_start, gap_end, "test")
+        simplefin._coverage_result(
+            ["account-1"], gap_start, gap_end,
+            returned_ids=["account-1"],
+            error_codes={"account-1": "act.missingdata"},
+            source="test",
+        )
+
+        report = simplefin.get_account_data_history()["accounts"][0]
+        gap = next(item for item in report["gaps"] if item["start_ts"] == gap_start)
+        queued = simplefin.queue_account_history_retry("account-1", gap["start_ts"], gap["end_ts"])
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(simplefin._load_account_backfill_state()["account-1"]["cursor"], gap_start)
 
     def test_sync_backfills_missed_days_with_contiguous_one_day_windows(self):
         now_timestamp = int(simplefin.datetime.now(simplefin.timezone.utc).timestamp())
