@@ -6,6 +6,8 @@ import atexit
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -268,6 +270,34 @@ class SimpleFinSyncTests(unittest.TestCase):
         with patch.object(simplefin, "fetch_and_sync_simplefin", return_value={"status": "success"}) as sync:
             main._run_periodic_sync_once()
         sync.assert_called_once_with()
+
+    def test_startup_returns_while_initial_sync_runs_in_background(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_startup_sync():
+            started.set()
+            release.wait(timeout=2)
+
+        with patch.object(main, "init_db"), patch.object(main, "apply_app_log_level"), \
+                patch.object(main, "_start_periodic_sync"), patch.object(main, "_run_startup_sync", side_effect=slow_startup_sync):
+            started_at = time.monotonic()
+            main.startup_event()
+            elapsed = time.monotonic() - started_at
+            self.assertTrue(started.wait(timeout=1))
+            self.assertLess(elapsed, 0.5)
+            release.set()
+
+        if main._startup_sync_thread:
+            main._startup_sync_thread.join(timeout=1)
+
+    def test_only_one_simplefin_sync_runs_at_a_time(self):
+        with main._simplefin_sync_lock:
+            with patch.object(simplefin, "fetch_and_sync_simplefin") as fetch:
+                result = main._serialized_simplefin_sync("test")
+
+        self.assertEqual(result["status"], "in_progress")
+        fetch.assert_not_called()
 
 
 if __name__ == "__main__":

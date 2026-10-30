@@ -3818,6 +3818,7 @@
                         if (!res.ok) throw new Error(data.detail || data.message || `Sync failed (${res.status})`);
                         syncMessage.value = data.message || 'Sync completed successfully.';
                         syncError.value = false;
+                        if (data.status === 'in_progress') return;
                         await fetchProtectedState();
                     } catch (err) {
                         syncError.value = true;

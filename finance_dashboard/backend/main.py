@@ -72,11 +72,52 @@ FINANCE_AUDIT_PAGE_SIZE = 100
 _periodic_sync_stop = threading.Event()
 _periodic_sync_thread = None
 _periodic_sync_lock = threading.Lock()
+_simplefin_sync_lock = threading.Lock()
+_startup_sync_thread = None
+_startup_sync_lock = threading.Lock()
+
+
+def _serialized_simplefin_sync(source: str, *, wait: bool = False):
+    if not _simplefin_sync_lock.acquire(blocking=wait):
+        logger.info("Skipping %s SimpleFIN sync; another sync is still running.", source)
+        return {
+            "status": "in_progress",
+            "message": "A SimpleFIN sync is already running. Its results will appear when it finishes.",
+        }
+    try:
+        logger.info("Starting %s SimpleFIN sync.", source)
+        return simplefin.fetch_and_sync_simplefin()
+    finally:
+        _simplefin_sync_lock.release()
+
+
+def _run_startup_sync():
+    try:
+        result = _serialized_simplefin_sync("startup", wait=True)
+        if result.get("status") != "success":
+            logger.error("Startup SimpleFIN sync did not complete: %s", result.get("message", "unknown error"))
+    except Exception as exc:
+        logger.exception("Startup SimpleFIN sync failed: %s", exc)
+
+
+def _start_startup_sync():
+    global _startup_sync_thread
+    with _startup_sync_lock:
+        if _startup_sync_thread and _startup_sync_thread.is_alive():
+            return
+        _startup_sync_thread = threading.Thread(
+            target=_run_startup_sync,
+            name="finance-simplefin-startup-sync",
+            daemon=True,
+        )
+        _startup_sync_thread.start()
 
 
 def _run_periodic_sync_once():
     try:
-        result = simplefin.fetch_and_sync_simplefin()
+        result = _serialized_simplefin_sync("scheduled")
+        if result.get("status") == "in_progress":
+            return
         if result.get("status") != "success":
             logger.error("Scheduled SimpleFIN sync failed: %s", result.get("message", "unknown error"))
     except Exception as exc:
@@ -234,12 +275,9 @@ def startup_event():
     logger.info("Initializing database...")
     init_db()
     apply_app_log_level()
-    logger.info("Syncing / seeding initial data...")
-    try:
-        simplefin.fetch_and_sync_simplefin()
-    except Exception as e:
-        logger.error(f"Startup sync failed: {e}")
+    logger.info("Starting initial SimpleFIN sync in the background; HTTP startup will not wait for it.")
     _start_periodic_sync()
+    _start_startup_sync()
     if os.environ.get("FINANCE_AGENT_STDIN_ENABLED") == "1":
         threading.Thread(target=_finance_agent_stdin_worker, name="finance-agent-stdin", daemon=True).start()
 
@@ -758,7 +796,13 @@ def api_claim_token(payload: ClaimTokenRequest):
         if result.get("status") == "error":
             raise HTTPException(status_code=400, detail=result.get("message"))
 
-        sync_result = simplefin.fetch_and_sync_simplefin()
+        sync_result = _serialized_simplefin_sync("claim", wait=True)
+        if sync_result.get("status") == "in_progress":
+            return {
+                "status": "in_progress",
+                "message": "Token claimed. Another SimpleFIN sync is already running; data will update when it finishes.",
+                "sync_result": sync_result,
+            }
         return {
             "status": "success",
             "message": "Token claimed and initial sync performed",
@@ -772,8 +816,7 @@ def api_claim_token(payload: ClaimTokenRequest):
 @app.post("/api/sync", dependencies=[Depends(verify_ha_auth)])
 def api_sync():
     """Trigger an out-of-band sync from SimpleFIN upstream."""
-    result = simplefin.fetch_and_sync_simplefin()
-    return result
+    return _serialized_simplefin_sync("manual")
 
 
 @app.get("/api/category-rules", dependencies=[Depends(verify_ha_auth)])
