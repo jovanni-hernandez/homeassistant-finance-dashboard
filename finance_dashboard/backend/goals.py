@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from database import get_setting, set_setting
 from models import LIABILITY_ACCOUNT_TYPES
+from planning import get_planning_settings
 
 GOALS_SETTING_KEY = "financial_goals"
 MAX_GOALS = 30
@@ -191,7 +192,27 @@ def _normalize_payload(payload: dict, accounts, manual_assets) -> dict:
             "planned_monthly": _money(payload.get("planned_monthly"), "Planned monthly contribution", required=False),
         })
     else:
-        normalized["target_amount"] = _money(payload.get("target_amount"), "Retirement target amount", allow_zero=False)
+        monthly_income_target = _money(
+            payload.get("monthly_income_target"),
+            "Monthly retirement income target",
+            required=False,
+            allow_zero=False,
+        )
+        withdrawal_rate = _rate(
+            payload.get("withdrawal_rate_percent") or get_planning_settings()["withdrawal_rate_percent"],
+            "Withdrawal rate",
+            minimum="0.1",
+            maximum="20",
+        )
+        if monthly_income_target is not None:
+            target_amount = _ceil_money(
+                Decimal(monthly_income_target) * Decimal("12") / (Decimal(withdrawal_rate) / Decimal("100"))
+            )
+            normalized["monthly_income_target"] = monthly_income_target
+        else:
+            target_amount = _money(payload.get("target_amount"), "Retirement target amount", allow_zero=False)
+        normalized["target_amount"] = format(Decimal(str(target_amount)), "f")
+        normalized["withdrawal_rate_percent"] = withdrawal_rate
         timing_mode = str(payload.get("retirement_timing_mode") or "").strip()
         if timing_mode == "age":
             try:

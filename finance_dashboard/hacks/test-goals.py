@@ -122,6 +122,24 @@ class FinancialGoalTests(unittest.TestCase):
         }, [self.sources["investment"]], [])
         self.assertEqual(age_goal["retirement_year"], 2045)
 
+    def test_retirement_monthly_income_target_derives_today_dollar_corpus(self):
+        goal = create_goal({
+            "goal_type": "retirement",
+            "name": "Income-based retirement",
+            "account_ids": ["investment-usd"],
+            "monthly_income_target": "10000",
+            "withdrawal_rate_percent": "4",
+            "retirement_timing_mode": "year",
+            "retirement_year": 2045,
+            "expected_return_percent": "6",
+            "inflation_percent": "2.5",
+        }, [self.sources["investment"]], [])
+
+        self.assertEqual(goal["monthly_income_target"], "10000")
+        self.assertEqual(goal["withdrawal_rate_percent"], "4")
+        self.assertEqual(goal["target_amount"], "3000000.00")
+        self.assertGreater(Decimal(goal["target_nominal_amount"]), Decimal("3000000"))
+
     def test_goal_sources_must_be_compatible_and_currency_matched(self):
         with self.assertRaisesRegex(GoalValidationError, "liability"):
             create_goal({

@@ -31,6 +31,7 @@ from ai_prompts import AIPromptValidationError, get_ai_prompt_settings, save_ai_
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
 from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
+from planning import PlanningSettingsError, get_planning_settings, save_planning_settings, sync_bls_inflation
 from database import (
     init_db,
     get_stored_accounts,
@@ -149,6 +150,8 @@ class FinancialGoalRequest(BaseModel):
     retirement_year: int | None = None
     expected_return_percent: str | None = Field(default=None, max_length=12)
     inflation_percent: str | None = Field(default=None, max_length=12)
+    monthly_income_target: str | None = Field(default=None, max_length=50)
+    withdrawal_rate_percent: str | None = Field(default=None, max_length=12)
 
 
 class AIChatMessageRequest(BaseModel):
@@ -211,6 +214,19 @@ class AiPromptRequest(BaseModel):
 
 class AppLogSettingsRequest(BaseModel):
     level: Literal["INFO", "DEBUG"]
+
+
+class PlanningSettingsRequest(BaseModel):
+    birth_year: int | None = None
+    expected_return_percent: str = Field(min_length=1, max_length=12)
+    withdrawal_rate_percent: str = Field(min_length=1, max_length=12)
+    inflation_percent: str = Field(min_length=1, max_length=12)
+    inflation_source: Literal["manual", "bls", "default"] = "manual"
+    inflation_window_years: int = 10
+
+
+class InflationSyncRequest(BaseModel):
+    window_years: Literal[5, 10, 20] = 10
 
 
 @app.on_event("startup")
@@ -486,6 +502,30 @@ def _finance_agent_stdin_worker():
 @app.get("/api/status", dependencies=[Depends(verify_ha_auth)])
 def api_status():
     return simplefin.get_dashboard_status()
+
+
+@app.get("/api/planning/settings", dependencies=[Depends(verify_ha_auth)])
+def api_get_planning_settings():
+    return get_planning_settings()
+
+
+@app.post("/api/planning/settings", dependencies=[Depends(verify_ha_auth)])
+def api_set_planning_settings(payload: PlanningSettingsRequest):
+    try:
+        return {"status": "success", **save_planning_settings(payload.dict())}
+    except PlanningSettingsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/planning/inflation/sync", dependencies=[Depends(verify_ha_auth)])
+def api_sync_planning_inflation(payload: InflationSyncRequest):
+    try:
+        return {"status": "success", **sync_bls_inflation(payload.window_years)}
+    except PlanningSettingsError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("BLS inflation sync failed (%s).", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Could not retrieve CPI data from BLS. Your saved settings were not changed.") from exc
 
 
 @app.get("/api/pin/status")

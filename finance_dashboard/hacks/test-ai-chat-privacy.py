@@ -8,7 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -26,6 +26,7 @@ os.chdir(BACKEND)
 
 import ai_chat  # noqa: E402
 import ai_assistant  # noqa: E402
+import planning  # noqa: E402
 from ai_assistant import AI_ENABLED_KEY, AI_MODEL_KEY, AI_OPENAI_KEY, AI_PROVIDER_KEY  # noqa: E402
 from ai_prompts import save_ai_system_prompt  # noqa: E402
 from database import (  # noqa: E402
@@ -86,7 +87,10 @@ class AIChatPrivacyTests(unittest.TestCase):
                 "balance": "100000.00",
                 "currency": "USD",
                 "account_type_suggestion": "investment",
-                "transactions": [],
+                "transactions": [
+                    {"id": "privacy-invest-in", "date": now - 259200, "amount": "300.00", "payee": "Internal Transfer", "description": "Contribution detail", "category": "Transfers", "pending": False},
+                    {"id": "privacy-invest-out", "date": now - 345600, "amount": "-50.00", "payee": "Transfer out", "description": "Withdrawal detail", "category": "Transfers", "pending": False},
+                ],
             },
         ]})
         self.manual_asset = create_manual_asset("Private Condo", "120000.00", "USD")
@@ -107,6 +111,14 @@ class AIChatPrivacyTests(unittest.TestCase):
         set_setting(AI_OPENAI_KEY, "fake-test-key")
 
     def test_context_contains_aggregates_but_no_names_ids_or_transaction_text(self):
+        planning.save_planning_settings({
+            "birth_year": 1989,
+            "expected_return_percent": "6",
+            "withdrawal_rate_percent": "4",
+            "inflation_percent": "2.5",
+            "inflation_source": "manual",
+            "inflation_window_years": 10,
+        })
         accounts = get_stored_accounts()
         assets = get_manual_assets()
         goals = get_goals(accounts, assets)
@@ -122,6 +134,14 @@ class AIChatPrivacyTests(unittest.TestCase):
         self.assertIn("4000.0", payload)
         self.assertEqual(len(context["monthly_activity"]), 1)
         self.assertNotIn("Transfers", payload)
+        self.assertEqual(context["monthly_cash_flow_summary"][0]["months_with_observed_transactions"], 1)
+        self.assertEqual(context["monthly_investment_flows"][0]["identified_transfer_inflows_total"], 300.0)
+        self.assertEqual(context["monthly_investment_flows"][0]["identified_transfer_outflows_total"], 50.0)
+        self.assertIn("not investment performance", context["monthly_investment_flows"][0]["coverage_note"])
+        self.assertNotIn("Contribution detail", payload)
+        self.assertIn("planning_assumptions", context)
+        self.assertEqual(context["planning_assumptions"]["current_age_estimate"], date.today().year - 1989)
+        self.assertNotIn("birth_year", context["planning_assumptions"])
 
     def test_preview_redacts_known_names_and_long_numbers_but_keeps_categories_and_amounts(self):
         preview = ai_chat.preview_chat_message(
@@ -174,6 +194,16 @@ class AIChatPrivacyTests(unittest.TestCase):
         self.assertEqual(result["goal_draft"]["goal_type"], "savings")
         self.assertNotIn("account_ids", result["goal_draft"])
         self.assertEqual(len(get_goals(get_stored_accounts(), get_manual_assets())), before)
+
+    def test_retirement_income_draft_uses_deterministic_corpus_target(self):
+        _, draft, _ = ai_chat._extract_goal_draft(
+            '<goal_draft>{"goal_type":"retirement","name":"Retirement","monthly_income_target":"10000","withdrawal_rate_percent":"4","retirement_timing_mode":"year","retirement_year":2046}</goal_draft>',
+            [],
+        )
+        self.assertEqual(draft["target_amount"], "3000000.00")
+        self.assertEqual(draft["expected_return_percent"], "6")
+        self.assertEqual(draft["inflation_percent"], "2.5")
+        self.assertNotIn("birth_year", draft)
 
     def test_provider_failure_gives_safe_actionable_error_and_logs_no_chat_content(self):
         class UnsupportedParamsError(Exception):

@@ -272,6 +272,21 @@
                                 </select>
                             </label>
                         </div>
+                        <section data-testid="cashflow-kpi" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Cash flow summary">
+                            <article v-for="item in cashflowKpis" :key="item.currency" data-testid="cashflow-kpi-currency" :data-currency="item.currency" :data-income="item.income" :data-spending="item.spending" :data-net-cashflow="item.net" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                                <div class="flex items-baseline justify-between gap-2">
+                                    <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ item.currency }} · {{ cashflowPeriodLabel }}</h3>
+                                    <span class="text-[11px] text-slate-500">Net cash flow</span>
+                                </div>
+                                <strong class="mt-1 block text-2xl font-semibold" :class="item.net < 0 ? 'text-rose-700' : 'text-slate-900'">{{ formatCurrency(item.net, item.currency) }}</strong>
+                                <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                                    <span>Income {{ formatCurrency(item.income, item.currency) }}</span>
+                                    <span>Spending {{ formatCurrency(item.spending, item.currency) }}</span>
+                                </div>
+                                <p class="mt-2 text-[11px] text-slate-500">Detected transfers excluded · {{ item.transaction_count }} transactions</p>
+                            </article>
+                            <div v-if="!cashflowKpis.length" class="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">No posted cash-flow transactions for this period.</div>
+                        </section>
                         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                             <div class="mb-3 flex gap-2" role="tablist" aria-label="Cash flow chart type">
                                 <button
@@ -851,21 +866,36 @@
                 </section>
 
                 <section v-else-if="view === 'goals'" data-testid="goals-page" class="space-y-6">
-                    <div class="grid gap-6 lg:grid-cols-[minmax(0,1.15fr),minmax(20rem,0.85fr)]">
+                    <div class="space-y-6">
                     <div class="min-w-0 space-y-6">
                     <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div>
-                                <h2 class="text-xl font-semibold text-slate-800">Financial goals</h2>
-                                <p class="mt-1 text-sm text-slate-500">Choose what you’re working toward. Progress uses only the accounts and assets you select.</p>
+                                <h2 class="text-xl font-semibold text-slate-800">{{ goalCreationMode === 'closed' ? 'Financial goals' : goalCreationMode === 'choose' ? 'Create a goal' : goalCreationMode === 'ai' ? 'Plan a goal with AI' : editingGoalId ? 'Edit your goal' : 'Set up your goal' }}</h2>
+                                <p class="mt-1 text-sm text-slate-500">{{ goalCreationMode === 'closed' ? 'Track savings, debt payoff, or retirement in one place.' : goalCreationMode === 'choose' ? 'Choose how you’d like to get started.' : goalCreationMode === 'ai' ? 'Talk through the goal, then review the draft before saving.' : 'Add the details and choose which accounts count toward progress.' }}</p>
                             </div>
-                            <button v-if="!goalFormOpen" data-testid="goal-add-button" type="button" @click="openNewGoalForm" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700">Add a goal</button>
+                            <button v-if="goalCreationMode === 'closed'" data-testid="goal-add-button" type="button" @click="startGoalCreation" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700">Create a goal</button>
+                            <button v-else type="button" @click="closeGoalFlow" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to goals</button>
                         </div>
                     </div>
 
                     <div v-if="goalMessage" data-testid="goal-message" class="rounded-lg border px-4 py-3 text-sm" :class="goalError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ goalMessage }}</div>
 
-                    <form v-if="goalFormOpen" data-testid="goal-form" @submit.prevent="saveGoal" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                    <div v-if="goalCreationMode === 'choose'" data-testid="goal-method-choice" class="grid gap-4 sm:grid-cols-2">
+                        <button type="button" data-testid="goal-method-ai" @click="selectGoalCreationMode('ai')" class="rounded-2xl border border-violet-200 bg-white p-5 text-left shadow-sm transition hover:border-violet-400 hover:bg-violet-50 sm:p-6">
+                            <span class="text-xs font-semibold uppercase tracking-wide text-violet-700">Talk it through</span>
+                            <span class="mt-2 block text-lg font-semibold text-slate-900">Plan with AI</span>
+                            <span class="mt-1 block text-sm leading-5 text-slate-600">Explore options in a conversation and review a suggested draft.</span>
+                            <span v-if="!aiChatReady" class="mt-3 block text-xs text-amber-800">Configure AI in Settings to use the planner.</span>
+                        </button>
+                        <button type="button" data-testid="goal-method-manual" @click="openNewGoalForm" class="rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-sky-400 hover:bg-sky-50 sm:p-6">
+                            <span class="text-xs font-semibold uppercase tracking-wide text-sky-700">I know what I want</span>
+                            <span class="mt-2 block text-lg font-semibold text-slate-900">Set it up myself</span>
+                            <span class="mt-1 block text-sm leading-5 text-slate-600">Enter a target and choose which accounts count toward it.</span>
+                        </button>
+                    </div>
+
+                    <form v-if="goalFormOpen && goalCreationMode === 'manual'" data-testid="goal-form" @submit.prevent="saveGoal" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                         <div class="flex items-start justify-between gap-3">
                             <div>
                                 <h3 class="text-lg font-semibold text-slate-900">{{ editingGoalId ? 'Edit goal' : 'Create a goal' }}</h3>
@@ -924,7 +954,7 @@
                             <p v-if="goalSourceCurrencyMismatch" data-testid="goal-currency-warning" class="text-sm text-rose-700">Selected sources use different currencies. Choose sources with the same currency.</p>
                         </div>
 
-                        <div v-if="goalForm.goal_type !== 'debt_payoff'" class="grid gap-4 sm:grid-cols-2">
+                        <div v-if="goalForm.goal_type === 'savings' || (goalForm.goal_type === 'retirement' && goalForm.retirement_target_mode === 'portfolio')" class="grid gap-4 sm:grid-cols-2">
                             <label class="block text-sm font-medium text-slate-700">
                                 {{ goalForm.goal_type === 'retirement' ? 'Target amount in today’s dollars' : 'Target amount' }}
                                 <input data-testid="goal-target-amount" v-model="goalForm.target_amount" required type="number" min="0.01" step="0.01" inputmode="decimal" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
@@ -933,6 +963,14 @@
                                 Target date (optional)
                                 <input data-testid="goal-target-date" v-model="goalForm.target_date" type="date" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
                             </label>
+                        </div>
+
+                        <div v-if="goalForm.goal_type === 'retirement' && goalForm.retirement_target_mode === 'income'" class="space-y-2 rounded-xl border border-sky-200 bg-sky-50 p-3">
+                            <label class="block text-sm font-medium text-slate-800">Monthly income target in today’s dollars
+                                <input data-testid="goal-monthly-income-target" v-model="goalForm.monthly_income_target" required type="number" min="0.01" step="0.01" inputmode="decimal" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100" />
+                            </label>
+                            <p v-if="retirementCorpusEstimate > 0" data-testid="goal-corpus-estimate" class="text-sm text-sky-950">Estimated portfolio target: <strong>{{ formatCurrency(retirementCorpusEstimate, goalCurrencyForForm) }}</strong> today, using the withdrawal-rate assumption below.</p>
+                            <p class="text-xs leading-5 text-sky-900">This is an illustrative estimate based on your withdrawal rate, not a guaranteed income plan. You can change the assumption before saving.</p>
                         </div>
 
                         <div v-if="goalForm.goal_type === 'debt_payoff'" class="grid gap-4 sm:grid-cols-2">
@@ -957,6 +995,13 @@
                         <div v-if="goalForm.goal_type === 'retirement'" class="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
                             <div class="grid gap-4 sm:grid-cols-2">
                                 <label class="block text-sm font-medium text-slate-700">
+                                    Goal target type
+                                    <select data-testid="goal-retirement-target-mode" v-model="goalForm.retirement_target_mode" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm">
+                                        <option value="income">Monthly income goal</option>
+                                        <option value="portfolio">Portfolio amount</option>
+                                    </select>
+                                </label>
+                                <label class="block text-sm font-medium text-slate-700">
                                     Retirement timing
                                     <select data-testid="goal-retirement-mode" v-model="goalForm.retirement_timing_mode" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm">
                                         <option value="age">Birth year and target age</option>
@@ -978,21 +1023,23 @@
                                     </label>
                                 </template>
                             </div>
-                            <div class="grid gap-4 sm:grid-cols-3">
+                            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                                 <label class="block text-sm font-medium text-slate-700">Expected annual return (%)<input data-testid="goal-return" v-model="goalForm.expected_return_percent" required type="number" min="0" max="50" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" /></label>
                                 <label class="block text-sm font-medium text-slate-700">Annual inflation (%)<input data-testid="goal-inflation" v-model="goalForm.inflation_percent" required type="number" min="0" max="30" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" /></label>
+                                <label class="block text-sm font-medium text-slate-700">Withdrawal rate (%)<input data-testid="goal-withdrawal-rate" v-model="goalForm.withdrawal_rate_percent" required type="number" min="0.1" max="20" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" /></label>
                                 <label class="block text-sm font-medium text-slate-700">Planned monthly contribution (optional)<input data-testid="goal-planned-monthly" v-model="goalForm.planned_monthly" type="number" min="0" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" /></label>
                             </div>
-                            <p class="text-xs text-slate-500">The target is expressed in today’s purchasing power; your inflation and return assumptions are used to estimate the future target. Outcomes are not guaranteed.</p>
+                            <p class="text-xs text-slate-500">The portfolio target is expressed in today’s purchasing power. Return and inflation assumptions estimate its future value; they are not guarantees.</p>
                         </div>
 
                         <div class="flex flex-col gap-2 sm:flex-row">
                             <button data-testid="goal-save" type="submit" :disabled="savingGoal || goalSourceCurrencyMismatch" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60">{{ savingGoal ? 'Saving…' : (editingGoalId ? 'Save changes' : 'Save goal') }}</button>
+                            <button v-if="goalMessage.startsWith('AI draft') && chatMessages.length" type="button" @click="goalCreationMode = 'ai'" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-violet-200 bg-white px-4 py-2.5 text-sm font-medium text-violet-800 hover:bg-violet-50">Back to AI planner</button>
                             <button type="button" @click="closeGoalForm" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</button>
                         </div>
                     </form>
 
-                    <div v-if="goals.length" data-testid="goals-list" class="grid gap-4 lg:grid-cols-2">
+                    <div v-if="goalCreationMode === 'closed' && goals.length" data-testid="goals-list" class="grid gap-4 lg:grid-cols-2">
                         <article v-for="goal in goals" :key="goal.id" data-testid="goal-card" :data-goal-id="goal.id" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <div class="flex items-start justify-between gap-3">
                                 <div class="min-w-0">
@@ -1016,23 +1063,29 @@
                             <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
                                 <span v-if="goal.target_date">{{ goal.goal_type === 'retirement' ? `Target year ${goal.retirement_year}` : `Target ${formatGoalDate(goal.target_date)}` }}</span>
                                 <span v-if="goal.required_monthly">Estimated pace {{ formatCurrency(goal.required_monthly, goal.currency) }}/month</span>
+                                <span v-if="goal.goal_type === 'retirement' && goal.monthly_income_target">Income goal {{ formatCurrency(goal.monthly_income_target, goal.currency) }}/month in today’s dollars</span>
                                 <span v-if="goal.goal_type === 'debt_payoff'">APR assumption {{ goal.apr_percent }}%</span>
                                 <span v-if="goal.goal_type === 'savings' && goal.required_monthly">Savings pace excludes interest</span>
-                                <span v-if="goal.goal_type === 'retirement'">Assumptions: {{ goal.expected_return_percent }}% return · {{ goal.inflation_percent }}% inflation</span>
+                                <span v-if="goal.goal_type === 'retirement'">Assumptions: {{ goal.expected_return_percent }}% return · {{ goal.inflation_percent }}% inflation · {{ goal.withdrawal_rate_percent || '—' }}% withdrawal</span>
                                 <span v-if="goal.goal_type === 'retirement'">Target at retirement {{ formatCurrency(goal.target_nominal_amount, goal.currency) }}</span>
                                 <span v-if="goal.projected_amount">Projected {{ formatCurrency(goal.projected_amount, goal.currency) }}</span>
                             </div>
                         </article>
                     </div>
-                    <div v-else-if="!goalFormOpen" data-testid="goals-empty" class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+                    <div v-else-if="goalCreationMode === 'closed'" data-testid="goals-empty" class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
                         <h3 class="text-base font-semibold text-slate-800">Your goals start here</h3>
-                        <p class="mt-2 text-sm text-slate-500">Use Add a goal to set a savings target, debt payoff date, or retirement goal. Or talk with the AI planner to work through a draft.</p>
+                        <p class="mt-2 text-sm text-slate-500">Use Create a goal above to set a savings, debt payoff, or retirement target.</p>
                     </div>
                     </div>
-                    <aside data-testid="ai-goal-assistant" class="min-w-0 space-y-4">
+                    <section v-if="goalCreationMode === 'ai'" data-testid="ai-goal-assistant" class="min-w-0 space-y-4">
                         <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                            <h2 class="text-xl font-semibold text-slate-800">AI goal planner</h2>
-                            <p class="mt-1 text-sm text-slate-500">Plan savings, debt payoff, or retirement. Preview is optional.</p>
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <h2 class="text-xl font-semibold text-slate-800">AI goal planner</h2>
+                                    <p class="mt-1 text-sm text-slate-500">Preview is optional. You’ll review any draft before saving.</p>
+                                </div>
+                                <button type="button" data-testid="goal-ai-back" @click="goalCreationMode = 'choose'" class="min-h-10 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Choose another way</button>
+                            </div>
                             <details data-testid="ai-chat-privacy-details" class="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-950">
                                 <summary class="cursor-pointer font-medium">Privacy & data sent</summary>
                                 <div class="pt-2">
@@ -1084,7 +1137,7 @@
                             </div>
                             <div v-if="chatError" data-testid="ai-chat-error" role="alert" class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{{ chatError }}</div>
                         </form>
-                    </aside>
+                    </section>
                     </div>
                 </section>
 
@@ -1171,6 +1224,44 @@
                             </p>
                         </div>
                     </div>
+
+                    <section v-if="view === 'settings-general'" data-testid="planning-settings" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <h3 class="text-lg font-semibold text-slate-800">Goal-planning assumptions</h3>
+                                <p class="mt-1 max-w-2xl text-sm leading-5 text-slate-500">Used to prefill retirement goals and guide AI drafts. These are planning assumptions, not forecasts or guarantees. Your birth year stays in this app; the AI receives only an approximate age.</p>
+                            </div>
+                            <button type="button" data-testid="planning-settings-save" @click="savePlanningSettings" :disabled="savingPlanningSettings || planningSettingsLoading" class="inline-flex min-h-10 items-center justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">{{ savingPlanningSettings ? 'Saving…' : 'Save assumptions' }}</button>
+                        </div>
+                        <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            <label class="block text-sm font-medium text-slate-700">Birth year
+                                <input v-model="planningSettings.birth_year" data-testid="planning-birth-year" type="number" min="1900" :max="currentYear" inputmode="numeric" placeholder="Optional" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" />
+                            </label>
+                            <label class="block text-sm font-medium text-slate-700">Expected annual return (%)
+                                <input v-model="planningSettings.expected_return_percent" data-testid="planning-return" type="number" min="0" max="50" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" />
+                            </label>
+                            <label class="block text-sm font-medium text-slate-700">Withdrawal rate (%)
+                                <input v-model="planningSettings.withdrawal_rate_percent" data-testid="planning-withdrawal-rate" type="number" min="0.1" max="20" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" />
+                            </label>
+                            <label class="block text-sm font-medium text-slate-700">Inflation averaging window
+                                <select v-model.number="planningSettings.inflation_window_years" data-testid="planning-inflation-window" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm">
+                                    <option :value="5">5 years</option>
+                                    <option :value="10">10 years</option>
+                                    <option :value="20">20 years</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr),auto] sm:items-end">
+                            <label class="block text-sm font-medium text-slate-700">Annual inflation assumption (%)
+                                <input v-model="planningSettings.inflation_percent" @input="planningSettings.inflation_source = 'manual'" data-testid="planning-inflation" type="number" min="0" max="30" step="0.01" class="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-3 text-sm" />
+                            </label>
+                            <button type="button" data-testid="planning-inflation-sync" @click="syncPlanningInflation" :disabled="syncingPlanningInflation" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-sky-300 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-800 hover:bg-sky-100 disabled:opacity-50">{{ syncingPlanningInflation ? 'Syncing BLS…' : 'Sync from BLS' }}</button>
+                        </div>
+                        <p class="mt-2 text-xs leading-5 text-slate-500">Sync uses the BLS CPI-U U.S. city average, all items. The assumption is the annualized compounded CPI change over the selected window; the latest 12-month CPI reading is shown as a reference. BLS updates monthly and releases data with a lag.</p>
+                        <p v-if="planningSettings.inflation_source === 'bls' && planningSettings.inflation_as_of" data-testid="planning-inflation-source" class="mt-2 text-xs font-medium text-slate-700">BLS data through {{ planningSettings.inflation_as_of }} · latest 12-month change {{ planningSettings.inflation_latest_yoy_percent ?? 'unavailable' }}% · synced {{ formatDateTime(planningSettings.inflation_synced_at) }}</p>
+                        <p v-else data-testid="planning-inflation-source" class="mt-2 text-xs text-slate-600">{{ planningSettings.inflation_source === 'default' ? 'Using the illustrative default until you sync BLS or enter your own assumption.' : 'Using your manually entered inflation assumption.' }}</p>
+                        <div v-if="planningSettingsMessage" data-testid="planning-settings-message" role="status" class="mt-3 rounded-lg border px-3 py-2 text-sm" :class="planningSettingsError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ planningSettingsMessage }}</div>
+                    </section>
 
                     <section v-if="view === 'settings-general'" data-testid="account-type-settings" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1633,6 +1724,7 @@
                 const view = ref('dashboard');
                 const drawerOpen = ref(false);
                 const nowTick = ref(Date.now());
+                const currentYear = new Date().getFullYear();
                 const accounts = ref([]);
                 const transactions = ref([]);
                 const manualAssets = ref([]);
@@ -1645,11 +1737,28 @@
                 const manualAssetError = ref(false);
                 const goals = ref([]);
                 const goalsLoading = ref(false);
+                const goalCreationMode = ref('closed');
                 const goalFormOpen = ref(false);
                 const editingGoalId = ref('');
                 const savingGoal = ref(false);
                 const goalMessage = ref('');
                 const goalError = ref(false);
+                const planningSettings = ref({
+                    birth_year: null,
+                    expected_return_percent: '6',
+                    withdrawal_rate_percent: '4',
+                    inflation_percent: '2.5',
+                    inflation_source: 'default',
+                    inflation_window_years: 10,
+                    inflation_as_of: null,
+                    inflation_synced_at: null,
+                    inflation_latest_yoy_percent: null,
+                });
+                const planningSettingsLoading = ref(false);
+                const savingPlanningSettings = ref(false);
+                const syncingPlanningInflation = ref(false);
+                const planningSettingsMessage = ref('');
+                const planningSettingsError = ref(false);
                 const createGoalForm = () => ({
                     goal_type: 'savings',
                     name: '',
@@ -1657,17 +1766,35 @@
                     account_ids: [],
                     manual_asset_ids: [],
                     target_amount: '',
+                    monthly_income_target: '',
+                    retirement_target_mode: 'income',
                     target_date: '',
                     apr_percent: '',
                     planned_monthly: '',
-                    retirement_timing_mode: 'year',
-                    birth_year: '',
+                    retirement_timing_mode: planningSettings.value.birth_year == null ? 'year' : 'age',
+                    birth_year: planningSettings.value.birth_year == null ? '' : String(planningSettings.value.birth_year),
                     target_retirement_age: '65',
                     retirement_year: String(new Date().getFullYear() + 20),
-                    expected_return_percent: '',
-                    inflation_percent: '',
+                    expected_return_percent: String(planningSettings.value.expected_return_percent || '6'),
+                    inflation_percent: String(planningSettings.value.inflation_percent || '2.5'),
+                    withdrawal_rate_percent: String(planningSettings.value.withdrawal_rate_percent || '4'),
                 });
                 const goalForm = ref(createGoalForm());
+                const retirementCorpusEstimate = computed(() => {
+                    const monthlyIncome = Number.parseFloat(goalForm.value.monthly_income_target || '0');
+                    const withdrawalRate = Number.parseFloat(goalForm.value.withdrawal_rate_percent || '0');
+                    if (!Number.isFinite(monthlyIncome) || !Number.isFinite(withdrawalRate) || monthlyIncome <= 0 || withdrawalRate <= 0) return 0;
+                    return monthlyIncome * 12 / (withdrawalRate / 100);
+                });
+                const goalCurrencyForForm = computed(() => {
+                    const selectedAccountIds = goalForm.value.goal_type === 'debt_payoff'
+                        ? [goalForm.value.account_id]
+                        : goalForm.value.account_ids;
+                    const selectedAccount = accounts.value.find((account) => selectedAccountIds.includes(String(account.id)));
+                    if (selectedAccount?.currency) return selectedAccount.currency;
+                    const selectedAsset = manualAssets.value.find((asset) => goalForm.value.manual_asset_ids.includes(String(asset.id)));
+                    return selectedAsset?.currency || 'USD';
+                });
                 const recurringItems = ref([]);
                 const recurringSummary = ref({ subscription_count: 0, recurring_bill_count: 0, recurring_income_count: 0, other_count: 0 });
                 const recurringGeneratedAt = ref(null);
@@ -2120,6 +2247,17 @@
                 };
 
                 const clearLoadedData = () => {
+                    planningSettings.value = {
+                        birth_year: null,
+                        expected_return_percent: '6',
+                        withdrawal_rate_percent: '4',
+                        inflation_percent: '2.5',
+                        inflation_source: 'default',
+                        inflation_window_years: 10,
+                        inflation_as_of: null,
+                        inflation_synced_at: null,
+                        inflation_latest_yoy_percent: null,
+                    };
                     accounts.value = [];
                     transactions.value = [];
                     selectedAccountIds.value = [];
@@ -2256,6 +2394,22 @@
                     }
                 };
 
+                const fetchPlanningSettings = async () => {
+                    if (!pinStatus.value.session_active) return;
+                    planningSettingsLoading.value = true;
+                    try {
+                        const res = await apiFetch('/api/planning/settings');
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Failed to load planning settings.');
+                        planningSettings.value = { ...planningSettings.value, ...data };
+                    } catch (err) {
+                        planningSettingsError.value = true;
+                        planningSettingsMessage.value = err.message;
+                    } finally {
+                        planningSettingsLoading.value = false;
+                    }
+                };
+
                 const providerDefaultModel = (provider) => {
                     const map = {
                         openai: 'gpt-4o-mini',
@@ -2378,7 +2532,7 @@
                 };
 
                 const fetchProtectedState = async () => {
-                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAppLogSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals()]);
+                    await Promise.all([fetchStatus(), fetchData(), fetchRecurringRules(), fetchRecurringPayments(), fetchCategoryRules(), fetchPinSettings(), fetchAppLogSettings(), fetchPlanningSettings(), fetchAiSettings(), fetchAiPrompts(), fetchGoals()]);
                     await nextTick();
                     renderSankey();
                     renderSpendingPie();
@@ -2491,6 +2645,58 @@
                         appLogSettingsMessage.value = err.message;
                     } finally {
                         savingAppLogSettings.value = false;
+                    }
+                };
+
+                const savePlanningSettings = async () => {
+                    savingPlanningSettings.value = true;
+                    planningSettingsMessage.value = '';
+                    planningSettingsError.value = false;
+                    try {
+                        const payload = {
+                            birth_year: planningSettings.value.birth_year === '' ? null : planningSettings.value.birth_year,
+                            expected_return_percent: String(planningSettings.value.expected_return_percent),
+                            withdrawal_rate_percent: String(planningSettings.value.withdrawal_rate_percent),
+                            inflation_percent: String(planningSettings.value.inflation_percent),
+                            inflation_source: planningSettings.value.inflation_source || 'default',
+                            inflation_window_years: Number(planningSettings.value.inflation_window_years),
+                        };
+                        const res = await apiFetch('/api/planning/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Failed to save planning settings.');
+                        planningSettings.value = { ...planningSettings.value, ...data };
+                        planningSettingsMessage.value = 'Planning assumptions saved.';
+                    } catch (err) {
+                        planningSettingsError.value = true;
+                        planningSettingsMessage.value = err.message;
+                    } finally {
+                        savingPlanningSettings.value = false;
+                    }
+                };
+
+                const syncPlanningInflation = async () => {
+                    syncingPlanningInflation.value = true;
+                    planningSettingsMessage.value = '';
+                    planningSettingsError.value = false;
+                    try {
+                        const res = await apiFetch('/api/planning/inflation/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ window_years: Number(planningSettings.value.inflation_window_years) }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || 'Could not retrieve CPI data from BLS.');
+                        planningSettings.value = { ...planningSettings.value, ...data };
+                        planningSettingsMessage.value = `Inflation synced from BLS through ${data.inflation_as_of}.`;
+                    } catch (err) {
+                        planningSettingsError.value = true;
+                        planningSettingsMessage.value = err.message;
+                    } finally {
+                        syncingPlanningInflation.value = false;
                     }
                 };
 
@@ -2854,18 +3060,45 @@
                     }
                 };
 
+                const startGoalCreation = () => {
+                    editingGoalId.value = '';
+                    goalForm.value = createGoalForm();
+                    goalFormOpen.value = false;
+                    goalCreationMode.value = 'choose';
+                    goalMessage.value = '';
+                    goalError.value = false;
+                };
+
+                const selectGoalCreationMode = (mode) => {
+                    if (!['ai', 'manual'].includes(mode)) return;
+                    if (mode === 'manual') {
+                        openNewGoalForm();
+                        return;
+                    }
+                    goalCreationMode.value = 'ai';
+                    goalFormOpen.value = false;
+                    goalMessage.value = '';
+                    goalError.value = false;
+                };
+
                 const openNewGoalForm = () => {
                     editingGoalId.value = '';
                     goalForm.value = createGoalForm();
                     goalFormOpen.value = true;
+                    goalCreationMode.value = 'manual';
                     goalMessage.value = '';
                     goalError.value = false;
                 };
 
                 const closeGoalForm = () => {
+                    closeGoalFlow();
+                };
+
+                const closeGoalFlow = () => {
                     goalFormOpen.value = false;
                     editingGoalId.value = '';
                     goalForm.value = createGoalForm();
+                    goalCreationMode.value = 'closed';
                 };
 
                 const changeGoalType = () => {
@@ -2879,6 +3112,12 @@
                     goalForm.value.target_amount = '';
                     goalForm.value.target_date = '';
                     goalForm.value.planned_monthly = '';
+                    goalForm.value.monthly_income_target = '';
+                    goalForm.value.retirement_target_mode = type === 'retirement' ? 'income' : 'portfolio';
+                    if (type === 'retirement' && planningSettings.value.birth_year != null) {
+                        goalForm.value.retirement_timing_mode = 'age';
+                        goalForm.value.birth_year = String(planningSettings.value.birth_year);
+                    }
                 };
 
                 const goalAccountSelected = (accountId) => {
@@ -2925,6 +3164,8 @@
                         account_ids: (goal.account_ids || []).map(String),
                         manual_asset_ids: (goal.manual_asset_ids || []).map(String),
                         target_amount: String(goal.target_amount ?? ''),
+                        monthly_income_target: goal.monthly_income_target == null ? '' : String(goal.monthly_income_target),
+                        retirement_target_mode: goal.monthly_income_target == null ? 'portfolio' : 'income',
                         target_date: goal.goal_type === 'retirement' ? '' : (goal.target_date || ''),
                         apr_percent: String(goal.apr_percent ?? ''),
                         planned_monthly: goal.planned_monthly == null ? '' : String(goal.planned_monthly),
@@ -2934,8 +3175,10 @@
                         retirement_year: goal.retirement_year == null ? '' : String(goal.retirement_year),
                         expected_return_percent: String(goal.expected_return_percent ?? ''),
                         inflation_percent: String(goal.inflation_percent ?? ''),
+                        withdrawal_rate_percent: String(goal.withdrawal_rate_percent ?? planningSettings.value.withdrawal_rate_percent ?? '4'),
                     };
                     goalFormOpen.value = true;
+                    goalCreationMode.value = 'manual';
                     goalMessage.value = '';
                     goalError.value = false;
                     setView('goals');
@@ -2954,7 +3197,13 @@
                             ? (form.account_id ? [String(form.account_id)] : [])
                             : form.account_ids.map(String),
                         manual_asset_ids: form.manual_asset_ids.map(String),
-                        target_amount: form.goal_type === 'debt_payoff' ? null : String(form.target_amount),
+                        target_amount: form.goal_type === 'debt_payoff' || (form.goal_type === 'retirement' && form.retirement_target_mode === 'income')
+                            ? null
+                            : String(form.target_amount),
+                        monthly_income_target: form.goal_type === 'retirement' && form.retirement_target_mode === 'income'
+                            ? String(form.monthly_income_target)
+                            : null,
+                        withdrawal_rate_percent: form.goal_type === 'retirement' ? String(form.withdrawal_rate_percent) : null,
                         target_date: form.goal_type === 'retirement' ? null : (form.target_date || null),
                         apr_percent: form.goal_type === 'debt_payoff' ? String(form.apr_percent) : null,
                         planned_monthly: form.planned_monthly === '' ? null : String(form.planned_monthly),
@@ -3113,17 +3362,25 @@
                     goalForm.value.account_ids = [];
                     goalForm.value.manual_asset_ids = [];
                     goalForm.value.target_amount = draft.target_amount == null ? '' : String(draft.target_amount);
+                    goalForm.value.monthly_income_target = draft.monthly_income_target == null ? '' : String(draft.monthly_income_target);
+                    goalForm.value.retirement_target_mode = draft.goal_type === 'retirement' && draft.monthly_income_target != null
+                        ? 'income'
+                        : 'portfolio';
                     goalForm.value.target_date = draft.target_date || '';
                     goalForm.value.apr_percent = draft.apr_percent == null ? '' : String(draft.apr_percent);
                     goalForm.value.planned_monthly = draft.planned_monthly == null ? '' : String(draft.planned_monthly);
                     goalForm.value.retirement_timing_mode = draft.retirement_timing_mode || 'year';
-                    goalForm.value.birth_year = draft.birth_year == null ? '' : String(draft.birth_year);
+                    goalForm.value.birth_year = draft.birth_year == null
+                        ? (planningSettings.value.birth_year == null ? '' : String(planningSettings.value.birth_year))
+                        : String(draft.birth_year);
                     goalForm.value.target_retirement_age = draft.target_retirement_age == null ? '' : String(draft.target_retirement_age);
                     goalForm.value.retirement_year = draft.retirement_year == null ? '' : String(draft.retirement_year);
-                    goalForm.value.expected_return_percent = draft.expected_return_percent == null ? '' : String(draft.expected_return_percent);
-                    goalForm.value.inflation_percent = draft.inflation_percent == null ? '' : String(draft.inflation_percent);
+                    goalForm.value.expected_return_percent = draft.expected_return_percent == null ? String(planningSettings.value.expected_return_percent || '6') : String(draft.expected_return_percent);
+                    goalForm.value.inflation_percent = draft.inflation_percent == null ? String(planningSettings.value.inflation_percent || '2.5') : String(draft.inflation_percent);
+                    goalForm.value.withdrawal_rate_percent = draft.withdrawal_rate_percent == null ? String(planningSettings.value.withdrawal_rate_percent || '4') : String(draft.withdrawal_rate_percent);
                     goalFormOpen.value = true;
                     goalError.value = false;
+                    goalCreationMode.value = 'manual';
                     goalMessage.value = 'AI draft loaded. Review its assumptions and select the account sources before saving.';
                     setView('goals');
                     goalFormOpen.value = true;
@@ -3642,6 +3899,32 @@
                         'internal transfer',
                     ].some((pattern) => haystack.includes(pattern));
                 };
+
+                const cashflowPeriodLabel = computed(() => {
+                    if (!selectedMonth.value || selectedMonth.value === 'all') return 'All available history';
+                    const now = new Date(nowTick.value);
+                    const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+                    return selectedMonth.value === currentMonth ? 'Month to date' : formatMonthLabel(selectedMonth.value);
+                });
+                const cashflowKpis = computed(() => {
+                    const currencyByAccount = new Map(accounts.value.map((account) => [String(account.id), String(account.currency || 'USD').toUpperCase()]));
+                    const totals = new Map();
+                    (transactions.value || []).forEach((tx) => {
+                        if (isPendingTransaction(tx) || isTransferLike(tx)) return;
+                        if (selectedMonth.value && selectedMonth.value !== 'all' && monthKeyFromTimestamp(tx.date) !== selectedMonth.value) return;
+                        const amount = Number.parseFloat(tx.amount || '0');
+                        if (!Number.isFinite(amount) || amount === 0) return;
+                        const currency = currencyByAccount.get(String(tx.account_id || '')) || 'USD';
+                        const item = totals.get(currency) || { currency, income: 0, spending: 0, transaction_count: 0 };
+                        if (amount > 0) item.income += amount;
+                        else item.spending += Math.abs(amount);
+                        item.transaction_count += 1;
+                        totals.set(currency, item);
+                    });
+                    return Array.from(totals.values())
+                        .map((item) => ({ ...item, net: item.income - item.spending }))
+                        .sort((left, right) => left.currency.localeCompare(right.currency));
+                });
 
                 const transactionAccountName = (tx) => tx.account_nickname || tx.account_name || tx.org || 'Account';
                 const accountTypeLabel = (type) => accountTypeLabels[type] || accountTypeLabels.unclassified;
@@ -4389,17 +4672,21 @@
                 return {
                     view,
                     drawerOpen,
+                    currentYear,
                     accounts,
                     transactions,
                     manualAssets,
                     goals,
                     goalsLoading,
+                    goalCreationMode,
                     goalFormOpen,
                     editingGoalId,
                     savingGoal,
                     goalMessage,
                     goalError,
                     goalForm,
+                    retirementCorpusEstimate,
+                    goalCurrencyForForm,
                     goalAccountOptions,
                     goalSourceCurrencyMismatch,
                     dashboardGoals,
@@ -4462,6 +4749,12 @@
                     pinSettingsMessage,
                     pinSettingsError,
                     savingPinSettings,
+                    planningSettings,
+                    planningSettingsLoading,
+                    savingPlanningSettings,
+                    syncingPlanningInflation,
+                    planningSettingsMessage,
+                    planningSettingsError,
                     appLogLevel,
                     appLogSettingsMessage,
                     appLogSettingsError,
@@ -4552,6 +4845,8 @@
                     status,
                     sankeyEl,
                     sankeyMode,
+                    cashflowKpis,
+                    cashflowPeriodLabel,
                     renderSpendingPie,
                     hasSankeyData,
                     selectedSankeyDetails,
@@ -4575,6 +4870,8 @@
                     saveCategoryRules,
                     saveAiSettings,
                     saveAppLogSettings,
+                    savePlanningSettings,
+                    syncPlanningInflation,
                     saveAiPrompt,
                     resetAiPrompt,
                     updateAccountType,
@@ -4583,8 +4880,11 @@
                     resetManualAssetForm,
                     editManualAsset,
                     removeManualAsset,
+                    startGoalCreation,
+                    selectGoalCreationMode,
                     openNewGoalForm,
                     closeGoalForm,
+                    closeGoalFlow,
                     changeGoalType,
                     editGoal,
                     saveGoal,

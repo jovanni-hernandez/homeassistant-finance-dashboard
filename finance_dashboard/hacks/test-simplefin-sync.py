@@ -127,7 +127,7 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         self.assertEqual(result["incoming_transaction_count"], 0)
         self.assertIsNone(result["latest_incoming_transaction_date"])
-        self.assertEqual(result["account_backfill_windows"], 29)
+        self.assertEqual(result["account_backfill_windows"], 89)
         self.assertIn("Freshness NOT verified: SimpleFIN returned no transactions", result["message"])
 
     def test_sync_requests_exactly_one_day(self):
@@ -142,7 +142,7 @@ class SimpleFinSyncTests(unittest.TestCase):
         end_timestamp = fetch.call_args.kwargs["end_ts"]
         self.assertEqual(end_timestamp - start_timestamp, 24 * 60 * 60)
 
-    def test_new_accounts_get_30_days_in_one_sync_for_each_discovered_account(self):
+    def test_new_accounts_get_90_days_in_one_sync_for_each_discovered_account(self):
         day = simplefin.SYNC_WINDOW_SECONDS
         account_ids = ("new-checking", "new-savings")
 
@@ -155,15 +155,15 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         calls = fetch.call_args_list
         self.assertEqual(len(calls), simplefin.ACCOUNT_BACKFILL_DAYS)
-        self.assertEqual(result["account_backfill_windows"], 29)
-        self.assertEqual(result["sync_windows"], 30)
+        self.assertEqual(result["account_backfill_windows"], 89)
+        self.assertEqual(result["sync_windows"], 90)
         self.assertFalse(result["account_backfill_pending"])
         self.assertEqual(result["account_backfill_remaining_days"], 0)
         self.assertEqual(get_setting(simplefin.ACCOUNT_BACKFILL_SETTING_KEY), "{}")
 
         rolling_call = calls[0].kwargs
         account_backfill_calls = [call.kwargs for call in calls[1:]]
-        self.assertEqual(account_backfill_calls[0]["start_ts"], rolling_call["start_ts"] - 29 * day)
+        self.assertEqual(account_backfill_calls[0]["start_ts"], rolling_call["start_ts"] - 89 * day)
         self.assertEqual(account_backfill_calls[-1]["end_ts"], rolling_call["start_ts"])
         for previous, following in zip(account_backfill_calls, account_backfill_calls[1:]):
             self.assertEqual(previous["end_ts"], following["start_ts"])
@@ -171,7 +171,7 @@ class SimpleFinSyncTests(unittest.TestCase):
         db = SessionLocal()
         try:
             self.assertEqual(db.query(Account).count(), len(account_ids))
-            self.assertEqual(db.query(Transaction).count(), 30 * len(account_ids))
+            self.assertEqual(db.query(Transaction).count(), 90 * len(account_ids))
         finally:
             db.close()
 
@@ -218,7 +218,7 @@ class SimpleFinSyncTests(unittest.TestCase):
             resumed_result = simplefin.fetch_and_sync_simplefin()
 
         self.assertEqual(resumed_result["status"], "success")
-        self.assertEqual(resumed_result["account_backfill_windows"], 26)
+        self.assertEqual(resumed_result["account_backfill_windows"], 86)
         self.assertFalse(resumed_result["account_backfill_pending"])
         self.assertEqual(get_setting(simplefin.ACCOUNT_BACKFILL_SETTING_KEY), "{}")
         resumed_windows = [call.kwargs for call in fetch.call_args_list[1:]]

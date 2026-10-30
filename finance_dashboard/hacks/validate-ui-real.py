@@ -172,6 +172,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/recurring-payments",
         "api/pin/settings",
         "api/logging/settings",
+        "api/planning/settings",
         "api/ai/settings",
         "api/ai/prompts",
     ]
@@ -434,6 +435,11 @@ def main():
                       let injectedSourceTransaction = null;
                       window.fetch = async (...args) => {
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
+                        if (url.endsWith("/api/planning/inflation/sync")) {
+                          const body = JSON.parse(args[1]?.body || "{}");
+                          window.__testInflationSyncWindow = body.window_years;
+                          return new Response(JSON.stringify({status: "success", inflation_percent: "2.71", inflation_source: "bls", inflation_window_years: body.window_years, inflation_as_of: "2026-08", inflation_synced_at: "2026-10-30T12:00:00+00:00", inflation_latest_yoy_percent: "2.94"}), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
                         if (url.endsWith("/api/ai/chat/preview")) {
                           const body = JSON.parse(args[1]?.body || "{}");
                           const conversation = (body.messages || []).map((message) => ({
@@ -696,6 +702,33 @@ def main():
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
             WebDriverWait(driver, args.timeout).until(lambda current: "Recent transactions" in current.find_element(By.TAG_NAME, "body").text)
+            cashflow_kpi = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="cashflow-kpi"]'))
+            )
+            kpi_values = [
+                {
+                    "income": float(item.get_attribute("data-income")),
+                    "spending": float(item.get_attribute("data-spending")),
+                    "net": float(item.get_attribute("data-net-cashflow")),
+                }
+                for item in cashflow_kpi.find_elements(By.CSS_SELECTOR, '[data-testid="cashflow-kpi-currency"]')
+            ]
+            cashflow_kpi_checks = {
+                "summary_is_visible_above_chart": cashflow_kpi.is_displayed(),
+                "net_equals_income_minus_spending": bool(kpi_values) and all(
+                    abs(item["net"] - (item["income"] - item["spending"])) < 0.02 for item in kpi_values
+                ),
+                "transfers_are_excluded_and_disclosed": "Detected transfers excluded" in cashflow_kpi.text,
+                "separate_currency_totals": len({item.get_attribute("data-currency") for item in cashflow_kpi.find_elements(By.CSS_SELECTOR, '[data-testid="cashflow-kpi-currency"]')})
+                == len(cashflow_kpi.find_elements(By.CSS_SELECTOR, '[data-testid="cashflow-kpi-currency"]')),
+            }
+            if args.device in {"iphone", "pixel"}:
+                cashflow_kpi_screenshot = screenshot.with_name(screenshot.stem + "-cashflow-kpi" + screenshot.suffix)
+                driver.execute_script("arguments[0].scrollIntoView({block: 'start'});", cashflow_kpi)
+                driver.save_screenshot(str(cashflow_kpi_screenshot))
+                cashflow_kpi_checks["phone_layout_has_no_horizontal_overflow"] = driver.execute_script(
+                    "return document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
+                )
             transaction_row_selector = '[data-testid="transaction-row"]'
             transaction_rows = driver.find_elements(By.CSS_SELECTOR, transaction_row_selector)
             group_headings = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-group-heading"]')
@@ -1303,10 +1336,29 @@ def main():
                 "log_level_defaults_to_info": False,
                 "debug_level_warns_and_saves": False,
                 "info_level_can_be_restored": False,
+                "planning_assumptions_are_editable": False,
+                "bls_sync_uses_selected_window": False,
             }
             app_log_select = Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="app-log-level"]'))
             settings_navigation_checks["log_level_defaults_to_info"] = (
                 app_log_select.first_selected_option.get_attribute("value") == "INFO"
+            )
+            planning_settings_panel = driver.find_element(By.CSS_SELECTOR, '[data-testid="planning-settings"]')
+            settings_navigation_checks["planning_assumptions_are_editable"] = (
+                bool(planning_settings_panel.find_elements(By.CSS_SELECTOR, '[data-testid="planning-birth-year"]'))
+                and bool(planning_settings_panel.find_elements(By.CSS_SELECTOR, '[data-testid="planning-return"]'))
+                and bool(planning_settings_panel.find_elements(By.CSS_SELECTOR, '[data-testid="planning-withdrawal-rate"]'))
+                and bool(planning_settings_panel.find_elements(By.CSS_SELECTOR, '[data-testid="planning-inflation-sync"]'))
+                and bool(planning_settings_panel.find_elements(By.CSS_SELECTOR, '[data-testid="planning-inflation-window"]'))
+            )
+            Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="planning-inflation-window"]')).select_by_value("5")
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="planning-inflation-sync"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: current.find_element(By.CSS_SELECTOR, '[data-testid="planning-inflation"]').get_attribute("value") == "2.71"
+            )
+            settings_navigation_checks["bls_sync_uses_selected_window"] = (
+                driver.execute_script("return window.__testInflationSyncWindow") == 5
+                and "BLS data through 2026-08" in driver.find_element(By.CSS_SELECTOR, '[data-testid="planning-inflation-source"]').text
             )
             app_log_select.select_by_value("DEBUG")
             settings_navigation_checks["debug_level_warns_and_saves"] = (
@@ -1554,9 +1606,19 @@ def main():
             goal_checks["one_goal_creation_entry_point"] = (
                 len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-add-button"]')) == 1
                 and not driver.find_elements(By.XPATH, "//button[normalize-space()='Create your first goal']")
-                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-goal-assistant"]'))
+                and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="ai-goal-assistant"]')
             )
             driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goal-method-choice"]'))
+            )
+            goal_method_screenshot = screenshot.with_name(screenshot.stem + "-goal-method" + screenshot.suffix)
+            driver.save_screenshot(str(goal_method_screenshot))
+            goal_checks["one_goal_creation_entry_point"] = goal_checks["one_goal_creation_entry_point"] and all(
+                driver.find_elements(By.CSS_SELECTOR, f'[data-testid="{test_id}"]')
+                for test_id in ("goal-method-ai", "goal-method-manual")
+            )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-method-manual"]').click()
             goal_checks["add_button_hides_during_creation"] = not driver.find_elements(
                 By.CSS_SELECTOR, '[data-testid="goal-add-button"]'
             )
@@ -1568,9 +1630,12 @@ def main():
             WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goal-return"]'))
             )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-monthly-income-target"]').send_keys("10000")
             goal_checks["retirement_goal_fields_visible"] = (
                 bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-retirement-year"]'))
                 and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-inflation"]'))
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-monthly-income-target"]'))
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-corpus-estimate"]'))
             )
             retirement_goal_form_screenshot = screenshot.with_name(screenshot.stem + "-goal-retirement-form" + screenshot.suffix)
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-return"]'))
@@ -1649,6 +1714,11 @@ def main():
             }
             goals_page = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goals-page"]'))
+            )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]').click()
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-method-ai"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="ai-goal-assistant"]'))
             )
             ai_chat_checks["assistant_is_embedded_in_goals"] = (
                 "AI goal planner" in goals_page.text
@@ -1907,6 +1977,7 @@ def main():
                 "sankey_mobile_layout": sankey_layout_checks,
                 "sankey_mobile_measurements": sankey_mobile_measurements,
                 "transaction_grouping": transaction_group_checks,
+                "cashflow_kpi": cashflow_kpi_checks,
                 "transaction_search_and_category_filter": transaction_filter_checks,
                 "spending_pie": spending_pie_checks,
                 "account_types_and_net_worth": account_type_checks,
@@ -1943,6 +2014,7 @@ def main():
                 and checks["sankey_link_aggregation"]
                 and all(sankey_layout_checks.values())
                 and all(transaction_group_checks.values())
+                and all(cashflow_kpi_checks.values())
                 and all(transaction_filter_checks.values())
                 and all(spending_pie_checks.values())
                 and all(account_type_checks.values())
@@ -1984,6 +2056,7 @@ def main():
                 "goals_screenshot": str(goals_screenshot),
                 "dashboard_goals_screenshot": str(dashboard_goals_screenshot),
                 "goal_form_screenshot": str(goal_form_screenshot),
+                "goal_method_screenshot": str(goal_method_screenshot),
                 "retirement_goal_form_screenshot": str(retirement_goal_form_screenshot),
                 "ai_chat_preview_screenshot": str(ai_chat_screenshot),
                 "sankey_filtered_screenshot": str(sankey_filtered_screenshot) if sankey_filtered_screenshot else None,

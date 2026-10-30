@@ -9,7 +9,7 @@ import threading
 import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
 from ai_assistant import _provider_key, get_ai_settings
 from ai_logging import log_ai_exchange
@@ -17,6 +17,7 @@ from ai_prompts import DEFAULT_SYSTEM_PROMPTS, get_ai_system_prompt
 from database import get_manual_assets, get_stored_accounts
 from goals import get_goals
 from models import LIABILITY_ACCOUNT_TYPES, SessionLocal, Transaction
+from planning import get_planning_settings
 from recurring_analysis import _is_transfer_like
 
 MAX_CHAT_MESSAGE_LENGTH = 2000
@@ -100,6 +101,7 @@ def build_sanitized_financial_context(accounts, manual_assets, goals, transactio
     today = today or date.today()
     account_totals = defaultdict(lambda: {"account_count": 0, "balance_total": Decimal("0")})
     account_currencies = {}
+    account_types = {}
     for account in accounts:
         account_id = str(_value(account, "id", ""))
         currency = str(_value(account, "currency", "USD") or "USD").upper()
@@ -112,6 +114,7 @@ def build_sanitized_financial_context(accounts, manual_assets, goals, transactio
         group["balance_total"] += balance
         if account_id:
             account_currencies[account_id] = currency
+            account_types[account_id] = account_type
 
     asset_totals = defaultdict(lambda: {"asset_count": 0, "value_total": Decimal("0")})
     for asset in manual_assets:
@@ -126,6 +129,17 @@ def build_sanitized_financial_context(accounts, manual_assets, goals, transactio
         "spending_total": Decimal("0"),
         "spending_by_category": defaultdict(lambda: {"amount": Decimal("0"), "count": 0}),
     })
+    monthly_flow = defaultdict(lambda: {
+        "income": Decimal("0"),
+        "spending": Decimal("0"),
+        "transaction_count": 0,
+    })
+    investment_flow = defaultdict(lambda: {
+        "inflows": Decimal("0"),
+        "outflows": Decimal("0"),
+        "investment_transaction_count": 0,
+        "identified_transfer_count": 0,
+    })
     cutoff = _cutoff_date(today)
     for transaction in transactions:
         timestamp = _value(transaction, "date")
@@ -139,24 +153,39 @@ def build_sanitized_financial_context(accounts, manual_assets, goals, transactio
             continue
         category = str(_value(transaction, "category", "Uncategorized") or "Uncategorized").strip() or "Uncategorized"
         screening_text = f"{_value(transaction, 'payee', '') or ''} {_value(transaction, 'description', '') or ''}".strip()
-        if _is_transfer_like(screening_text, category):
-            continue
-        currency = account_currencies.get(str(_value(transaction, "account_id", "")))
+        account_id = str(_value(transaction, "account_id", ""))
+        currency = account_currencies.get(account_id)
         if not currency:
             continue
         amount = _decimal(_value(transaction, "amount", "0"))
         if amount == 0:
             continue
         month = transaction_date.strftime("%Y-%m")
+        is_transfer = _is_transfer_like(screening_text, category)
+        if account_types.get(account_id) == "investment":
+            investment_group = investment_flow[(month, currency)]
+            investment_group["investment_transaction_count"] += 1
+            if is_transfer:
+                investment_group["identified_transfer_count"] += 1
+                if amount > 0:
+                    investment_group["inflows"] += amount
+                else:
+                    investment_group["outflows"] += abs(amount)
+        if is_transfer:
+            continue
         group = period_totals[(month, currency)]
+        flow_group = monthly_flow[(month, currency)]
+        flow_group["transaction_count"] += 1
         if amount > 0:
             group["income_total"] += amount
+            flow_group["income"] += amount
             category_total = group["income_by_category"][category]
             category_total["amount"] += amount
             category_total["count"] += 1
         else:
             spending = abs(amount)
             group["spending_total"] += spending
+            flow_group["spending"] += spending
             category_total = group["spending_by_category"][category]
             category_total["amount"] += spending
             category_total["count"] += 1
@@ -172,6 +201,62 @@ def build_sanitized_financial_context(accounts, manual_assets, goals, transactio
             "spending_by_category": _category_rows(group["spending_by_category"]),
         })
 
+    by_currency_cashflow = defaultdict(list)
+    for (month, currency), group in monthly_flow.items():
+        by_currency_cashflow[currency].append((month, group))
+    cashflow_summary = []
+    for currency, months in sorted(by_currency_cashflow.items()):
+        income = sum((item["income"] for _, item in months), Decimal("0"))
+        spending = sum((item["spending"] for _, item in months), Decimal("0"))
+        month_count = len(months)
+        cashflow_summary.append({
+            "currency": currency,
+            "months_with_observed_transactions": month_count,
+            "observed_months": [month for month, _ in sorted(months)],
+            "income_total": _number(income),
+            "spending_total": _number(spending),
+            "net_cash_flow_total": _number(income - spending),
+            "average_monthly_income_when_data_exists": _number(income / month_count),
+            "average_monthly_spending_when_data_exists": _number(spending / month_count),
+            "average_monthly_net_cash_flow_when_data_exists": _number((income - spending) / month_count),
+            "coverage_note": "A month without transactions is not assumed to be a zero-income or zero-spending month.",
+        })
+
+    investment_by_currency = defaultdict(list)
+    for (month, currency), group in investment_flow.items():
+        investment_by_currency[currency].append((month, group))
+    investment_flow_summary = []
+    for currency, months in sorted(investment_by_currency.items()):
+        observed_months = [item for item in months if item[1]["investment_transaction_count"]]
+        inflows = sum((item[1]["inflows"] for item in observed_months), Decimal("0"))
+        outflows = sum((item[1]["outflows"] for item in observed_months), Decimal("0"))
+        observed_count = len(observed_months)
+        investment_flow_summary.append({
+            "currency": currency,
+            "months_with_investment_account_activity": observed_count,
+            "observed_months": [month for month, _ in sorted(observed_months)],
+            "identified_transfer_inflows_total": _number(inflows),
+            "identified_transfer_outflows_total": _number(outflows),
+            "identified_net_contributions_total": _number(inflows - outflows),
+            "average_net_contribution_in_months_with_activity": _number((inflows - outflows) / observed_count) if observed_count else 0,
+            "identified_transfer_count": sum(item[1]["identified_transfer_count"] for item in observed_months),
+            "coverage_note": "Only transfers recorded on classified investment accounts are counted; this is not investment performance and may omit unlinked or unclassified flows.",
+        })
+
+    planning_settings = get_planning_settings()
+    birth_year = planning_settings.get("birth_year")
+    current_age_estimate = today.year - int(birth_year) if birth_year else None
+    planning_assumptions = {
+        "current_age_estimate": current_age_estimate,
+        "expected_return_percent": planning_settings.get("expected_return_percent"),
+        "withdrawal_rate_percent": planning_settings.get("withdrawal_rate_percent"),
+        "inflation_percent": planning_settings.get("inflation_percent"),
+        "inflation_source": planning_settings.get("inflation_source"),
+        "inflation_window_years": planning_settings.get("inflation_window_years"),
+        "inflation_as_of": planning_settings.get("inflation_as_of"),
+        "inflation_latest_yoy_percent": planning_settings.get("inflation_latest_yoy_percent"),
+    }
+
     goal_summaries = []
     for goal in goals:
         safe_goal = {
@@ -184,6 +269,7 @@ def build_sanitized_financial_context(accounts, manual_assets, goals, transactio
             "retirement_year": goal.get("retirement_year"),
             "required_monthly": goal.get("required_monthly"),
             "planned_monthly": goal.get("planned_monthly"),
+            "monthly_income_target": goal.get("monthly_income_target"),
             "status": goal.get("status"),
         }
         if goal.get("goal_type") == "debt_payoff":
@@ -191,6 +277,7 @@ def build_sanitized_financial_context(accounts, manual_assets, goals, transactio
         if goal.get("goal_type") == "retirement":
             safe_goal["expected_return_percent"] = goal.get("expected_return_percent")
             safe_goal["inflation_percent"] = goal.get("inflation_percent")
+            safe_goal["withdrawal_rate_percent"] = goal.get("withdrawal_rate_percent")
             safe_goal["target_nominal_amount"] = goal.get("target_nominal_amount")
         goal_summaries.append(safe_goal)
 
@@ -215,6 +302,9 @@ def build_sanitized_financial_context(accounts, manual_assets, goals, transactio
             for currency, values in sorted(asset_totals.items())
         ],
         "monthly_activity": monthly_activity,
+        "monthly_cash_flow_summary": cashflow_summary,
+        "monthly_investment_flows": investment_flow_summary,
+        "planning_assumptions": planning_assumptions,
         "existing_goals": goal_summaries,
     }
 
@@ -412,7 +502,8 @@ def _validate_goal_draft(candidate, sensitive_terms):
     name, _ = sanitize_message(str(candidate.get("name") or "Suggested goal"), sensitive_terms)
     draft = {"goal_type": goal_type, "name": name[:80] or "Suggested goal"}
     fields = (
-        "target_amount", "target_date", "apr_percent", "planned_monthly",
+        "target_amount", "monthly_income_target", "withdrawal_rate_percent",
+        "target_date", "apr_percent", "planned_monthly",
         "retirement_timing_mode", "birth_year", "target_retirement_age",
         "retirement_year", "expected_return_percent", "inflation_percent",
     )
@@ -443,6 +534,22 @@ def _validate_goal_draft(candidate, sensitive_terms):
                 continue
             if number.is_finite() and number >= 0:
                 draft[field] = format(number, "f")
+    if goal_type == "retirement":
+        assumptions = get_planning_settings()
+        draft.setdefault("expected_return_percent", assumptions["expected_return_percent"])
+        draft.setdefault("inflation_percent", assumptions["inflation_percent"])
+        draft.setdefault("withdrawal_rate_percent", assumptions["withdrawal_rate_percent"])
+        if assumptions.get("birth_year") and not draft.get("birth_year"):
+            draft["birth_year"] = int(assumptions["birth_year"])
+        if draft.get("monthly_income_target"):
+            try:
+                monthly_income = Decimal(draft["monthly_income_target"])
+                withdrawal_rate = Decimal(draft["withdrawal_rate_percent"])
+                if monthly_income > 0 and withdrawal_rate > 0:
+                    target = (monthly_income * Decimal("12") / (withdrawal_rate / Decimal("100")))
+                    draft["target_amount"] = format(target.quantize(Decimal("0.01"), rounding=ROUND_CEILING), "f")
+            except (InvalidOperation, ZeroDivisionError):
+                draft.pop("target_amount", None)
     return draft
 
 
