@@ -647,8 +647,11 @@ def main():
             dashboard_ratio = screenshot_content_ratio(screenshot)
             sync_progress_checks = {
                 "progress_status_is_displayed": False,
+                "running_message_is_displayed": False,
                 "close_hides_current_sync": False,
                 "new_sync_reappears_after_dismissal": False,
+                "paused_details_collapsed_by_default": False,
+                "paused_details_expand_to_show_message_and_warning": False,
             }
             sync_progress_screenshot = screenshot.with_name(screenshot.stem + "-sync-progress" + screenshot.suffix)
             driver.execute_script("sessionStorage.removeItem('finance-sync-progress-dismissed');")
@@ -666,6 +669,7 @@ def main():
                 "153 of 365 account-days verified" in progress_banner.text
                 and "3/24 in the last 24 hours" in progress_banner.text
             )
+            sync_progress_checks["running_message_is_displayed"] = "Backfilling account history" in progress_banner.text
             driver.save_screenshot(str(sync_progress_screenshot))
             driver.execute_script("document.querySelector('[data-testid=\"sync-progress-dismiss\"]')?.click()")
             WebDriverWait(driver, args.timeout).until(
@@ -674,7 +678,8 @@ def main():
             sync_progress_checks["close_hides_current_sync"] = True
             driver.execute_script("window.__financeSetSyncProgress(arguments[0]);", {
                 "sync_id": sync_test_id + "-next", "state": "paused", "phase": "account_backfill",
-                "message": "Waiting for daily request budget", "coverage_percent": 42,
+                "message": "Waiting for daily request budget; account history remains incomplete.",
+                "warning": "SimpleFIN account connection needs attention.", "coverage_percent": 42,
                 "covered_days": 153, "target_days": 365, "requests_last_24h": 24,
                 "request_limit_24h": 24, "requests_remaining_24h": 0,
             })
@@ -682,6 +687,27 @@ def main():
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sync-progress-banner"]'))
             )
             sync_progress_checks["new_sync_reappears_after_dismissal"] = True
+            sync_progress_checks["paused_details_collapsed_by_default"] = WebDriverWait(driver, args.timeout).until(
+                lambda current: current.execute_script("""
+                    const banner = document.querySelector('[data-testid="sync-progress-banner"]');
+                    const details = banner?.querySelector('[data-testid="sync-progress-details"]');
+                    const text = banner?.innerText || '';
+                    return Boolean(details && !details.open
+                      && text.includes('Some account history remains unverified.')
+                      && !text.includes('Waiting for daily request budget')
+                      && !text.includes('SimpleFIN account connection needs attention.'));
+                """)
+            )
+            driver.execute_script("document.querySelector('[data-testid=\"sync-progress-details\"] summary')?.click()")
+            sync_progress_checks["paused_details_expand_to_show_message_and_warning"] = WebDriverWait(driver, args.timeout).until(
+                lambda current: current.execute_script("""
+                    const details = document.querySelector('[data-testid="sync-progress-details"]');
+                    const text = details?.innerText || '';
+                    return Boolean(details?.open
+                      && text.includes('Waiting for daily request budget; account history remains incomplete.')
+                      && text.includes('SimpleFIN account connection needs attention.'));
+                """)
+            )
             driver.execute_script("document.querySelector('[data-testid=\"sync-progress-dismiss\"]')?.click()")
             driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight)")
             header_scroll_checks = driver.execute_script("""
