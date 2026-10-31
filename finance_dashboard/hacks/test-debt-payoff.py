@@ -29,6 +29,7 @@ from database import get_setting, init_db, save_simplefin_data, set_setting
 from debt_payoff import (
     DebtPayoffValidationError,
     SETTINGS_KEY,
+    delete_debt_payoff_settings,
     estimate_debt_terms_with_ai,
     estimate_minimum_payment,
     get_debt_payoff_plan,
@@ -300,6 +301,12 @@ class DebtPayoffTests(unittest.TestCase):
             self.assertNotIn("high-card", raw)
         finally:
             db.close()
+
+    def test_deleting_snowball_removes_only_planner_settings(self):
+        save_debt_payoff_settings(self.settings_payload(), self.accounts)
+        delete_debt_payoff_settings()
+        self.assertEqual(get_debt_payoff_plan(self.accounts, self.history, today=self.today)["status"], "setup_required")
+        self.assertEqual(get_setting(SETTINGS_KEY), "")
 
 
 if __name__ == "__main__":

@@ -557,3 +557,8 @@ def save_debt_payoff_settings(payload: dict, accounts: list[dict]) -> dict:
     }
     set_setting(SETTINGS_KEY, json.dumps(normalized, separators=(",", ":"), sort_keys=True))
     return normalized
+
+
+def delete_debt_payoff_settings() -> None:
+    """Remove the single saved snowball plan without touching account data or transactions."""
+    set_setting(SETTINGS_KEY, "")

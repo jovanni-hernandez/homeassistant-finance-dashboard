@@ -454,6 +454,23 @@ def main():
                       window.fetch = async (...args) => {
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
                         if (url.endsWith("/api/debt-payoff")) {
+                          if (args[1]?.method === "DELETE") {
+                            debtPayoffFixture.settings = {funding_account_id: "", current_target_account_id: "", strategy: "highest_balance", monthly_budget_override: null, included_account_ids: [], manual_order: []};
+                            debtPayoffFixture.currency = null;
+                            debtPayoffFixture.funding_account_name = null;
+                            debtPayoffFixture.current_target_name = null;
+                            debtPayoffFixture.effective_target_account_id = "";
+                            debtPayoffFixture.deposit_average = null;
+                            debtPayoffFixture.monthly_budget = null;
+                            debtPayoffFixture.total_balance = "0.00";
+                            debtPayoffFixture.starting_total_balance = "0.00";
+                            debtPayoffFixture.debt_paid = "0.00";
+                            debtPayoffFixture.progress_percent = 0;
+                            debtPayoffFixture.status = "setup_required";
+                            debtPayoffFixture.debt_results = [];
+                            window.__testDebtPayoffDeleted = true;
+                            return new Response(JSON.stringify({status: "success"}), {status: 200, headers: {"Content-Type": "application/json"}});
+                          }
                           if (args[1]?.method === "PUT") {
                             window.__testDebtPayoffSave = JSON.parse(args[1]?.body || "{}");
                             debtPayoffFixture.settings = {...window.__testDebtPayoffSave};
@@ -1717,12 +1734,16 @@ def main():
 
             goal_checks = {
                 "goals_page_opens": False,
-                "debt_payoff_planner_visible": False,
+                "snowball_card_looks_like_regular_goal": False,
+                "debt_payoff_planner_hidden_until_builder": False,
+                "snowball_edit_reopens_builder": False,
                 "deposit_average_and_milestones_visible": False,
                 "mortgage_opt_in_does_not_require_terms_by_default": False,
                 "debt_payoff_ai_estimate_fills_review_fields": False,
                 "debt_payoff_settings_save": False,
                 "debt_payoff_dark_mode_readable": False,
+                "snowball_can_be_deleted": False,
+                "snowball_builder_available_when_none_exists": False,
                 "one_goal_creation_entry_point": False,
                 "add_button_hides_during_creation": False,
                 "debt_goal_fields_visible": False,
@@ -1738,10 +1759,23 @@ def main():
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goals-page"]'))
             )
             goal_checks["goals_page_opens"] = "Financial goals" in goals_page.text
+            snowball_card = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goal-card-debt-snowball"]'))
+            )
+            goal_checks["snowball_card_looks_like_regular_goal"] = (
+                "debt snowball" in snowball_card.text.lower()
+                and "25%" in snowball_card.text
+                and bool(snowball_card.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-edit"]'))
+                and bool(snowball_card.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-delete"]'))
+            )
+            goal_checks["debt_payoff_planner_hidden_until_builder"] = not driver.find_elements(
+                By.CSS_SELECTOR, '[data-testid="debt-payoff-planner"]'
+            )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-edit"]').click()
             planner = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="debt-payoff-planner"]'))
             )
-            goal_checks["debt_payoff_planner_visible"] = (
+            goal_checks["snowball_edit_reopens_builder"] = (
                 "Debt snowball planner" in planner.text
                 and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-current-target"]'))
                 and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-strategy"]'))
@@ -1774,25 +1808,32 @@ def main():
             budget_override = driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-budget-override"]')
             budget_override.clear()
             budget_override.send_keys("2500")
+            debt_planner_screenshot = screenshot.with_name(screenshot.stem + "-debt-payoff-planner" + screenshot.suffix)
+            driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", planner)
+            driver.save_screenshot(str(debt_planner_screenshot))
             driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-save"]').click()
             try:
                 WebDriverWait(driver, args.timeout).until(
                     lambda current: current.execute_script("return window.__testDebtPayoffSave?.strategy === 'highest_apr' && Number(window.__testDebtPayoffSave?.monthly_budget_override) === 2500")
+                    and current.find_elements(By.CSS_SELECTOR, '[data-testid="goal-card-debt-snowball"]')
+                    and not current.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-planner"]')
                 )
             except Exception:
                 driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-debt-payoff-failed" + screenshot.suffix)))
                 raise
             goal_checks["debt_payoff_settings_save"] = (
-                "Estimated debt-free date" in driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]').text
-                and "2,500.00" in driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]').text
+                "debt snowball" in driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-card-debt-snowball"]').text.lower()
+                and "Mar 30, 2027" in driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-card-debt-snowball"]').text
                 and driver.execute_script("return Number(window.__testDebtPayoffSave?.debt_terms?.find((term) => term.account_id === 'test-debt-large')?.apr_percent) === 23.5")
+                and not driver.find_elements(By.CSS_SELECTOR, '[data-testid="debt-payoff-planner"]')
             )
-            debt_planner_screenshot = screenshot.with_name(screenshot.stem + "-debt-payoff-planner" + screenshot.suffix)
-            driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", planner)
-            driver.save_screenshot(str(debt_planner_screenshot))
             debt_payoff_results_screenshot = screenshot.with_name(screenshot.stem + "-debt-payoff-results" + screenshot.suffix)
-            driver.execute_script("arguments[0].scrollIntoView({block: 'start'}); window.scrollBy(0, -72);", driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-results"]'))
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-card-debt-snowball"]'))
             driver.save_screenshot(str(debt_payoff_results_screenshot))
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-edit"]').click()
+            planner = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="debt-payoff-planner"]'))
+            )
             original_theme_background = driver.execute_script("return document.documentElement.style.getPropertyValue('--primary-background-color')")
             driver.execute_script("document.documentElement.style.setProperty('--primary-background-color', '#111111')")
             WebDriverWait(driver, args.timeout).until(
@@ -1822,6 +1863,9 @@ def main():
             WebDriverWait(driver, args.timeout).until(
                 lambda current: "finance-dark-mode" not in current.find_element(By.TAG_NAME, "html").get_attribute("class")
             )
+            snowball_back_button = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-flow-back"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", snowball_back_button)
+            snowball_back_button.click()
             goal_checks["one_goal_creation_entry_point"] = (
                 len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-add-button"]')) == 1
                 and not driver.find_elements(By.XPATH, "//button[normalize-space()='Create your first goal']")
@@ -1919,7 +1963,32 @@ def main():
             WebDriverWait(driver, args.timeout).until(
                 lambda current: not current.find_elements(By.CSS_SELECTOR, '[data-testid="goal-card"]')
             )
-            goal_checks["goal_can_be_deleted"] = bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goals-empty"]'))
+            goal_checks["goal_can_be_deleted"] = (
+                not driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-card"]')
+                and bool(driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-card-debt-snowball"]'))
+            )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="debt-payoff-delete"]').click()
+            driver.switch_to.alert.accept()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: not current.find_elements(By.CSS_SELECTOR, '[data-testid="goal-card-debt-snowball"]')
+            )
+            goal_checks["snowball_can_be_deleted"] = bool(driver.execute_script("return window.__testDebtPayoffDeleted === true"))
+            goal_add_button = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-add-button"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", goal_add_button)
+            goal_add_button.click()
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="goal-method-choice"]'))
+            )
+            goal_checks["snowball_builder_available_when_none_exists"] = bool(
+                driver.find_elements(By.CSS_SELECTOR, '[data-testid="goal-method-snowball"]')
+            )
+            driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-method-snowball"]').click()
+            WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="debt-payoff-planner"]'))
+            )
+            snowball_back_button = driver.find_element(By.CSS_SELECTOR, '[data-testid="goal-flow-back"]')
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", snowball_back_button)
+            snowball_back_button.click()
             goals_overflow = driver.execute_script("return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1")
 
             ai_chat_checks = {

@@ -34,6 +34,7 @@ from goals import GoalValidationError, create_goal, delete_goal, get_goals, upda
 from debt_payoff import (
     DebtPayoffEstimateError,
     DebtPayoffValidationError,
+    delete_debt_payoff_settings,
     estimate_debt_terms_with_ai,
     get_debt_payoff_plan,
     save_debt_payoff_settings,
@@ -788,6 +789,16 @@ def api_estimate_debt_terms(payload: DebtPayoffEstimateRequest):
     except Exception as exc:
         logger.error("Debt payoff estimate failed safely (%s).", type(exc).__name__)
         raise HTTPException(status_code=500, detail="Could not estimate debt terms. No planner fields were changed.") from exc
+
+
+@app.delete("/api/debt-payoff", dependencies=[Depends(verify_ha_auth)])
+def api_delete_debt_payoff_plan():
+    try:
+        delete_debt_payoff_settings()
+        return {"status": "success"}
+    except Exception as exc:
+        logger.error("Failed to remove debt payoff settings (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not remove the debt payoff plan.") from exc
 
 
 @app.post("/api/goals", dependencies=[Depends(verify_ha_auth)])

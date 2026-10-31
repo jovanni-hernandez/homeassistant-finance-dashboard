@@ -532,9 +532,15 @@
                                 <h2 class="text-xl font-semibold text-slate-800">Your goals</h2>
                                 <p class="text-sm text-slate-500">Small, steady steps add up.</p>
                             </div>
-                            <button type="button" data-testid="dashboard-goals-manage" @click="setView('goals')" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{{ goals.length ? 'Manage goals' : 'Set a goal' }}</button>
+                            <button type="button" data-testid="dashboard-goals-manage" @click="setView('goals')" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">{{ goals.length || debtPayoffPlan?.settings?.funding_account_id ? 'Manage goals' : 'Set a goal' }}</button>
                         </div>
-                        <div v-if="dashboardGoals.length" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        <div v-if="dashboardGoals.length || debtPayoffPlan?.settings?.funding_account_id" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            <button v-if="debtPayoffPlan?.settings?.funding_account_id" type="button" data-testid="dashboard-snowball-card" @click="setView('goals')" class="min-w-0 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-sky-300">
+                                <div class="flex items-start justify-between gap-2"><span class="min-w-0 truncate text-sm font-semibold text-slate-900">Debt snowball</span><span class="shrink-0 text-xs font-semibold text-sky-700">{{ debtPayoffPlan.progress_percent }}%</span></div>
+                                <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div class="h-full rounded-full bg-sky-500" :style="{ width: `${debtPayoffPlan.progress_percent}%` }"></div></div>
+                                <p class="mt-2 line-clamp-2 text-xs leading-5 text-slate-600">{{ debtPayoffPlan.current_target_name ? `Targeting ${debtPayoffPlan.current_target_name}` : 'Your payoff journey' }} · {{ debtPayoffPlan.projected_payoff_date ? `Estimated debt-free ${formatGoalDate(debtPayoffPlan.projected_payoff_date)}` : debtPayoffStatusMessage(debtPayoffPlan) }}</p>
+                                <p v-if="debtPayoffPlan.monthly_budget" class="mt-2 text-xs font-medium text-slate-700">{{ formatCurrency(debtPayoffPlan.monthly_budget, debtPayoffPlan.currency) }}/month</p>
+                            </button>
                             <button v-for="goal in dashboardGoals" :key="goal.id" type="button" data-testid="dashboard-goal-card" :data-goal-id="goal.id" @click="setView('goals')" class="min-w-0 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-sky-300">
                                 <div class="flex items-start justify-between gap-2">
                                     <span class="min-w-0 truncate text-sm font-semibold text-slate-900">{{ goal.name }}</span>
@@ -548,7 +554,7 @@
                                 <p v-if="goal.goal_type === 'savings' && goal.required_monthly" class="mt-1 text-[11px] text-slate-500">Pace excludes interest</p>
                             </button>
                         </div>
-                        <div v-else class="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">No goals yet. Create a savings, debt payoff, or retirement goal to see your progress here.</div>
+                        <div v-else-if="!debtPayoffPlan?.settings?.funding_account_id" class="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-600">No goals yet. Create a savings, debt payoff, or retirement goal to see your progress here.</div>
                     </section>
 
                     <section>
@@ -936,15 +942,15 @@
                     <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div>
-                                <h2 class="text-xl font-semibold text-slate-800">{{ goalCreationMode === 'closed' ? 'Financial goals' : goalCreationMode === 'choose' ? 'Create a goal' : goalCreationMode === 'ai' ? 'Plan a goal with AI' : editingGoalId ? 'Edit your goal' : 'Set up your goal' }}</h2>
-                                <p class="mt-1 text-sm text-slate-500">{{ goalCreationMode === 'closed' ? 'Track savings, debt payoff, or retirement in one place.' : goalCreationMode === 'choose' ? 'Choose how you’d like to get started.' : goalCreationMode === 'ai' ? 'Talk through the goal, then review the draft before saving.' : 'Add the details and choose which accounts count toward progress.' }}</p>
+                                <h2 class="text-xl font-semibold text-slate-800">{{ goalCreationMode === 'closed' ? 'Financial goals' : goalCreationMode === 'choose' ? 'Create a goal' : goalCreationMode === 'ai' ? 'Plan a goal with AI' : goalCreationMode === 'debt_snowball' ? (editingDebtPayoff ? 'Edit debt snowball' : 'Build a debt snowball') : editingGoalId ? 'Edit your goal' : 'Set up your goal' }}</h2>
+                                <p class="mt-1 text-sm text-slate-500">{{ goalCreationMode === 'closed' ? 'Track savings, debt payoff, or retirement in one place.' : goalCreationMode === 'choose' ? 'Choose how you’d like to get started.' : goalCreationMode === 'ai' ? 'Talk through the goal, then review the draft before saving.' : goalCreationMode === 'debt_snowball' ? 'Choose your payment account, target debt, and payoff order.' : 'Add the details and choose which accounts count toward progress.' }}</p>
                             </div>
                             <button v-if="goalCreationMode === 'closed'" data-testid="goal-add-button" type="button" @click="startGoalCreation" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-sky-700">Create a goal</button>
-                            <button v-else type="button" @click="closeGoalFlow" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to goals</button>
+                            <button v-else type="button" data-testid="goal-flow-back" @click="closeGoalFlow" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back to goals</button>
                         </div>
                     </div>
 
-                    <section data-testid="debt-payoff-planner" class="space-y-4 rounded-2xl border border-sky-200 bg-white p-4 shadow-sm sm:p-6">
+                    <section v-if="goalCreationMode === 'debt_snowball'" data-testid="debt-payoff-planner" class="space-y-4 rounded-2xl border border-sky-200 bg-white p-4 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                             <div>
                                 <div class="text-xs font-semibold uppercase tracking-wide text-sky-700">Your payoff journey</div>
@@ -1025,7 +1031,7 @@
                             </div>
 
                             <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-                                <button data-testid="debt-payoff-save" type="submit" :disabled="savingDebtPayoff || debtPayoffLoading || !debtPayoffPlan?.funding_accounts?.length || !debtPayoffEligibleLiabilities.length" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50">{{ savingDebtPayoff ? 'Saving…' : 'Save payoff plan' }}</button>
+                                <button data-testid="debt-payoff-save" type="submit" :disabled="savingDebtPayoff || debtPayoffLoading || !debtPayoffPlan?.funding_accounts?.length || !debtPayoffEligibleLiabilities.length" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:opacity-50">{{ savingDebtPayoff ? 'Saving…' : (editingDebtPayoff ? 'Save snowball changes' : 'Create snowball') }}</button>
                                 <span class="text-xs leading-5 text-slate-500">{{ debtPayoffPlan?.deposit_average?.history_complete ? 'Six-month deposit history is verified.' : 'Check Settings → Data History if older deposits are still being backfilled.' }}</span>
                             </div>
                         </form>
@@ -1061,7 +1067,7 @@
 
                     <div v-if="goalMessage" data-testid="goal-message" class="rounded-lg border px-4 py-3 text-sm" :class="goalError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'">{{ goalMessage }}</div>
 
-                    <div v-if="goalCreationMode === 'choose'" data-testid="goal-method-choice" class="grid gap-4 sm:grid-cols-2">
+                    <div v-if="goalCreationMode === 'choose'" data-testid="goal-method-choice" class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                         <button type="button" data-testid="goal-method-ai" @click="selectGoalCreationMode('ai')" class="rounded-2xl border border-violet-200 bg-white p-5 text-left shadow-sm transition hover:border-violet-400 hover:bg-violet-50 sm:p-6">
                             <span class="text-xs font-semibold uppercase tracking-wide text-violet-700">Talk it through</span>
                             <span class="mt-2 block text-lg font-semibold text-slate-900">Plan with AI</span>
@@ -1072,6 +1078,11 @@
                             <span class="text-xs font-semibold uppercase tracking-wide text-sky-700">I know what I want</span>
                             <span class="mt-2 block text-lg font-semibold text-slate-900">Set it up myself</span>
                             <span class="mt-1 block text-sm leading-5 text-slate-600">Enter a target and choose which accounts count toward it.</span>
+                        </button>
+                        <button v-if="!debtPayoffPlan?.settings?.funding_account_id" type="button" data-testid="goal-method-snowball" @click="openDebtPayoffBuilder" class="rounded-2xl border border-sky-200 bg-white p-5 text-left shadow-sm transition hover:border-sky-400 hover:bg-sky-50 sm:p-6">
+                            <span class="text-xs font-semibold uppercase tracking-wide text-sky-700">Pay down multiple debts</span>
+                            <span class="mt-2 block text-lg font-semibold text-slate-900">Build a debt snowball</span>
+                            <span class="mt-1 block text-sm leading-5 text-slate-600">Set a payment account, choose your first target, and roll payments to the next debt.</span>
                         </button>
                     </div>
 
@@ -1219,7 +1230,33 @@
                         </div>
                     </form>
 
-                    <div v-if="goalCreationMode === 'closed' && goals.length" data-testid="goals-list" class="grid gap-4 lg:grid-cols-2">
+                    <div v-if="goalCreationMode === 'closed' && (goals.length || debtPayoffPlan?.settings?.funding_account_id)" data-testid="goals-list" class="grid gap-4 lg:grid-cols-2">
+                        <article v-if="debtPayoffPlan?.settings?.funding_account_id" data-testid="goal-card-debt-snowball" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="text-xs font-semibold uppercase tracking-wide text-sky-700">Debt snowball</div>
+                                    <h3 class="mt-1 break-words text-lg font-semibold text-slate-900">Pay off your debts</h3>
+                                    <p class="mt-1 text-xs text-slate-500">{{ debtPayoffPlan.current_target_name ? `Current target: ${debtPayoffPlan.current_target_name}` : 'Debt-free' }} · {{ debtPayoffPlan.currency }}</p>
+                                </div>
+                                <div class="flex shrink-0 gap-1">
+                                    <button type="button" data-testid="debt-payoff-edit" aria-label="Edit debt snowball" @click="editDebtPayoffPlan" class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Edit</button>
+                                    <button type="button" data-testid="debt-payoff-delete" aria-label="Delete debt snowball" @click="removeDebtPayoffPlan" class="rounded-lg border border-rose-200 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50">Delete</button>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex items-center justify-between gap-3 text-sm">
+                                <span class="font-medium text-slate-700">{{ formatCurrency(debtPayoffPlan.debt_paid || '0', debtPayoffPlan.currency) }} paid of {{ formatCurrency(debtPayoffPlan.starting_total_balance || '0', debtPayoffPlan.currency) }}</span>
+                                <span class="shrink-0 font-semibold text-slate-800">{{ debtPayoffPlan.progress_percent }}%</span>
+                            </div>
+                            <div class="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" :aria-valuenow="debtPayoffPlan.progress_percent" aria-valuemin="0" aria-valuemax="100" aria-label="Debt snowball progress">
+                                <div class="h-full rounded-full bg-sky-500 transition-all" :style="{ width: `${debtPayoffPlan.progress_percent}%` }"></div>
+                            </div>
+                            <p class="mt-3 text-sm leading-6 text-slate-700">{{ debtPayoffStatusMessage(debtPayoffPlan) }}</p>
+                            <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                                <span v-if="debtPayoffPlan.projected_payoff_date">Estimated debt-free {{ formatGoalDate(debtPayoffPlan.projected_payoff_date) }}</span>
+                                <span v-if="debtPayoffPlan.monthly_budget">Budget {{ formatCurrency(debtPayoffPlan.monthly_budget, debtPayoffPlan.currency) }}/month</span>
+                                <span v-if="debtPayoffPlan.total_interest">Estimated interest {{ formatCurrency(debtPayoffPlan.total_interest, debtPayoffPlan.currency) }}</span>
+                            </div>
+                        </article>
                         <article v-for="goal in goals" :key="goal.id" data-testid="goal-card" :data-goal-id="goal.id" class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                             <div class="flex items-start justify-between gap-3">
                                 <div class="min-w-0">
@@ -1252,7 +1289,7 @@
                             </div>
                         </article>
                     </div>
-                    <div v-else-if="goalCreationMode === 'closed'" data-testid="goals-empty" class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+                    <div v-else-if="goalCreationMode === 'closed' && !debtPayoffPlan?.settings?.funding_account_id" data-testid="goals-empty" class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
                         <h3 class="text-base font-semibold text-slate-800">Your goals start here</h3>
                         <p class="mt-2 text-sm text-slate-500">Use Create a goal above to set a savings, debt payoff, or retirement target.</p>
                     </div>
@@ -2002,6 +2039,7 @@
                 const goalCreationMode = ref('closed');
                 const goalFormOpen = ref(false);
                 const editingGoalId = ref('');
+                const editingDebtPayoff = ref(false);
                 const savingGoal = ref(false);
                 const goalMessage = ref('');
                 const goalError = ref(false);
@@ -2927,11 +2965,32 @@
                             }]),
                         );
                         debtPayoffMessage.value = 'Payoff plan saved. Your projection uses the latest linked balances and the assumptions shown.';
+                        if (goalCreationMode.value === 'debt_snowball') {
+                            goalMessage.value = editingDebtPayoff.value ? 'Debt snowball updated.' : 'Debt snowball created.';
+                            goalError.value = false;
+                            closeGoalFlow();
+                        }
                     } catch (err) {
                         debtPayoffError.value = true;
                         debtPayoffMessage.value = err.message || 'Could not save payoff planner settings.';
                     } finally {
                         savingDebtPayoff.value = false;
+                    }
+                };
+
+                const removeDebtPayoffPlan = async () => {
+                    if (!window.confirm('Delete this debt snowball plan? This removes only the plan settings; it will not change accounts or make payments.')) return;
+                    goalMessage.value = '';
+                    goalError.value = false;
+                    try {
+                        const response = await apiFetch('/api/debt-payoff', { method: 'DELETE' });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || 'Could not delete the debt snowball plan.');
+                        await fetchDebtPayoffPlan();
+                        goalMessage.value = 'Debt snowball deleted.';
+                    } catch (err) {
+                        goalError.value = true;
+                        goalMessage.value = err.message || 'Could not delete the debt snowball plan.';
                     }
                 };
 
@@ -3557,6 +3616,7 @@
 
                 const startGoalCreation = () => {
                     editingGoalId.value = '';
+                    editingDebtPayoff.value = false;
                     goalForm.value = createGoalForm();
                     goalFormOpen.value = false;
                     goalCreationMode.value = 'choose';
@@ -3578,11 +3638,37 @@
 
                 const openNewGoalForm = () => {
                     editingGoalId.value = '';
+                    editingDebtPayoff.value = false;
                     goalForm.value = createGoalForm();
                     goalFormOpen.value = true;
                     goalCreationMode.value = 'manual';
                     goalMessage.value = '';
                     goalError.value = false;
+                };
+
+                const openDebtPayoffBuilder = async () => {
+                    await fetchDebtPayoffPlan();
+                    editingGoalId.value = '';
+                    editingDebtPayoff.value = false;
+                    goalFormOpen.value = false;
+                    goalCreationMode.value = 'debt_snowball';
+                    goalMessage.value = '';
+                    goalError.value = false;
+                    debtPayoffMessage.value = '';
+                    debtPayoffError.value = false;
+                };
+
+                const editDebtPayoffPlan = async () => {
+                    await fetchDebtPayoffPlan();
+                    editingGoalId.value = '';
+                    editingDebtPayoff.value = true;
+                    goalFormOpen.value = false;
+                    goalCreationMode.value = 'debt_snowball';
+                    goalMessage.value = '';
+                    goalError.value = false;
+                    debtPayoffMessage.value = '';
+                    debtPayoffError.value = false;
+                    setView('goals');
                 };
 
                 const closeGoalForm = () => {
@@ -3592,6 +3678,7 @@
                 const closeGoalFlow = () => {
                     goalFormOpen.value = false;
                     editingGoalId.value = '';
+                    editingDebtPayoff.value = false;
                     goalForm.value = createGoalForm();
                     goalCreationMode.value = 'closed';
                 };
@@ -5380,6 +5467,7 @@
                     debtPayoffError,
                     debtPayoffEstimatingId,
                     debtPayoffEstimateMessages,
+                    editingDebtPayoff,
                     debtPayoffForm,
                     debtPayoffTerms,
                     debtPayoffAvailableLiabilities,
@@ -5392,6 +5480,9 @@
                     moveDebtPayoffDebt,
                     saveDebtPayoffSettings,
                     estimateDebtTerms,
+                    openDebtPayoffBuilder,
+                    editDebtPayoffPlan,
+                    removeDebtPayoffPlan,
                     debtPayoffStatusMessage,
                     retryAccountHistoryGap,
                     fetchRecurringRules,
