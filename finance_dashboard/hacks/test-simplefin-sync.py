@@ -251,6 +251,51 @@ class SimpleFinSyncTests(unittest.TestCase):
             db.close()
         self.assertEqual(row.status, "complete")
 
+    def test_rolling_connection_error_does_not_hold_shared_recent_cursor(self):
+        now = int(simplefin._utc_now().timestamp())
+        initial_cursor = now - 10
+        account_ids = {"healthy-account", "reauth-account"}
+        db = SessionLocal()
+        try:
+            db.add_all([
+                Account(id="healthy-account", org="Test Bank", name="Healthy", balance="0", currency="USD"),
+                Account(id="reauth-account", org="Test Bank", name="Needs reauth", balance="0", currency="USD"),
+            ])
+            db.commit()
+        finally:
+            db.close()
+        set_setting(simplefin.ACCOUNT_BACKFILL_VERSION_KEY, simplefin.ACCOUNT_BACKFILL_VERSION)
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(initial_cursor))
+        calls = []
+
+        def fetch_window(_access_url, start_ts, end_ts, *, on_reserved=None, account_ids=None):
+            calls.append((start_ts, end_ts))
+            if on_reserved:
+                on_reserved()
+            return {
+                "errlist": [{"code": "con.auth", "conn_id": "MBR-reauth"}],
+                "accounts": [
+                    {"id": "healthy-account", "conn_id": "MX-MBR-healthy", "name": "Healthy", "balance": "0", "currency": "USD", "transactions": []},
+                    {"id": "reauth-account", "conn_id": "MX-MBR-reauth", "name": "Needs reauth", "balance": "0", "currency": "USD", "transactions": []},
+                ],
+            }
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", side_effect=fetch_window):
+            result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(int(get_setting(simplefin.SYNC_CURSOR_SETTING_KEY)), calls[0][1])
+        self.assertFalse(result["backfill_pending"])
+        db = SessionLocal()
+        try:
+            coverage = {
+                row.account_id: row.status
+                for row in db.query(AccountDataCoverage).filter_by(start_ts=calls[0][0], end_ts=calls[0][1]).all()
+            }
+        finally:
+            db.close()
+        self.assertEqual(coverage, {"healthy-account": "complete", "reauth-account": "failed"})
+
     def test_simplefin_payload_supports_account_filtered_requests(self):
         response = Mock()
         response.raise_for_status.return_value = None

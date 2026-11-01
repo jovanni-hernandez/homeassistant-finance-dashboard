@@ -1415,12 +1415,12 @@ def fetch_and_sync_simplefin():
             _coverage_result(coverage_ids, rolling_start, now_timestamp, returned_ids=returned_ids, error_codes=rolling_errors, source="routine")
             note_coverage_errors(rolling_errors)
 
-            if not backfill_pending and not rolling_errors:
+            if not backfill_pending:
                 cursor = now_timestamp
                 set_setting(SYNC_CURSOR_SETTING_KEY, str(cursor))
             logger.info(
                 "SimpleFIN rolling sync cursor advanced=%s unverified_accounts=%d",
-                str(not backfill_pending and not rolling_errors).lower(),
+                str(not backfill_pending).lower(),
                 len(rolling_errors),
             )
 
