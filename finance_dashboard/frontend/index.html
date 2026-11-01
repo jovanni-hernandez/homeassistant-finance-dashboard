@@ -1397,10 +1397,10 @@
                             <div class="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" :aria-valuenow="account.coverage_percent" aria-valuemin="0" aria-valuemax="100" :aria-label="`${account.name} history coverage`">
                                 <div class="h-full rounded-full bg-sky-500" :style="{ width: `${account.coverage_percent}%` }"></div>
                             </div>
-                            <p v-if="account.latest_error_code" class="mt-2 text-xs text-amber-800">Latest provider status: {{ account.latest_error_code }}. The affected range remains unverified.</p>
+                            <p v-if="account.latest_error_code" data-testid="provider-error-status" class="mt-2 text-xs text-amber-800">Latest provider status: {{ providerErrorSummary(account.latest_error_code) }}. The affected range remains unverified.</p>
                             <div v-if="account.gaps.length" class="mt-3 space-y-2">
                                 <div v-for="gap in account.gaps" :key="`${gap.start_ts}-${gap.end_ts}`" data-testid="data-history-gap" class="flex flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <span class="text-xs text-amber-950">{{ gap.start_date }} – {{ gap.end_date }} · {{ gap.days }} day(s) · {{ gap.status }}<span v-if="gap.error_code"> ({{ gap.error_code }})</span></span>
+                                    <span class="text-xs text-amber-950">{{ gap.start_date }} – {{ gap.end_date }} · {{ gap.days }} day(s) · {{ gap.status }}<span v-if="gap.error_code"> ({{ providerErrorSummary(gap.error_code) }})</span></span>
                                     <button v-if="gap.status !== 'pending'" type="button" data-testid="data-history-retry" @click="retryAccountHistoryGap(account, gap)" :disabled="!status.connected || status.sync_progress?.state === 'running' || retryingCoverageAccount === account.account_id" class="inline-flex min-h-9 items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50">{{ retryingCoverageAccount === account.account_id ? 'Queueing…' : 'Retry this range' }}</button>
                                 </div>
                             </div>
@@ -5180,6 +5180,20 @@
                     const date = new Date(value);
                     return Number.isNaN(date.getTime()) ? 'Not yet' : date.toLocaleString();
                 };
+                const providerErrorSummary = (code) => {
+                    const descriptions = {
+                        'gen.': 'General error',
+                        'gen.api': 'API usage error',
+                        'gen.auth': 'Authentication issue with the SimpleFIN server',
+                        'con.': 'Connection-level error',
+                        'con.auth': 'Authentication issue for a connection',
+                        'act.': 'Account-level error',
+                        'act.failed': 'Account information could not be retrieved; try again later',
+                        'act.missingdata': 'Incomplete transaction listing; try again later',
+                    };
+                    const description = descriptions[code];
+                    return description ? `${description} (${code})` : code;
+                };
 
                 watch(transactions, () => {
                     syncSelectedMonth();
@@ -5538,6 +5552,7 @@
                     formatCurrency,
                     formatDate,
                     formatDateTime,
+                    providerErrorSummary,
                 };
             }
         }).mount('#app');

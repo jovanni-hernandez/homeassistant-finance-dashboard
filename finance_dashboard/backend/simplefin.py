@@ -850,15 +850,37 @@ def _coverage_errors(payload: dict, requested_account_ids) -> dict[str, str]:
     requested = set(map(str, requested_account_ids or []))
     errors = {}
     global_error = None
+    account_connections = {}
+    for account in payload.get("accounts", []) if isinstance(payload, dict) else []:
+        if not isinstance(account, dict):
+            continue
+        account_id = account.get("id") or account.get("account")
+        conn_id = account.get("conn_id") or account.get("connection_id")
+        if account_id is not None and conn_id is not None:
+            account_connections[str(account_id)] = str(conn_id)
+
     raw_errors = payload.get("errlist") or payload.get("errors") or [] if isinstance(payload, dict) else []
     for item in raw_errors:
         if isinstance(item, dict):
             code = str(item.get("code") or "provider_error")
             account_id = item.get("account_id")
-            if account_id is not None:
-                errors[str(account_id)] = code
-            elif code.startswith(("act.", "con.", "gen.")):
+            if code.startswith("gen."):
                 global_error = code
+            elif code.startswith("con."):
+                conn_id = item.get("conn_id")
+                matching_account_ids = [
+                    account_id for account_id in requested
+                    if conn_id is not None and account_connections.get(account_id) == str(conn_id)
+                ]
+                for matching_account_id in matching_account_ids:
+                    errors.setdefault(matching_account_id, code)
+                logger.info(
+                    "SimpleFIN connection error mapped code=%s matching_accounts=%d",
+                    code[:40],
+                    len(matching_account_ids),
+                )
+            elif account_id is not None and str(account_id) in requested:
+                errors[str(account_id)] = code
         elif item:
             legacy = str(item).casefold()
             if "act.missingdata" in legacy:
@@ -916,6 +938,25 @@ def _fetch_tracked_payload(access_url: str, start_ts: int, end_ts: int, account_
         error_codes = _coverage_errors(payload, tracked_ids)
     else:
         error_codes = _coverage_errors(payload, tracked_ids)
+    error_counts = {}
+    for code in error_codes.values():
+        error_counts[code] = error_counts.get(code, 0) + 1
+    start_date = datetime.fromtimestamp(start_ts, timezone.utc).date().isoformat()
+    end_date = datetime.fromtimestamp(end_ts, timezone.utc).date().isoformat()
+    verified_accounts = sum(account_id not in error_codes for account_id in tracked_ids)
+    logger.info(
+        "SimpleFIN history window source=%s start_date=%s end_date_exclusive=%s "
+        "requested_accounts=%d returned_accounts=%d verified_accounts=%d "
+        "unverified_accounts=%d provider_error_counts=%s",
+        source,
+        start_date,
+        end_date,
+        len(requested_ids),
+        len(returned_ids),
+        verified_accounts,
+        len(error_codes),
+        json.dumps(error_counts, sort_keys=True),
+    )
     return payload, error_codes, tracked_ids, returned_ids
 
 
@@ -1195,11 +1236,21 @@ def fetch_and_sync_simplefin():
 
                 if window_errors:
                     note_coverage_errors(window_errors)
+                    logger.info(
+                        "SimpleFIN recent-history cursor held start_date=%s end_date_exclusive=%s unverified_accounts=%d",
+                        datetime.fromtimestamp(cursor, timezone.utc).date().isoformat(),
+                        datetime.fromtimestamp(window_end, timezone.utc).date().isoformat(),
+                        len(window_errors),
+                    )
                     break
 
                 cursor = window_end
                 set_setting(SYNC_CURSOR_SETTING_KEY, str(cursor))
                 backfill_windows += 1
+                logger.info(
+                    "SimpleFIN recent-history cursor advanced end_date_exclusive=%s",
+                    datetime.fromtimestamp(cursor, timezone.utc).date().isoformat(),
+                )
 
             backfill_pending = cursor < backfill_limit
             remaining_backfill_days = (
@@ -1230,6 +1281,11 @@ def fetch_and_sync_simplefin():
             if not backfill_pending and not rolling_errors:
                 cursor = now_timestamp
                 set_setting(SYNC_CURSOR_SETTING_KEY, str(cursor))
+            logger.info(
+                "SimpleFIN rolling sync cursor advanced=%s unverified_accounts=%d",
+                str(not backfill_pending and not rolling_errors).lower(),
+                len(rolling_errors),
+            )
 
             account_backfill_windows = 0
             while account_backfill_state:
@@ -1280,6 +1336,8 @@ def fetch_and_sync_simplefin():
                     _coverage_result(coverage_ids, cursor, window_end, returned_ids=returned_ids, error_codes=window_errors, source="account_backfill")
                     note_coverage_errors(window_errors)
 
+                    cursor_advanced_accounts = 0
+                    retry_scheduled_accounts = 0
                     for queued_account_id in group:
                         progress = account_backfill_state.get(queued_account_id)
                         if not progress:
@@ -1289,20 +1347,33 @@ def fetch_and_sync_simplefin():
                             if window_days > 1:
                                 progress["window_days"] = max(1, window_days // 2)
                                 progress["retry_after"] = 0
+                                retry_scheduled_accounts += 1
                             else:
                                 progress["retry_after"] = int(_next_utc_reset().timestamp())
+                                retry_scheduled_accounts += 1
                                 message = "A one-day history range is still incomplete; it will remain flagged and retry after the daily reset."
                                 if message not in simplefin_errors:
                                     simplefin_errors.append(message)
                         elif error_code:
                             progress["retry_after"] = int(_next_utc_reset().timestamp())
+                            retry_scheduled_accounts += 1
                         else:
                             progress["cursor"] = window_end
                             progress["window_days"] = ACCOUNT_BACKFILL_WINDOW_DAYS
                             progress["retry_after"] = 0
+                            cursor_advanced_accounts += 1
                             if window_end >= progress["end"]:
                                 account_backfill_state.pop(queued_account_id, None)
                     _save_account_backfill_state(account_backfill_state)
+                    logger.info(
+                        "SimpleFIN account-history outcome start_date=%s end_date_exclusive=%s "
+                        "group_accounts=%d cursor_advanced_accounts=%d retry_scheduled_accounts=%d",
+                        datetime.fromtimestamp(cursor, timezone.utc).date().isoformat(),
+                        datetime.fromtimestamp(window_end, timezone.utc).date().isoformat(),
+                        len(group),
+                        cursor_advanced_accounts,
+                        retry_scheduled_accounts,
+                    )
                     account_backfill_windows += 1
                     batch_windows += 1
                     update_progress(

@@ -98,6 +98,54 @@ class SimpleFinSyncTests(unittest.TestCase):
             ]
         }
 
+    def test_connection_error_only_marks_accounts_on_matching_connection(self):
+        payload = {
+            "errlist": [{"code": "con.auth", "msg": "Authentication required", "conn_id": "connection-private-b"}],
+            "accounts": [
+                {"id": "account-private-a", "conn_id": "connection-private-a"},
+                {"id": "account-private-b", "conn_id": "connection-private-b"},
+            ],
+        }
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", return_value=payload):
+            with self.assertLogs("finance_dashboard", level="INFO") as captured:
+                _, errors, tracked_ids, returned_ids = simplefin._fetch_tracked_payload(
+                    "https://unused.example/access",
+                    1_700_000_000,
+                    1_700_086_400,
+                    {"account-private-a", "account-private-b"},
+                    "test_connection_scope",
+                )
+
+        self.assertEqual(tracked_ids, {"account-private-a", "account-private-b"})
+        self.assertEqual(returned_ids, {"account-private-a", "account-private-b"})
+        self.assertEqual(errors, {"account-private-b": "con.auth"})
+        log_text = "\n".join(captured.output)
+        self.assertIn("matching_accounts=1", log_text)
+        self.assertIn('provider_error_counts={"con.auth": 1}', log_text)
+        self.assertNotIn("account-private", log_text)
+        self.assertNotIn("connection-private", log_text)
+
+    def test_general_and_account_errors_keep_their_documented_scope(self):
+        accounts = [
+            {"id": "account-1", "conn_id": "connection-a"},
+            {"id": "account-2", "conn_id": "connection-b"},
+        ]
+        global_errors = simplefin._coverage_errors(
+            {"errlist": [{"code": "gen.auth"}], "accounts": accounts},
+            {"account-1", "account-2"},
+        )
+        account_errors = simplefin._coverage_errors(
+            {
+                "errlist": [{"code": "act.failed", "account_id": "account-2"}],
+                "accounts": accounts,
+            },
+            {"account-1", "account-2"},
+        )
+
+        self.assertEqual(global_errors, {"account-1": "gen.auth", "account-2": "gen.auth"})
+        self.assertEqual(account_errors, {"account-2": "act.failed"})
+
     def test_sync_reports_no_newer_date_when_provider_returns_stale_data(self):
         previous_timestamp = 1_700_000_000
         self.seed_latest_transaction(previous_timestamp)

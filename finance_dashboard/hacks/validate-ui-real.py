@@ -453,6 +453,40 @@ def main():
                       };
                       window.fetch = async (...args) => {
                         const url = typeof args[0] === "string" ? args[0] : args[0].url;
+                        if (url.endsWith("/api/data-history")) {
+                          return new Response(JSON.stringify({
+                            target_days: 365,
+                            as_of: "2026-11-01T12:00:00+00:00",
+                            accounts: [{
+                              account_id: "test-history-account",
+                              name: "Test Checking",
+                              institution: "Test Bank",
+                              currency: "USD",
+                              coverage_days: 0,
+                              target_days: 365,
+                              coverage_as_of: "2026-11-01T12:00:00+00:00",
+                              coverage_percent: 0,
+                              gaps: [{
+                                start_ts: 1761955200,
+                                end_ts: 1793491200,
+                                start_date: "2025-11-01",
+                                end_date: "2026-11-01",
+                                days: 365,
+                                status: "failed",
+                                error_code: "con.auth",
+                                attempts: 2,
+                              }],
+                              last_received_at: null,
+                              hours_since_last_received: null,
+                              stale: true,
+                              latest_error_code: "con.auth",
+                            }],
+                            overall_coverage_percent: 0,
+                            covered_days: 0,
+                            target_days_total: 365,
+                            verified_means_provider_returned_account_without_a_data_completeness_error: true,
+                          }), {status: 200, headers: {"Content-Type": "application/json"}});
+                        }
                         if (url.endsWith("/api/debt-payoff")) {
                           if (args[1]?.method === "DELETE") {
                             debtPayoffFixture.settings = {funding_account_id: "", current_target_account_id: "", strategy: "highest_balance", monthly_budget_override: null, included_account_ids: [], manual_order: []};
@@ -1459,6 +1493,7 @@ def main():
                 "categories_page_has_category_panel_only": False,
                 "ai_page_has_ai_panel_only": False,
                 "data_history_page_has_coverage_and_retry": False,
+                "provider_errors_show_friendly_description_and_id": False,
                 "settings_menu_has_four_entries": False,
                 "log_level_defaults_to_info": False,
                 "debug_level_warns_and_saves": False,
@@ -1630,6 +1665,12 @@ def main():
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="account-stale-warning"]'))
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-gap"]'))
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-retry"]'))
+            )
+            provider_error_text = history_panel.find_element(By.CSS_SELECTOR, '[data-testid="provider-error-status"]').text
+            history_gap_text = history_panel.find_element(By.CSS_SELECTOR, '[data-testid="data-history-gap"]').text
+            settings_navigation_checks["provider_errors_show_friendly_description_and_id"] = (
+                "Authentication issue for a connection (con.auth)" in provider_error_text
+                and "Authentication issue for a connection (con.auth)" in history_gap_text
             )
             driver.execute_script("window.scrollTo(0, 0)")
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-data-history" + screenshot.suffix)))
