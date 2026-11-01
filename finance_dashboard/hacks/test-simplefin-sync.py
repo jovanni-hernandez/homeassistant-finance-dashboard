@@ -318,6 +318,39 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         self.assertEqual(request.call_args.kwargs["params"]["account"], ["account-a", "account-b"])
 
+    def test_retry_queue_logs_counts_at_info_and_account_ranges_at_debug(self):
+        now = int(simplefin._utc_now().timestamp())
+        account_state = {
+            "private-account-a": {
+                "start": now - 100,
+                "cursor": now - 50,
+                "end": now + 100,
+                "window_days": 90,
+                "retry_after": 0,
+            }
+        }
+        routine_ranges = [{
+            "account_id": "private-account-b",
+            "start": now - 200,
+            "end": now - 100,
+            "attempts": 2,
+            "error_code": "con.auth",
+            "retry_after": now + 600,
+        }]
+
+        with self.assertLogs("finance_dashboard", level="INFO") as info_logs:
+            simplefin._log_sync_retry_queue_state("test", account_state, routine_ranges)
+        info_text = "\n".join(info_logs.output)
+        self.assertIn("account_backfill_queued=1 account_backfill_eligible=1", info_text)
+        self.assertIn("routine_retry_queued=1 routine_retry_eligible=0", info_text)
+        self.assertNotIn("private-account", info_text)
+
+        with self.assertLogs("finance_dashboard", level="DEBUG") as debug_logs:
+            simplefin._log_sync_retry_queue_state("test", account_state, routine_ranges)
+        debug_text = "\n".join(debug_logs.output)
+        self.assertIn("private-account-a", debug_text)
+        self.assertIn("private-account-b", debug_text)
+
     def test_general_and_account_errors_keep_their_documented_scope(self):
         accounts = [
             {"id": "account-1", "conn_id": "connection-a"},

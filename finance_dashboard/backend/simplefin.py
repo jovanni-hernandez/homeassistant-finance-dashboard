@@ -779,6 +779,72 @@ def _save_routine_retry_ranges(ranges):
     set_setting(SYNC_ROUTINE_RETRY_RANGES_KEY, json.dumps(ranges, sort_keys=True))
 
 
+def _log_sync_retry_queue_state(stage: str, account_backfill_state: dict, routine_retry_ranges: list):
+    now_timestamp = int(_utc_now().timestamp())
+    eligible_account_backfills = [
+        (account_id, progress)
+        for account_id, progress in account_backfill_state.items()
+        if int(progress.get("retry_after", 0) or 0) <= now_timestamp
+    ]
+    eligible_routine_retries = [
+        item for item in routine_retry_ranges
+        if int(item.get("retry_after", 0) or 0) <= now_timestamp
+    ]
+    future_retry_times = [
+        int(progress.get("retry_after", 0) or 0)
+        for progress in account_backfill_state.values()
+        if int(progress.get("retry_after", 0) or 0) > now_timestamp
+    ] + [
+        int(item.get("retry_after", 0) or 0)
+        for item in routine_retry_ranges
+        if int(item.get("retry_after", 0) or 0) > now_timestamp
+    ]
+    earliest_retry_at = (
+        datetime.fromtimestamp(min(future_retry_times), timezone.utc).isoformat()
+        if future_retry_times
+        else "none"
+    )
+    logger.info(
+        "SimpleFIN retry queues stage=%s account_backfill_queued=%d account_backfill_eligible=%d "
+        "routine_retry_queued=%d routine_retry_eligible=%d earliest_retry_at=%s",
+        stage,
+        len(account_backfill_state),
+        len(eligible_account_backfills),
+        len(routine_retry_ranges),
+        len(eligible_routine_retries),
+        earliest_retry_at,
+    )
+    if logger.isEnabledFor(logging.DEBUG):
+        account_details = [
+            {
+                "account_id": account_id,
+                "start": progress.get("start"),
+                "cursor": progress.get("cursor"),
+                "end": progress.get("end"),
+                "window_days": progress.get("window_days"),
+                "retry_after": progress.get("retry_after", 0),
+            }
+            for account_id, progress in sorted(account_backfill_state.items())
+        ]
+        routine_details = [
+            {
+                "account_id": item.get("account_id"),
+                "start": item.get("start"),
+                "end": item.get("end"),
+                "attempts": item.get("attempts"),
+                "error_code": item.get("error_code"),
+                "retry_after": item.get("retry_after", 0),
+            }
+            for item in routine_retry_ranges
+        ]
+        logger.debug(
+            "SimpleFIN retry queue details stage=%s account_backfill=%s routine_retry=%s",
+            stage,
+            json.dumps(account_details, sort_keys=True),
+            json.dumps(routine_details, sort_keys=True),
+        )
+
+
 def _queue_routine_retry_ranges(ranges, error_codes, start_ts: int, end_ts: int, account_backfill_state):
     """Persist failed recent windows unless the account's 12-month queue will retry them."""
     retry_after = int(_next_utc_reset().timestamp())
@@ -1424,6 +1490,7 @@ def fetch_and_sync_simplefin():
                 len(rolling_errors),
             )
 
+            _log_sync_retry_queue_state("before_backfill", account_backfill_state, routine_retry_ranges)
             account_backfill_windows = 0
             while account_backfill_state:
                 batch_windows = 0
@@ -1590,6 +1657,7 @@ def fetch_and_sync_simplefin():
                     warning=simplefin_errors[-1] if simplefin_errors else None,
                 )
 
+            _log_sync_retry_queue_state("after_backfill", account_backfill_state, routine_retry_ranges)
             routine_retry_pending = bool(routine_retry_ranges)
             account_backfill_pending = bool(account_backfill_state)
             account_backfill_remaining_days = sum(
