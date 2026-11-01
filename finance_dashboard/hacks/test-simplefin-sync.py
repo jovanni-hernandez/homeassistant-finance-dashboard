@@ -126,6 +126,19 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertNotIn("account-private", log_text)
         self.assertNotIn("connection-private", log_text)
 
+    def test_connection_error_matches_mx_prefixed_account_connection_id(self):
+        payload = {
+            "errlist": [{"code": "con.auth", "conn_id": "MBR-connection-a"}],
+            "accounts": [
+                {"id": "account-a", "conn_id": "MX-MBR-connection-a"},
+                {"id": "account-b", "conn_id": "MX-MBR-connection-b"},
+            ],
+        }
+
+        errors = simplefin._coverage_errors(payload, {"account-a", "account-b"})
+
+        self.assertEqual(errors, {"account-a": "con.auth"})
+
     def test_general_and_account_errors_keep_their_documented_scope(self):
         accounts = [
             {"id": "account-1", "conn_id": "connection-a"},

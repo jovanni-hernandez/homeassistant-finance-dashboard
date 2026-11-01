@@ -851,6 +851,13 @@ def _coverage_errors(payload: dict, requested_account_ids) -> dict[str, str]:
     errors = {}
     global_error = None
     unmatched_connection_error = False
+
+    def connection_match_key(value):
+        normalized = str(value).strip()
+        if normalized.upper().startswith("MX-MBR-"):
+            return normalized[3:]
+        return normalized
+
     account_connections = {}
     for account in payload.get("accounts", []) if isinstance(payload, dict) else []:
         if not isinstance(account, dict):
@@ -871,7 +878,9 @@ def _coverage_errors(payload: dict, requested_account_ids) -> dict[str, str]:
                 conn_id = item.get("conn_id")
                 matching_account_ids = [
                     account_id for account_id in requested
-                    if conn_id is not None and account_connections.get(account_id) == str(conn_id)
+                    if conn_id is not None
+                    and account_id in account_connections
+                    and connection_match_key(account_connections[account_id]) == connection_match_key(conn_id)
                 ]
                 for matching_account_id in matching_account_ids:
                     errors.setdefault(matching_account_id, code)
