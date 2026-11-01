@@ -480,6 +480,29 @@ def main():
                               hours_since_last_received: null,
                               stale: true,
                               latest_error_code: "con.auth",
+                            }, {
+                              account_id: "test-history-unmatched-account",
+                              name: "Test Joint Checking",
+                              institution: "Test Bank",
+                              currency: "USD",
+                              coverage_days: 0,
+                              target_days: 365,
+                              coverage_as_of: "2026-11-01T12:00:00+00:00",
+                              coverage_percent: 0,
+                              gaps: [{
+                                start_ts: 1761955200,
+                                end_ts: 1793491200,
+                                start_date: "2025-11-01",
+                                end_date: "2026-11-01",
+                                days: 365,
+                                status: "failed",
+                                error_code: "connection_error_unmatched",
+                                attempts: 2,
+                              }],
+                              last_received_at: null,
+                              hours_since_last_received: null,
+                              stale: true,
+                              latest_error_code: "connection_error_unmatched",
                             }],
                             overall_coverage_percent: 0,
                             covered_days: 0,
@@ -1666,11 +1689,17 @@ def main():
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-gap"]'))
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-retry"]'))
             )
-            provider_error_text = history_panel.find_element(By.CSS_SELECTOR, '[data-testid="provider-error-status"]').text
-            history_gap_text = history_panel.find_element(By.CSS_SELECTOR, '[data-testid="data-history-gap"]').text
+            provider_error_texts = [
+                element.text for element in history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="provider-error-status"]')
+            ]
+            history_gap_texts = [
+                element.text for element in history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-gap"]')
+            ]
             settings_navigation_checks["provider_errors_show_friendly_description_and_id"] = (
-                "Authentication issue for a connection (con.auth)" in provider_error_text
-                and "Authentication issue for a connection (con.auth)" in history_gap_text
+                any("Authentication issue for a connection (con.auth)" in text for text in provider_error_texts)
+                and any("Authentication issue for a connection (con.auth)" in text for text in history_gap_texts)
+                and any("Connection error could not be associated with a specific account (connection_error_unmatched)" in text for text in provider_error_texts)
+                and any("Connection error could not be associated with a specific account (connection_error_unmatched)" in text for text in history_gap_texts)
             )
             driver.execute_script("window.scrollTo(0, 0)")
             driver.save_screenshot(str(screenshot.with_name(screenshot.stem + "-settings-data-history" + screenshot.suffix)))

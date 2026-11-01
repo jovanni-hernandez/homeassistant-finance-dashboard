@@ -146,6 +146,65 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertEqual(global_errors, {"account-1": "gen.auth", "account-2": "gen.auth"})
         self.assertEqual(account_errors, {"account-2": "act.failed"})
 
+    def test_unmatched_connection_error_fails_closed_and_only_logs_ids_at_debug(self):
+        payload = {
+            "errlist": [{"code": "con.auth", "conn_id": "connection-private-unmatched"}],
+            "accounts": [
+                {"id": "account-private-a"},
+                {"id": "account-private-b"},
+            ],
+        }
+        requested = {"account-private-a", "account-private-b"}
+
+        with self.assertLogs("finance_dashboard", level="INFO") as info_logs:
+            errors = simplefin._coverage_errors(payload, requested)
+        self.assertEqual(errors, {
+            "account-private-a": "connection_error_unmatched",
+            "account-private-b": "connection_error_unmatched",
+        })
+        self.assertNotIn("account-private", "\n".join(info_logs.output))
+        self.assertNotIn("connection-private", "\n".join(info_logs.output))
+
+        with self.assertLogs("finance_dashboard", level="DEBUG") as debug_logs:
+            simplefin._coverage_errors(payload, requested)
+        debug_text = "\n".join(debug_logs.output)
+        self.assertIn("connection-private-unmatched", debug_text)
+        self.assertIn("account-private-a", debug_text)
+        self.assertIn("account-private-b", debug_text)
+
+    def test_unmatched_connection_error_does_not_count_ranges_as_verified(self):
+        now = int(simplefin._utc_now().timestamp())
+        start = now - simplefin.ACCOUNT_BACKFILL_DAYS * simplefin._ACCOUNT_BACKFILL_DAY_SECONDS
+        account_ids = {"account-a", "account-b"}
+        db = SessionLocal()
+        try:
+            db.add_all([
+                Account(id="account-a", org="Test Bank", name="Checking A", balance="0", currency="USD"),
+                Account(id="account-b", org="Test Bank", name="Checking B", balance="0", currency="USD"),
+            ])
+            db.commit()
+        finally:
+            db.close()
+        payload = {
+            "errlist": [{"code": "con.auth", "conn_id": "connection-not-in-response"}],
+            "accounts": [{"id": account_id} for account_id in account_ids],
+        }
+        errors = simplefin._coverage_errors(payload, account_ids)
+        simplefin._coverage_attempt(account_ids, start, now, "test")
+        simplefin._coverage_result(
+            account_ids,
+            start,
+            now,
+            returned_ids=account_ids,
+            error_codes=errors,
+            source="test",
+        )
+
+        history = simplefin.get_account_data_history()["accounts"]
+        self.assertEqual({item["account_id"] for item in history}, account_ids)
+        self.assertTrue(all(item["coverage_percent"] == 0 for item in history))
+        self.assertTrue(all(item["latest_error_code"] == "connection_error_unmatched" for item in history))
+
     def test_sync_reports_no_newer_date_when_provider_returns_stale_data(self):
         previous_timestamp = 1_700_000_000
         self.seed_latest_transaction(previous_timestamp)

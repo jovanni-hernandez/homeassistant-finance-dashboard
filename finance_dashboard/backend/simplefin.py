@@ -850,6 +850,7 @@ def _coverage_errors(payload: dict, requested_account_ids) -> dict[str, str]:
     requested = set(map(str, requested_account_ids or []))
     errors = {}
     global_error = None
+    unmatched_connection_error = False
     account_connections = {}
     for account in payload.get("accounts", []) if isinstance(payload, dict) else []:
         if not isinstance(account, dict):
@@ -874,11 +875,30 @@ def _coverage_errors(payload: dict, requested_account_ids) -> dict[str, str]:
                 ]
                 for matching_account_id in matching_account_ids:
                     errors.setdefault(matching_account_id, code)
+                if not matching_account_ids:
+                    unmatched_connection_error = True
                 logger.info(
-                    "SimpleFIN connection error mapped code=%s matching_accounts=%d",
+                    "SimpleFIN connection error mapped code=%s conn_id_present=%s "
+                    "response_accounts_with_conn_id=%d matching_accounts=%d",
                     code[:40],
+                    str(conn_id is not None).lower(),
+                    len(account_connections),
                     len(matching_account_ids),
                 )
+                if logger.isEnabledFor(logging.DEBUG):
+                    response_account_connections = [
+                        {"account_id": account_id, "conn_id": account_conn_id}
+                        for account_id, account_conn_id in sorted(account_connections.items())
+                    ]
+                    logger.debug(
+                        "SimpleFIN connection mapping details code=%s error_conn_id=%s "
+                        "requested_account_ids=%s response_account_connections=%s matched_account_ids=%s",
+                        code[:40],
+                        str(conn_id) if conn_id is not None else "<missing>",
+                        json.dumps(sorted(requested)),
+                        json.dumps(response_account_connections, sort_keys=True),
+                        json.dumps(sorted(matching_account_ids)),
+                    )
             elif account_id is not None and str(account_id) in requested:
                 errors[str(account_id)] = code
         elif item:
@@ -892,6 +912,9 @@ def _coverage_errors(payload: dict, requested_account_ids) -> dict[str, str]:
     if global_error:
         for account_id in requested:
             errors.setdefault(account_id, global_error)
+    if unmatched_connection_error:
+        for account_id in requested:
+            errors.setdefault(account_id, "connection_error_unmatched")
     returned = _response_account_ids(payload)
     for account_id in requested - returned:
         errors.setdefault(account_id, "account_not_returned")
