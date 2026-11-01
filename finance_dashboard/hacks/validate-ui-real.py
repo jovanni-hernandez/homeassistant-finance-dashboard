@@ -726,6 +726,8 @@ def main():
                 "new_sync_reappears_after_dismissal": False,
                 "paused_details_collapsed_by_default": False,
                 "paused_details_expand_to_show_message_and_warning": False,
+                "sync_result_message_collapsed_by_default": False,
+                "sync_result_message_expands_to_show_details": False,
             }
             sync_progress_screenshot = screenshot.with_name(screenshot.stem + "-sync-progress" + screenshot.suffix)
             driver.execute_script("sessionStorage.removeItem('finance-sync-progress-dismissed');")
@@ -783,6 +785,35 @@ def main():
                 """)
             )
             driver.execute_script("document.querySelector('[data-testid=\"sync-progress-dismiss\"]')?.click()")
+            long_sync_message = (
+                "SimpleFIN checked 12 date windows; backfill requests are at most 90 days and are throttled to the daily request budget. "
+                "Provider warning: con.auth. Returned 12 transactions; newest dated 2026-10-30. "
+                "Freshness NOT verified: no newer transaction date was returned. Historical account coverage remains incomplete."
+            )
+            driver.execute_script("window.__financeSetSyncMessage(arguments[0], false);", long_sync_message)
+            sync_result_details = WebDriverWait(driver, args.timeout).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="sync-result-details"]'))
+            )
+            sync_progress_checks["sync_result_message_collapsed_by_default"] = (
+                sync_result_details.get_attribute("open") is None
+                and "Sync status updated" in sync_result_details.text
+                and "Provider warning: con.auth" not in sync_result_details.text
+            )
+            sync_result_screenshot = sync_progress_screenshot.with_name(
+                sync_progress_screenshot.stem + "-result-collapsed" + sync_progress_screenshot.suffix
+            )
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", sync_result_details)
+            driver.save_screenshot(str(sync_result_screenshot))
+            sync_result_details.find_element(By.TAG_NAME, "summary").click()
+            sync_progress_checks["sync_result_message_expands_to_show_details"] = WebDriverWait(driver, args.timeout).until(
+                lambda current: current.execute_script("""
+                    const details = document.querySelector('[data-testid="sync-result-details"]');
+                    return Boolean(details?.open
+                      && details.innerText.includes('Provider warning: con.auth')
+                      && details.innerText.includes('Historical account coverage remains incomplete.'));
+                """)
+            )
+            driver.execute_script("window.__financeSetSyncMessage('', false);")
             driver.execute_script("window.scrollTo(0, document.documentElement.scrollHeight)")
             header_scroll_checks = driver.execute_script("""
                 const compactBar = document.querySelector('#app > div.sticky');

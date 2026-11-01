@@ -279,7 +279,11 @@
 
         <main class="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6 lg:px-8">
             <div v-if="syncMessage" class="mb-4 rounded-lg border px-4 py-3 text-sm" :class="syncError ? 'border-red-200 bg-red-50 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'">
-                {{ syncMessage }}
+                <details v-if="syncMessageIsVerbose" data-testid="sync-result-details">
+                    <summary class="cursor-pointer font-medium underline underline-offset-2">{{ syncMessageSummary }}</summary>
+                    <p class="mt-2">{{ syncMessage }}</p>
+                </details>
+                <p v-else>{{ syncMessage }}</p>
             </div>
 
             <section v-if="syncProgressBannerVisible" data-testid="sync-progress-banner" role="status" aria-live="polite" class="mb-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm sm:p-5">
@@ -2120,6 +2124,8 @@
                 const claiming = ref(false);
                 const syncMessage = ref('');
                 const syncError = ref(false);
+                const syncMessageIsVerbose = computed(() => syncMessage.value.length > 180);
+                const syncMessageSummary = computed(() => syncError.value ? 'Sync failed — show details' : 'Sync status updated — show details');
                 const error = ref(null);
                 const setupTokenInput = ref('');
                 const pinStatus = ref({
@@ -5236,6 +5242,10 @@
                     if (window.__FINANCE_TESTING__ === true) {
                         window.__financeSankeyNodeOrderByTransactionCount = sankeyNodeOrderByTransactionCount;
                         window.__financeSetSyncProgress = (progress) => { status.value.sync_progress = progress; };
+                        window.__financeSetSyncMessage = (message, isError = false) => {
+                            syncMessage.value = message;
+                            syncError.value = isError;
+                        };
                     }
                     syncFinanceTheme();
                     if (window.matchMedia) {
@@ -5378,6 +5388,8 @@
                     claiming,
                     syncMessage,
                     syncError,
+                    syncMessageIsVerbose,
+                    syncMessageSummary,
                     error,
                     setupTokenInput,
                     categoryRulesText,
