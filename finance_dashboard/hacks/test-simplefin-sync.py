@@ -11,7 +11,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
@@ -138,6 +138,140 @@ class SimpleFinSyncTests(unittest.TestCase):
         errors = simplefin._coverage_errors(payload, {"account-a", "account-b"})
 
         self.assertEqual(errors, {"account-a": "con.auth"})
+
+    def test_routine_cursor_advances_and_queues_only_the_failed_account(self):
+        now = int(simplefin._utc_now().timestamp())
+        day = simplefin.SYNC_WINDOW_SECONDS
+        cursor = now - (4 * day)
+        window_end = cursor + day
+        db = SessionLocal()
+        try:
+            db.add_all([
+                Account(id="healthy-account", org="Test Bank", name="Healthy", balance="0", currency="USD"),
+                Account(id="reauth-account", org="Test Bank", name="Needs reauth", balance="0", currency="USD"),
+            ])
+            db.commit()
+        finally:
+            db.close()
+        set_setting(simplefin.ACCOUNT_BACKFILL_VERSION_KEY, simplefin.ACCOUNT_BACKFILL_VERSION)
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(cursor))
+
+        def fetch_window(_access_url, start_ts, end_ts, *, on_reserved=None, account_ids=None):
+            if on_reserved:
+                on_reserved()
+            payload = {
+                "accounts": [
+                    {"id": "healthy-account", "conn_id": "MX-MBR-healthy", "name": "Healthy", "balance": "0", "currency": "USD", "transactions": []},
+                    {"id": "reauth-account", "conn_id": "MX-MBR-reauth", "name": "Needs reauth", "balance": "0", "currency": "USD", "transactions": []},
+                ]
+            }
+            if start_ts == cursor:
+                payload["errlist"] = [{"code": "con.auth", "conn_id": "MBR-reauth", "msg": "Authentication required"}]
+            return payload
+
+        with patch.object(simplefin, "SYNC_MAX_BACKFILL_WINDOWS_PER_RUN", 1), patch.object(
+            simplefin, "_fetch_simplefin_payload", side_effect=fetch_window
+        ):
+            result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertEqual(int(get_setting(simplefin.SYNC_CURSOR_SETTING_KEY)), window_end)
+        self.assertTrue(result["backfill_pending"])
+        self.assertTrue(result["routine_retry_pending"])
+        retry_ranges = simplefin._load_routine_retry_ranges()
+        self.assertEqual(len(retry_ranges), 1)
+        self.assertEqual(retry_ranges[0]["account_id"], "reauth-account")
+        self.assertEqual((retry_ranges[0]["start"], retry_ranges[0]["end"]), (cursor, window_end))
+
+        db = SessionLocal()
+        try:
+            coverage = {
+                row.account_id: row.status
+                for row in db.query(AccountDataCoverage).filter_by(start_ts=cursor, end_ts=window_end).all()
+            }
+        finally:
+            db.close()
+        self.assertEqual(coverage, {"healthy-account": "complete", "reauth-account": "failed"})
+
+    def test_routine_retry_fetches_only_the_affected_account_and_clears_on_success(self):
+        now = int(simplefin._utc_now().timestamp())
+        start = now - (3 * simplefin.SYNC_WINDOW_SECONDS)
+        end = start + simplefin.SYNC_WINDOW_SECONDS
+        db = SessionLocal()
+        try:
+            db.add(Account(id="reauth-account", org="Test Bank", name="Needs reauth", balance="0", currency="USD"))
+            db.commit()
+        finally:
+            db.close()
+        set_setting(simplefin.ACCOUNT_BACKFILL_VERSION_KEY, simplefin.ACCOUNT_BACKFILL_VERSION)
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(now))
+        simplefin._save_routine_retry_ranges([{
+            "account_id": "reauth-account",
+            "start": start,
+            "end": end,
+            "retry_after": 0,
+            "attempts": 1,
+            "error_code": "con.auth",
+        }])
+        account_filter_calls = []
+
+        def fetch_window(_access_url, start_ts, end_ts, *, on_reserved=None, account_ids=None):
+            if on_reserved:
+                on_reserved()
+            if account_ids is not None:
+                account_filter_calls.append(account_ids)
+                return {"accounts": [{
+                    "id": "reauth-account",
+                    "conn_id": "MX-MBR-reauth",
+                    "name": "Needs reauth",
+                    "balance": "0",
+                    "currency": "USD",
+                    "transactions": [],
+                }]}
+            return {"accounts": [{
+                "id": "reauth-account",
+                "conn_id": "MX-MBR-reauth",
+                "name": "Needs reauth",
+                "balance": "0",
+                "currency": "USD",
+                "transactions": [],
+            }]}
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", side_effect=fetch_window):
+            result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertEqual(account_filter_calls, [["reauth-account"]])
+        self.assertEqual(simplefin._load_routine_retry_ranges(), [])
+        self.assertFalse(result["routine_retry_pending"])
+        db = SessionLocal()
+        try:
+            row = db.query(AccountDataCoverage).filter_by(
+                account_id="reauth-account", start_ts=start, end_ts=end
+            ).one()
+        finally:
+            db.close()
+        self.assertEqual(row.status, "complete")
+
+    def test_simplefin_payload_supports_account_filtered_requests(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"accounts": []}
+        budget = {
+            "requests_last_24h": 1,
+            "limit_24h": 24,
+            "requests_remaining": 23,
+            "next_request_at": None,
+        }
+        with patch.object(simplefin, "_reserve_simplefin_request", return_value=budget), patch.object(
+            simplefin, "_write_sync_progress"
+        ), patch.object(simplefin.requests, "get", return_value=response) as request:
+            simplefin._fetch_simplefin_payload(
+                simplefin.get_simplefin_token(),
+                start_ts=1_700_000_000,
+                end_ts=1_700_086_400,
+                account_ids=["account-b", "account-a"],
+            )
+
+        self.assertEqual(request.call_args.kwargs["params"]["account"], ["account-a", "account-b"])
 
     def test_general_and_account_errors_keep_their_documented_scope(self):
         accounts = [

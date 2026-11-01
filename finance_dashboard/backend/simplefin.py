@@ -32,6 +32,7 @@ SYNC_OVERLAP_DAYS = 0
 SYNC_INTERVAL_SECONDS = 6 * 60 * 60
 SYNC_MAX_BACKFILL_WINDOWS_PER_RUN = 7
 SYNC_CURSOR_SETTING_KEY = "simplefin_sync_cursor"
+SYNC_ROUTINE_RETRY_RANGES_KEY = "simplefin_routine_retry_ranges"
 ACCOUNT_BACKFILL_SETTING_KEY = "simplefin_account_backfill_state"
 ACCOUNT_BACKFILL_VERSION_KEY = "simplefin_account_backfill_version"
 ACCOUNT_BACKFILL_VERSION = "12_months_v1"
@@ -618,7 +619,14 @@ def _normalize_simplefin_payload(data: dict, rules=None):
     return {"accounts": accounts}
 
 
-def _fetch_simplefin_payload(access_url: str, start_ts: int | None = None, end_ts: int | None = None, *, on_reserved=None):
+def _fetch_simplefin_payload(
+    access_url: str,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+    *,
+    on_reserved=None,
+    account_ids=None,
+):
     base_url, auth = _decode_access_url_to_request(access_url)
     accounts_url = f"{base_url}/accounts"
 
@@ -627,6 +635,8 @@ def _fetch_simplefin_payload(access_url: str, start_ts: int | None = None, end_t
         params["start-date"] = int(start_ts)
     if end_ts is not None:
         params["end-date"] = int(end_ts)
+    if account_ids:
+        params["account"] = sorted(set(map(str, account_ids)))
 
     url_desc = f"{accounts_url}?version=2"
     if start_ts is not None and end_ts is not None:
@@ -726,6 +736,84 @@ def _load_account_backfill_state():
 
 def _save_account_backfill_state(state):
     set_setting(ACCOUNT_BACKFILL_SETTING_KEY, json.dumps(state, sort_keys=True))
+
+
+def _load_routine_retry_ranges():
+    raw = get_setting(SYNC_ROUTINE_RETRY_RANGES_KEY)
+    if not raw:
+        return []
+    try:
+        stored = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning("Could not parse routine history retry ranges; starting an empty retry queue.")
+        return []
+    if not isinstance(stored, list):
+        return []
+
+    ranges = []
+    for item in stored:
+        if not isinstance(item, dict):
+            continue
+        try:
+            account_id = str(item["account_id"])
+            start = int(item["start"])
+            end = int(item["end"])
+            retry_after = int(item.get("retry_after", 0) or 0)
+            attempts = int(item.get("attempts", 0) or 0)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if account_id and 0 <= start < end:
+            ranges.append({
+                "account_id": account_id,
+                "start": start,
+                "end": end,
+                "retry_after": max(0, retry_after),
+                "attempts": max(0, attempts),
+                "error_code": str(item.get("error_code") or "provider_error")[:40],
+            })
+    return ranges
+
+
+def _save_routine_retry_ranges(ranges):
+    ranges.sort(key=lambda item: (item["start"], item["end"], item["account_id"]))
+    set_setting(SYNC_ROUTINE_RETRY_RANGES_KEY, json.dumps(ranges, sort_keys=True))
+
+
+def _queue_routine_retry_ranges(ranges, error_codes, start_ts: int, end_ts: int, account_backfill_state):
+    """Persist failed recent windows unless the account's 12-month queue will retry them."""
+    retry_after = int(_next_utc_reset().timestamp())
+    queued = 0
+    for account_id, error_code in error_codes.items():
+        account_id = str(account_id)
+        backfill = account_backfill_state.get(account_id)
+        if (
+            backfill
+            and int(backfill.get("cursor", 0)) <= start_ts
+            and int(backfill.get("end", 0)) >= end_ts
+        ):
+            continue
+
+        existing = next((
+            item for item in ranges
+            if item["account_id"] == account_id
+            and item["start"] == start_ts
+            and item["end"] == end_ts
+        ), None)
+        if existing:
+            existing["retry_after"] = max(existing["retry_after"], retry_after)
+            existing["attempts"] += 1
+            existing["error_code"] = str(error_code)[:40]
+        else:
+            ranges.append({
+                "account_id": account_id,
+                "start": int(start_ts),
+                "end": int(end_ts),
+                "retry_after": retry_after,
+                "attempts": 1,
+                "error_code": str(error_code)[:40],
+            })
+        queued += 1
+    return queued
 
 
 def _queue_initial_account_history(account_ids, now_timestamp: int, state: dict):
@@ -930,7 +1018,15 @@ def _coverage_errors(payload: dict, requested_account_ids) -> dict[str, str]:
     return errors
 
 
-def _fetch_tracked_payload(access_url: str, start_ts: int, end_ts: int, account_ids, source: str):
+def _fetch_tracked_payload(
+    access_url: str,
+    start_ts: int,
+    end_ts: int,
+    account_ids,
+    source: str,
+    *,
+    filter_accounts: bool = False,
+):
     requested_ids = set(map(str, account_ids or []))
     attempt_recorded = False
 
@@ -942,12 +1038,14 @@ def _fetch_tracked_payload(access_url: str, start_ts: int, end_ts: int, account_
         attempt_recorded = True
 
     try:
-        payload = _fetch_simplefin_payload(
-            access_url,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            on_reserved=record_attempt,
-        )
+        fetch_kwargs = {
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "on_reserved": record_attempt,
+        }
+        if filter_accounts:
+            fetch_kwargs["account_ids"] = sorted(requested_ids)
+        payload = _fetch_simplefin_payload(access_url, **fetch_kwargs)
     except SimpleFINDailyLimitError:
         raise
     except Exception:
@@ -1190,6 +1288,7 @@ def fetch_and_sync_simplefin():
                 if account.get("id") is not None
             }
             account_backfill_state = _load_account_backfill_state()
+            routine_retry_ranges = _load_routine_retry_ranges()
             account_backfill_state = _queue_initial_account_history(
                 known_account_ids,
                 now_timestamp,
@@ -1266,22 +1365,28 @@ def fetch_and_sync_simplefin():
                 save_normalized_payload(normalized)
                 _coverage_result(coverage_ids, cursor, window_end, returned_ids=returned_ids, error_codes=window_errors, source="routine_backfill")
 
+                queued_retry_ranges = 0
                 if window_errors:
                     note_coverage_errors(window_errors)
-                    logger.info(
-                        "SimpleFIN recent-history cursor held start_date=%s end_date_exclusive=%s unverified_accounts=%d",
-                        datetime.fromtimestamp(cursor, timezone.utc).date().isoformat(),
-                        datetime.fromtimestamp(window_end, timezone.utc).date().isoformat(),
-                        len(window_errors),
+                    queued_retry_ranges = _queue_routine_retry_ranges(
+                        routine_retry_ranges,
+                        window_errors,
+                        cursor,
+                        window_end,
+                        account_backfill_state,
                     )
-                    break
+                    if queued_retry_ranges:
+                        _save_routine_retry_ranges(routine_retry_ranges)
 
                 cursor = window_end
                 set_setting(SYNC_CURSOR_SETTING_KEY, str(cursor))
                 backfill_windows += 1
                 logger.info(
-                    "SimpleFIN recent-history cursor advanced end_date_exclusive=%s",
+                    "SimpleFIN recent-history cursor advanced end_date_exclusive=%s "
+                    "unverified_accounts=%d queued_account_retries=%d",
                     datetime.fromtimestamp(cursor, timezone.utc).date().isoformat(),
+                    len(window_errors),
+                    queued_retry_ranges,
                 )
 
             backfill_pending = cursor < backfill_limit
@@ -1420,6 +1525,72 @@ def fetch_and_sync_simplefin():
                 ):
                     break
 
+            routine_retry_windows = 0
+            while routine_retry_ranges and routine_retry_windows < SYNC_MAX_BACKFILL_WINDOWS_PER_RUN:
+                now_for_retry = int(_utc_now().timestamp())
+                eligible_retry_indexes = [
+                    index for index, item in enumerate(routine_retry_ranges)
+                    if int(item.get("retry_after", 0) or 0) <= now_for_retry
+                ]
+                if not eligible_retry_indexes:
+                    break
+                retry_index = min(
+                    eligible_retry_indexes,
+                    key=lambda index: (
+                        routine_retry_ranges[index]["start"],
+                        routine_retry_ranges[index]["account_id"],
+                    ),
+                )
+                retry_range = routine_retry_ranges[retry_index]
+                retry_account_id = retry_range["account_id"]
+                retry_start = retry_range["start"]
+                retry_end = retry_range["end"]
+                update_progress("routine_retry", "Retrying recent account history ranges.")
+                payload, retry_errors, coverage_ids, returned_ids = _fetch_tracked_payload(
+                    access_url,
+                    retry_start,
+                    retry_end,
+                    {retry_account_id},
+                    "routine_retry",
+                    filter_accounts=True,
+                )
+                if payload.get("errlist") or payload.get("errors"):
+                    note_coverage_errors(retry_errors)
+                normalized = _normalize_simplefin_payload(payload, rules)
+                save_normalized_payload(normalized)
+                _coverage_result(
+                    coverage_ids,
+                    retry_start,
+                    retry_end,
+                    returned_ids=returned_ids,
+                    error_codes=retry_errors,
+                    source="routine_retry",
+                )
+                retry_error = retry_errors.get(retry_account_id)
+                if retry_error:
+                    retry_range["attempts"] = int(retry_range.get("attempts", 0)) + 1
+                    retry_range["error_code"] = retry_error[:40]
+                    retry_range["retry_after"] = int(_next_utc_reset().timestamp())
+                    note_coverage_errors({retry_account_id: retry_error})
+                else:
+                    routine_retry_ranges.pop(retry_index)
+                _save_routine_retry_ranges(routine_retry_ranges)
+                routine_retry_windows += 1
+                logger.info(
+                    "SimpleFIN routine retry outcome start_date=%s end_date_exclusive=%s "
+                    "retry_scheduled=%s pending_retry_ranges=%d",
+                    datetime.fromtimestamp(retry_start, timezone.utc).date().isoformat(),
+                    datetime.fromtimestamp(retry_end, timezone.utc).date().isoformat(),
+                    str(bool(retry_error)).lower(),
+                    len(routine_retry_ranges),
+                )
+                update_progress(
+                    "routine_retry",
+                    "Retrying recent account history ranges.",
+                    warning=simplefin_errors[-1] if simplefin_errors else None,
+                )
+
+            routine_retry_pending = bool(routine_retry_ranges)
             account_backfill_pending = bool(account_backfill_state)
             account_backfill_remaining_days = sum(
                 (progress["end"] - progress["cursor"] + _ACCOUNT_BACKFILL_DAY_SECONDS - 1) // _ACCOUNT_BACKFILL_DAY_SECONDS
@@ -1434,7 +1605,7 @@ def fetch_and_sync_simplefin():
                 previous_latest_timestamp is None or newest_incoming_timestamp > previous_latest_timestamp
             )
 
-            total_windows = backfill_windows + 1 + account_backfill_windows
+            total_windows = backfill_windows + 1 + account_backfill_windows + routine_retry_windows
             message = (
                 f"SimpleFIN checked {total_windows} date window(s); backfill requests are at most "
                 f"{ACCOUNT_BACKFILL_WINDOW_DAYS} days and are throttled to the daily request budget."
@@ -1465,7 +1636,12 @@ def fetch_and_sync_simplefin():
                     f" Account history is incomplete: about {account_backfill_remaining_days} day(s) "
                     "remain and will resume on the next sync."
                 )
-            pending_sync = backfill_pending or account_backfill_pending or bool(rolling_errors)
+            if routine_retry_pending:
+                message += (
+                    f" Recent history has {len(routine_retry_ranges)} account-specific retry range(s) "
+                    "waiting for the next daily reset."
+                )
+            pending_sync = backfill_pending or account_backfill_pending or routine_retry_pending or bool(rolling_errors)
             if pending_sync:
                 message += " Some ranges remain unverified; see Settings → Data History for their status."
             budget = _request_budget_status(access_url)
@@ -1503,6 +1679,8 @@ def fetch_and_sync_simplefin():
                 "backfill_remaining_days": remaining_backfill_days,
                 "account_backfill_pending": account_backfill_pending,
                 "account_backfill_remaining_days": account_backfill_remaining_days,
+                "routine_retry_pending": routine_retry_pending,
+                "routine_retry_ranges_pending": len(routine_retry_ranges),
                 "account_backfill_windows": account_backfill_windows,
                 "warnings": simplefin_errors,
                 "sync_progress": _read_sync_progress(),
