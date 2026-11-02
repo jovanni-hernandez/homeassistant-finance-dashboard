@@ -7,8 +7,10 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
@@ -27,6 +29,14 @@ from models import Account, ManualAsset, SessionLocal, Setting, Transaction
 from database import create_manual_asset
 
 init_db()
+
+
+class FixedDate(date):
+    """Keep deadline-based expectations stable regardless of the test run date."""
+
+    @classmethod
+    def today(cls):
+        return cls(2026, 10, 1)
 
 
 def seed_sources():
@@ -59,14 +69,15 @@ class FinancialGoalTests(unittest.TestCase):
         self.manual_investment = create_manual_asset("Retirement holding", "5000.00", "USD")
 
     def test_savings_goal_shows_progress_and_required_monthly_pace(self):
-        goal = create_goal({
-            "goal_type": "savings",
-            "name": "Emergency fund",
-            "account_ids": ["bank-usd"],
-            "target_amount": "6000",
-            "target_date": "2027-04-01",
-            "planned_monthly": "900",
-        }, [self.sources["bank"]], [])
+        with patch("goals.date", FixedDate):
+            goal = create_goal({
+                "goal_type": "savings",
+                "name": "Emergency fund",
+                "account_ids": ["bank-usd"],
+                "target_amount": "6000",
+                "target_date": "2027-04-01",
+                "planned_monthly": "900",
+            }, [self.sources["bank"]], [])
 
         self.assertEqual(goal["currency"], "USD")
         self.assertEqual(goal["current_amount"], "1000.00")
@@ -75,14 +86,15 @@ class FinancialGoalTests(unittest.TestCase):
         self.assertEqual(goal["status"], "on_track")
 
     def test_debt_payoff_calculates_payment_using_configured_apr(self):
-        goal = create_goal({
-            "goal_type": "debt_payoff",
-            "name": "Pay off card",
-            "account_ids": ["credit-usd"],
-            "target_date": "2027-10-01",
-            "apr_percent": "12",
-            "planned_monthly": "1100",
-        }, [self.sources["debt"]], [])
+        with patch("goals.date", FixedDate):
+            goal = create_goal({
+                "goal_type": "debt_payoff",
+                "name": "Pay off card",
+                "account_ids": ["credit-usd"],
+                "target_date": "2027-10-01",
+                "apr_percent": "12",
+                "planned_monthly": "1100",
+            }, [self.sources["debt"]], [])
 
         self.assertEqual(goal["current_amount"], "12000.00")
         self.assertGreater(Decimal(goal["required_monthly"]), Decimal("1000"))

@@ -13,6 +13,7 @@ View accounts and transactions, understand cash flow, and organize spending from
 - Optional account nicknames shown on account cards and transaction/Sankey details.
 - Optional PIN lock and optional AI-assisted category suggestions.
 - Sync status that reports the number of transactions returned and their newest date, so a successful request is not mistaken for fresh data.
+- Optional Home Assistant sensors for balances, net worth, monthly cash flow, and sync status through a local custom integration.
 
 ## Install and connect
 
@@ -33,6 +34,31 @@ After connecting, the dashboard displays the last sync time, status, account cou
 6. **Display:** The dashboard reads the stored data to render balances, cash flow, grouped transactions, and recurring-payment insights. It shows the newest transaction date returned by SimpleFIN and whether that date advanced.
 
 The six-hour schedule can make repeated requests, but it cannot make a bank or SimpleFIN provide transactions that are not present in their response. A sync can complete successfully while the newest transaction date stays unchanged; the dashboard reports that as **Freshness NOT verified**.
+
+## Home Assistant sensors
+
+The add-on exposes a read-only metrics endpoint on its internal network. It does not publish a host port and does not use MQTT. The separate Finance Dashboard integration polls this endpoint every 15 minutes and creates sensors for:
+
+- Assets, liabilities, and net worth by currency.
+- Current-month income, spending, and net cash flow by currency. Pending transactions and transfers are excluded.
+- Account balances, connection status, last sync time/status, freshness (whether the newest transaction date advanced), and account/transaction counts.
+
+### Install the integration
+
+1. In HACS, open **Integrations → Custom repositories** and add this repository as an **Integration**.
+2. Download **Finance Dashboard Sensors**, then restart Home Assistant Core.
+3. Open **Settings → Devices & services → Add integration → Finance Dashboard**.
+4. Enter the internal add-on URL. The default is `http://custom_finance:8000`; the integration appends `/api/ha-metrics` automatically. Leave the token blank unless you enable token authentication below.
+
+The integration is hosted in `custom_components/finance_dashboard/` in this repository. The add-on itself remains installed and updated separately through the Home Assistant Add-on Store.
+
+### Optional endpoint authentication
+
+By default, the endpoint trusts the add-on's internal network. Other add-ons on that network may also be able to reach it. To require a token, set `ha_metrics_api_token` in the Finance Dashboard add-on configuration and enter the same value in the integration setup (or reconfigure the integration). The add-on masks the option in its UI. Leaving it blank disables token authentication. This endpoint is read-only and does not return transaction data unless the transaction option is enabled.
+
+### Optional raw transaction sensor
+
+The raw transaction sensor is off by default. Enable **Expose the 20 most recent raw transactions** in the integration's **Configure** options to create it. Its attributes contain up to 20 recent records, including transaction and account identifiers, dates, amounts, payees, descriptions, categories, and pending status. Home Assistant may retain these attributes in recorder history and backups, so enable this only if that retention is acceptable.
 
 ## Categories and optional AI
 

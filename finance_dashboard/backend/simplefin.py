@@ -43,6 +43,9 @@ SYNC_WINDOW_SECONDS = (SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS) * 24 * 60 * 60
 ACCOUNT_BACKFILL_WINDOW_SECONDS = ACCOUNT_BACKFILL_WINDOW_DAYS * 24 * 60 * 60
 SIMPLEFIN_REQUEST_BUDGET_KEY = "simplefin_request_budget"
 SIMPLEFIN_SYNC_PROGRESS_KEY = "simplefin_sync_progress"
+LAST_SYNC_INCOMING_COUNT_KEY = "last_sync_incoming_transaction_count"
+LAST_SYNC_LATEST_INCOMING_DATE_KEY = "last_sync_latest_incoming_transaction_date"
+LAST_SYNC_DATE_ADVANCED_KEY = "last_sync_newest_transaction_date_advanced"
 SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS = 24
 SIMPLEFIN_MIN_REQUEST_INTERVAL_SECONDS = 10
 _simplefin_request_lock = threading.Lock()
@@ -454,6 +457,12 @@ def get_dashboard_status():
             "requests_remaining_24h": budget["requests_remaining"],
             "next_request_at": budget["next_request_at"],
         })
+    incoming_count_value = get_setting(LAST_SYNC_INCOMING_COUNT_KEY)
+    try:
+        incoming_count = int(incoming_count_value or 0)
+    except (TypeError, ValueError):
+        incoming_count = 0
+    date_advanced_value = get_setting(LAST_SYNC_DATE_ADVANCED_KEY)
     return {
         "connected": bool(token),
         "account_count": get_account_count(),
@@ -461,6 +470,11 @@ def get_dashboard_status():
         "last_sync_status": get_setting("last_sync_status") or "never",
         "last_sync_message": get_setting("last_sync_message") or "No sync has completed yet.",
         "last_sync_at": get_setting("last_sync_at"),
+        "incoming_transaction_count": incoming_count,
+        "latest_incoming_transaction_date": get_setting(LAST_SYNC_LATEST_INCOMING_DATE_KEY) or None,
+        "newest_transaction_date_advanced": (
+            date_advanced_value == "true" if date_advanced_value in {"true", "false"} else None
+        ),
         "has_token": bool(token),
         "sync_progress": progress or None,
         "simplefin_request_budget": budget,
@@ -1715,6 +1729,12 @@ def fetch_and_sync_simplefin():
             budget = _request_budget_status(access_url)
             message += f" SimpleFIN requests in the last 24 hours: {budget['requests_last_24h']}/{budget['limit_24h']}."
 
+            set_setting(LAST_SYNC_INCOMING_COUNT_KEY, str(incoming_count))
+            set_setting(LAST_SYNC_LATEST_INCOMING_DATE_KEY, newest_incoming_date or "")
+            set_setting(
+                LAST_SYNC_DATE_ADVANCED_KEY,
+                "true" if newest_date_advanced else "false",
+            )
             _record_sync_state("pending" if pending_sync else "success", message)
             _set_sync_progress(
                 sync_id,

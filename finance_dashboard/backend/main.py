@@ -11,6 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import simplefin
+from ha_metrics import build_ha_metrics, metrics_token_matches, read_metrics_api_token
 from app_logging import apply_app_log_level, get_app_log_settings
 from ai_assistant import (
     ProviderModelDiscoveryError,
@@ -69,7 +70,11 @@ app = FastAPI(title="Finance Dashboard API")
 @app.middleware("http")
 async def prevent_stale_dashboard_html(request, call_next):
     response = await call_next(request)
-    if request.method == "GET" and request.url.path in {"/", "/index.html"}:
+    if request.method == "GET" and request.url.path in {
+        "/",
+        "/index.html",
+        "/api/ha-metrics",
+    }:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -600,6 +605,30 @@ def _finance_agent_stdin_worker():
 @app.get("/api/status", dependencies=[Depends(verify_ha_auth)])
 def api_status():
     return simplefin.get_dashboard_status()
+
+
+@app.get("/api/ha-metrics")
+def api_ha_metrics(
+    include_transactions: bool = False,
+    metrics_token: str | None = Header(None, alias="X-Finance-Metrics-Token"),
+):
+    """Return a bounded, read-only snapshot for the Home Assistant integration."""
+    try:
+        configured_token = read_metrics_api_token()
+    except (OSError, ValueError) as exc:
+        logger.error(
+            "Could not read add-on metrics authentication settings (%s).",
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=503, detail="Metrics endpoint configuration is unavailable.") from exc
+
+    if not metrics_token_matches(configured_token, metrics_token):
+        raise HTTPException(status_code=401, detail="Invalid metrics API token.")
+
+    return build_ha_metrics(
+        simplefin.get_dashboard_status(),
+        include_transactions=include_transactions,
+    )
 
 
 @app.get("/api/planning/settings", dependencies=[Depends(verify_ha_auth)])

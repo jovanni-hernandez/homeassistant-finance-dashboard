@@ -1,0 +1,51 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "The Finance Dashboard integration is already configured.",
+      "reauth_entry_not_found": "The Finance Dashboard config entry could not be found.",
+      "reauth_successful": "Finance Dashboard authentication was updated.",
+      "reconfigure_successful": "Finance Dashboard configuration was updated."
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the metrics endpoint.",
+      "invalid_auth": "The metrics API token was rejected.",
+      "invalid_url": "Enter a valid HTTP or HTTPS base URL."
+    },
+    "step": {
+      "user": {
+        "title": "Connect Finance Dashboard",
+        "description": "Enter the add-on's internal URL. Leave the token blank unless token authentication is configured in the add-on options.",
+        "data": {
+          "url": "Internal add-on URL",
+          "password": "Metrics API token (optional)"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Finance Dashboard",
+        "description": "Update the internal URL or optional metrics API token.",
+        "data": {
+          "url": "Internal add-on URL",
+          "password": "Metrics API token (optional)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Update Finance Dashboard token",
+        "description": "The metrics endpoint rejected the saved token. Enter the current token, or leave it blank if token authentication is disabled.",
+        "data": {
+          "password": "Metrics API token (optional)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sensor options",
+        "description": "Raw transaction attributes may be retained in Home Assistant history and backups.",
+        "data": {
+          "expose_transactions": "Expose the 20 most recent raw transactions"
+        }
+      }
+    }
+  }
+}

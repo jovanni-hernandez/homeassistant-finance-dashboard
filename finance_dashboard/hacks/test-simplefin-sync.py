@@ -459,6 +459,11 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertTrue(result["newest_transaction_date_advanced"])
         self.assertIn("Freshness verified: the newest transaction date advanced", result["message"])
 
+        dashboard_status = simplefin.get_dashboard_status()
+        self.assertEqual(dashboard_status["incoming_transaction_count"], 1)
+        self.assertEqual(dashboard_status["latest_incoming_transaction_date"], "2023-11-15")
+        self.assertTrue(dashboard_status["newest_transaction_date_advanced"])
+
     def test_sync_reports_empty_provider_response(self):
         with patch.object(simplefin, "_fetch_simplefin_payload", return_value=self.payload([])):
             result = simplefin.fetch_and_sync_simplefin()
