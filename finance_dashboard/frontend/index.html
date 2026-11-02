@@ -333,7 +333,7 @@
                             </div>
                             <label class="flex w-full flex-col gap-2 text-sm text-slate-600 sm:w-auto sm:flex-row sm:items-center">
                                 <span class="whitespace-nowrap font-medium">Period</span>
-                                <select v-model="selectedMonth" @change="monthSelectionTouched = true" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 sm:min-w-[180px]">
+                                <select data-testid="transaction-month-filter" v-model="selectedMonth" @change="monthSelectionTouched = true" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 sm:min-w-[180px]">
                                     <option v-for="option in monthOptions" :key="option.key" :value="option.key">{{ option.label }}</option>
                                 </select>
                             </label>
@@ -3381,6 +3381,8 @@
                     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
                 };
 
+                const currentMonthKey = computed(() => monthKeyFromTimestamp(Math.floor(nowTick.value / 1000)));
+
                 const formatMonthLabel = (key) => {
                     if (!key || key === 'all') return 'All time';
                     const [year, month] = key.split('-').map(Number);
@@ -3400,6 +3402,12 @@
                             months.set(key, { key, label: formatMonthLabel(key) });
                         }
                     });
+                    if (currentMonthKey.value && !months.has(currentMonthKey.value)) {
+                        months.set(currentMonthKey.value, {
+                            key: currentMonthKey.value,
+                            label: formatMonthLabel(currentMonthKey.value),
+                        });
+                    }
 
                     return [
                         { key: 'all', label: 'All time' },
@@ -4013,7 +4021,7 @@
                         return;
                     }
 
-                    const currentMonth = monthKeyFromTimestamp(Math.floor(Date.now() / 1000));
+                    const currentMonth = currentMonthKey.value;
                     const preferred = options.includes(currentMonth) ? currentMonth : options.find((key) => key !== 'all') || 'all';
 
                     if (!monthSelectionTouched.value || !options.includes(selectedMonth.value)) {
@@ -5202,7 +5210,7 @@
                     return description ? `${description} (${code})` : code;
                 };
 
-                watch(transactions, () => {
+                watch([transactions, currentMonthKey], () => {
                     syncSelectedMonth();
                 }, { immediate: true });
 

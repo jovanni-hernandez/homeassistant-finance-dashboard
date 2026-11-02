@@ -916,6 +916,52 @@ def main():
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
             WebDriverWait(driver, args.timeout).until(lambda current: "Recent transactions" in current.find_element(By.TAG_NAME, "body").text)
+            period_select = Select(driver.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
+            current_month_key = driver.execute_script("""
+                const now = new Date();
+                return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+            """)
+            month_rollover_checks = {
+                "current_month_is_available_without_transactions": current_month_key in [
+                    option.get_attribute("value") for option in period_select.options
+                ],
+                "current_month_is_selected_by_default": period_select.first_selected_option.get_attribute("value") == current_month_key,
+                "next_month_rolls_forward_without_transactions": False,
+                "all_time_can_be_selected_after_rollover": False,
+            }
+            next_month_key = driver.execute_script("""
+                const originalDateNow = Date.now;
+                const now = new Date(originalDateNow());
+                const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 15, 12));
+                window.__financeRestoreDateNow = () => { Date.now = originalDateNow; };
+                Date.now = () => nextMonth.getTime();
+                return `${nextMonth.getUTCFullYear()}-${String(nextMonth.getUTCMonth() + 1).padStart(2, '0')}`;
+            """)
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: Select(current.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
+                .first_selected_option.get_attribute("value") == next_month_key
+            )
+            period_select = Select(driver.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
+            next_month_rows = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-row"]')
+            next_month_empty_state = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-empty"]')
+            month_rollover_checks["next_month_rolls_forward_without_transactions"] = (
+                next_month_key in [option.get_attribute("value") for option in period_select.options]
+                and not next_month_rows
+                and bool(next_month_empty_state)
+            )
+            driver.execute_script("window.__financeRestoreDateNow();")
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: Select(current.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
+                .first_selected_option.get_attribute("value") == current_month_key
+            )
+            period_select = Select(driver.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
+            period_select.select_by_value("all")
+            month_rollover_checks["all_time_can_be_selected_after_rollover"] = (
+                period_select.first_selected_option.get_attribute("value") == "all"
+            )
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: bool(current.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-row"]'))
+            )
             cashflow_kpi = WebDriverWait(driver, args.timeout).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="cashflow-kpi"]'))
             )
@@ -2371,6 +2417,7 @@ def main():
                 "sankey_mobile_layout": sankey_layout_checks,
                 "sankey_mobile_measurements": sankey_mobile_measurements,
                 "transaction_grouping": transaction_group_checks,
+                "month_rollover": month_rollover_checks,
                 "cashflow_kpi": cashflow_kpi_checks,
                 "transaction_search_and_category_filter": transaction_filter_checks,
                 "spending_pie": spending_pie_checks,
@@ -2409,6 +2456,7 @@ def main():
                 and checks["sankey_link_aggregation"]
                 and all(sankey_layout_checks.values())
                 and all(transaction_group_checks.values())
+                and all(month_rollover_checks.values())
                 and all(cashflow_kpi_checks.values())
                 and all(transaction_filter_checks.values())
                 and all(spending_pie_checks.values())
