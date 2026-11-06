@@ -1,6 +1,6 @@
 name: Finance Dashboard Updater
 description: Optional manual helper to refresh the Supervisor app store and update the Finance Dashboard
-version: 0.1.0
+version: 0.1.1
 slug: finance_updater
 init: false
 boot: manual

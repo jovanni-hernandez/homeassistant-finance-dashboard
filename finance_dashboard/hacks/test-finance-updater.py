@@ -70,6 +70,13 @@ class FinanceUpdaterTests(unittest.TestCase):
         update_call = next(call for call in supervisor.calls if call[1].endswith("/update"))
         self.assertIs(update_call[2]["backup"], False)
 
+    def test_current_install_is_a_successful_noop_after_store_refresh(self):
+        supervisor = FakeSupervisor(installed="2.3.47")
+        result = updater.refresh_and_update(self.payload(), supervisor)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "already_current")
+        self.assertFalse(any(call[1].endswith("/update") for call in supervisor.calls))
+
     def test_stale_store_version_fails_without_starting_update(self):
         supervisor = FakeSupervisor(latest="2.3.46", installed="2.3.45")
         result = updater.refresh_and_update(

@@ -151,6 +151,20 @@ def refresh_and_update(
                 f"(last observed {latest_version or 'unknown'}). No update was started."
             )
 
+        current_info = supervisor.request("GET", f"/addons/{FINANCE_APP}/info")
+        installed_version = str(current_info.get("version", ""))
+        if installed_version and version_key(installed_version) >= target_key:
+            return {
+                "ok": True,
+                "command": "refresh_and_update",
+                "request_id": request_id,
+                "status": "already_current",
+                "refreshed_version": latest_version,
+                "installed_version": installed_version,
+                "state": current_info.get("state"),
+                "backup": False,
+            }
+
         update = supervisor.request("POST", f"/store/addons/{FINANCE_APP}/update", {
             "backup": False,
             "background": True,
