@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import websocket
 
-ADDON_SLUG = "custom_finance"
+ADDON_SLUG = "10d6f312_custom_finance"
 EVENT_PREFIX = "finance_sql_result_"
 
 

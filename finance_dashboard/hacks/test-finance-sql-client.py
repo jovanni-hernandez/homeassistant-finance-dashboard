@@ -69,7 +69,7 @@ class FinanceSqlClientTests(unittest.TestCase):
         service = next(item for item in socket.sent if item.get("type") == "call_service")
         self.assertEqual(service["domain"], "hassio")
         self.assertEqual(service["service"], "app_stdin")
-        self.assertEqual(service["service_data"]["app"], "custom_finance")
+        self.assertEqual(service["service_data"]["app"], "10d6f312_custom_finance")
         self.assertFalse(service["service_data"]["input"]["apply"])
 
 
