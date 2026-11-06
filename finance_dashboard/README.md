@@ -48,7 +48,7 @@ The add-on exposes a read-only metrics endpoint on its internal network. It does
 1. In HACS, open **Integrations → Custom repositories** and add this repository as an **Integration**.
 2. Download **Finance Dashboard Sensors**, then restart Home Assistant Core.
 3. Open **Settings → Devices & services → Add integration → Finance Dashboard**.
-4. Enter the internal add-on URL. The default is `http://custom_finance:8000`; the integration appends `/api/ha-metrics` automatically. Leave the token blank unless you enable token authentication below.
+4. Enter the internal add-on URL. The default is `http://10d6f312-custom-finance:8000`; the integration appends `/api/ha-metrics` automatically. Leave the token blank unless you enable token authentication below.
 
 The integration is hosted in `custom_components/finance_dashboard/` in this repository. The add-on itself remains installed and updated separately through the Home Assistant Add-on Store.
 

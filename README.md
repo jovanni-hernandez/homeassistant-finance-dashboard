@@ -18,6 +18,6 @@ This repository also provides a separate Home Assistant integration for exposing
 
 1. In HACS, open the top-right menu, choose **Custom repositories**, and add this repository as an **Integration**.
 2. Download **Finance Dashboard Sensors**, then restart Home Assistant Core.
-3. In **Settings → Devices & services**, add **Finance Dashboard**. Use `http://custom_finance:8000` as the internal URL and leave the token blank unless token authentication is enabled in the add-on options.
+3. In **Settings → Devices & services**, add **Finance Dashboard**. Use `http://10d6f312-custom-finance:8000` as the internal URL and leave the token blank unless token authentication is enabled in the add-on options.
 
 The integration creates per-currency net-worth and current-month cash-flow sensors, account-balance sensors, and sync/freshness sensors. The raw-transaction sensor is disabled by default; if enabled, it exposes at most 20 recent transactions in state attributes, which Home Assistant may retain in history and backups. See [`finance_dashboard/README.md`](finance_dashboard/README.md#home-assistant-sensors) for details.

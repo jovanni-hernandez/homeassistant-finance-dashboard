@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/jovanni-hernandez/homeassistant-finance-dashboard/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "2.3.48"
+  "version": "2.3.49"
 }
