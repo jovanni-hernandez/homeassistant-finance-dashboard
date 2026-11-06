@@ -41,6 +41,8 @@ fi
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-api-validation.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-admin-stdin.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-finance-sql-client.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-finance-updater.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-force-refresh-deploy.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-simplefin-sync.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-account-types.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-manual-assets.py"

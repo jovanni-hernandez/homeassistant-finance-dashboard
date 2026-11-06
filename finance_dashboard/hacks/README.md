@@ -64,6 +64,16 @@ This sends one SQL statement through Home Assistant's `hassio.app_stdin` service
 
 Queries are read-only by default. Writes require both `--write` and `--apply`. Each call accepts one statement, blocks `ATTACH`/`DETACH`, extension loading and explicit transaction control, and caps responses at 200 rows / 256 KiB. Use `finance_encrypt(value)` / `finance_decrypt(column)` for encrypted finance columns; reads of encrypted `settings.value` are blocked to protect SimpleFIN and provider credentials. Write statements can permanently alter or delete data; back up first. A timeout leaves the outcome unknown—inspect before retrying.
 
+## Force-refresh and deploy the Finance add-on
+
+```bash
+./hacks/force-refresh-deploy.sh
+```
+
+This calls the optional `finance_dashboard_updater` add-on through Home Assistant's Core WebSocket service API. The helper refreshes the Supervisor store, waits for the version in `config.yaml`, updates only the Finance Dashboard with `backup: false`, and verifies the installed version. It refuses stale or newer store versions rather than downgrading. Because store refresh requires Supervisor manager privileges, the separate updater add-on is manual-start and refuses commands unless its `dev_mode` option is enabled. See `finance_dashboard_updater/README.md`; install and configure the helper in the Home Assistant UI first.
+
+After installing the helper from the Home Assistant app store, run `./hacks/force-refresh-deploy.sh --enable-dev-mode` once to enable it for this installation. Later runs can omit that flag; it persists until disabled in the helper's Configuration tab.
+
 ## AI-assisted categorization
 
 The dashboard also supports AI-generated defaults through the Settings panel.

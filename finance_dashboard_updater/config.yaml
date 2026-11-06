@@ -1,0 +1,17 @@
+name: Finance Dashboard Updater
+description: Optional manual helper to refresh the Supervisor app store and update the Finance Dashboard
+version: 0.1.0
+slug: finance_updater
+init: false
+boot: manual
+stdin: true
+hassio_api: true
+hassio_role: manager
+homeassistant_api: true
+arch:
+  - amd64
+  - aarch64
+options:
+  dev_mode: false
+schema:
+  dev_mode: bool
