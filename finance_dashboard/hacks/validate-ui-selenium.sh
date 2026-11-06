@@ -14,6 +14,11 @@ if [ -f "$ENV_FILE" ]; then
   source "$ENV_FILE"
 fi
 
+export HA_URL HA_TOKEN
+if [ -n "${FINANCE_SESSION_TOKEN:-}" ]; then
+  export FINANCE_SESSION_TOKEN
+fi
+
 ARTIFACT_DIR="${FINANCE_TEST_ARTIFACT_DIR:-}"
 if [ -z "$ARTIFACT_DIR" ]; then
   if mkdir -p /data/v2/cache/opencode 2>/dev/null && [ -w /data/v2/cache/opencode ]; then
@@ -31,10 +36,11 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
 fi
 
 "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-"$VENV_DIR/bin/pip" install selenium pillow fastapi uvicorn requests sqlalchemy cryptography >/dev/null
+"$VENV_DIR/bin/pip" install selenium pillow fastapi uvicorn requests sqlalchemy cryptography websocket-client >/dev/null
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-recurring-analysis.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-api-validation.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-admin-stdin.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-finance-sql-client.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-simplefin-sync.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-account-types.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-manual-assets.py"

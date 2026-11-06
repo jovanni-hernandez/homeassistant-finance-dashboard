@@ -1,9 +1,10 @@
 name: Personal Finance Dashboard
 description: Custom Vue/FastAPI dashboard utilizing SimpleFIN with SQLite & SQLAlchemy ORM
-version: 2.3.45
+version: 2.3.46
 slug: custom_finance
 init: false
 stdin: true
+homeassistant_api: true
 ingress: true
 ingress_port: 8000
 panel_icon: mdi:finance

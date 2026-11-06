@@ -18,7 +18,7 @@ What it does:
 7. fails if Vue renders warnings, browser requests fail, or the boot fallback remains visible
 8. retries transient browser failures with exponential backoff
 
-The Selenium helper defaults to an authenticated Home Assistant Ingress session using `HA_URL` and `HA_TOKEN`. Set `FINANCE_DASHBOARD_URL` only to explicitly test a directly reachable app URL. `FINANCE_DASHBOARD_URL=local` runs the real FastAPI app with a disposable SQLite database as a pre-publish check; it is not the deployed-app acceptance test.
+`FINANCE_DASHBOARD_URL=local` runs the real FastAPI app with a disposable SQLite database. The deployed Selenium helper's legacy bootstrap calls Home Assistant's `/api/hassio` proxy, which this instance rejects with 401; a valid owner LLAT cannot fix that. Use `homeassistant_screenshot_url` for deployed visual verification.
 
 ## Marketplace refresh
 
@@ -26,7 +26,7 @@ The Selenium helper defaults to an authenticated Home Assistant Ingress session 
 ./hacks/refresh-marketplace.sh
 ```
 
-This calls the authenticated Supervisor store-reload endpoint through HA's REST proxy, then retries the store-version check until `config.yaml`'s version appears. It requires `HA_URL` and `HA_TOKEN` from `.env` or `hacks/.release.env`; it does not depend on a shell `hab` login.
+This legacy release helper calls HA's `/api/hassio` Core proxy and is blocked on this instance by Supervisor API authorization. Do not rotate `HA_TOKEN` to address that; it authenticates to Core, while the proxy rejects Supervisor access.
 
 ## Release / verify helper
 
@@ -53,6 +53,16 @@ Reads the encrypted finance database through the app models and prints merchant/
 Use `--format json` if you want machine-readable output.
 
 You can also build the same defaults from the dashboard Settings panel with the "Build defaults" button.
+
+## Deployed Finance SQL
+
+```bash
+./hacks/finance-sql.sh "SELECT id, date, finance_decrypt(payee), finance_decrypt(amount), category FROM transactions LIMIT 50"
+```
+
+This sends one SQL statement through Home Assistant's `hassio.app_stdin` service to the Finance add-on; it does not expose the SQLite file or use `/api/hassio`. Results return on a request-specific Home Assistant event and print as JSON. The add-on needs `homeassistant_api: true` to publish that event. The CLI reads `HA_URL`, `HA_TOKEN`, and optional `FINANCE_SESSION_TOKEN` from the ignored root `.env` (or `hacks/.release.env`); keep them private.
+
+Queries are read-only by default. Writes require both `--write` and `--apply`. Each call accepts one statement, blocks `ATTACH`/`DETACH`, extension loading and explicit transaction control, and caps responses at 200 rows / 256 KiB. Use `finance_encrypt(value)` / `finance_decrypt(column)` for encrypted finance columns; reads of encrypted `settings.value` are blocked to protect SimpleFIN and provider credentials. Write statements can permanently alter or delete data; back up first. A timeout leaves the outcome unknown—inspect before retrying.
 
 ## AI-assisted categorization
 

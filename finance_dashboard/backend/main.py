@@ -3,8 +3,13 @@ import json
 import os
 import re
 import select
+import sqlite3
 import sys
 import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
 from collections import Counter, defaultdict
 from typing import Literal
 from fastapi import FastAPI, Header, HTTPException, Depends, Query
@@ -12,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import simplefin
 from ha_metrics import build_ha_metrics, metrics_token_matches, read_metrics_api_token
+from security import decrypt_value, encrypt_value
 from app_logging import apply_app_log_level, get_app_log_settings
 from ai_assistant import (
     ProviderModelDiscoveryError,
@@ -59,7 +65,7 @@ from database import (
     set_transaction_category,
 )
 import pin_auth
-from models import SessionLocal, Transaction
+from models import SessionLocal, Transaction, engine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("finance_dashboard")
@@ -410,11 +416,178 @@ def validate_recurring_rules_json(raw: str):
             raise ValueError("Recurring hidden flag must be a boolean.")
 
 
-def _finance_agent_stdin_result(payload: dict):
-    if pin_auth.pin_is_required() and not pin_auth.validate_session_token(payload.get("finance_session")):
-        return {"ok": False, "error": "A valid Finance PIN session is required."}
+FINANCE_SQL_MAX_ROWS = 200
+FINANCE_SQL_MAX_RESULT_BYTES = 256 * 1024
+FINANCE_SQL_MAX_SECONDS = 15
 
+
+def _finance_sql_authorizer(action, arg1, arg2, database_name, trigger_name):
+    """Keep SQL inside this database; writes are controlled separately by the caller."""
+    if action == sqlite3.SQLITE_READ and (arg1 or "").casefold() == "settings" and (arg2 or "").casefold() == "value":
+        return sqlite3.SQLITE_DENY
+    if action in {sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH, sqlite3.SQLITE_SAVEPOINT}:
+        return sqlite3.SQLITE_DENY
+    if action == sqlite3.SQLITE_FUNCTION and (arg2 or arg1 or "").casefold() == "load_extension":
+        return sqlite3.SQLITE_DENY
+    if action == sqlite3.SQLITE_PRAGMA:
+        pragma = (arg1 or "").casefold()
+        safe_parameterized_pragmas = {
+            "table_info", "table_xinfo", "index_list", "index_info", "index_xinfo",
+            "foreign_key_list", "database_list", "compile_options", "collation_list",
+            "function_list", "module_list", "pragma_list", "integrity_check",
+            "quick_check", "foreign_key_check",
+        }
+        if arg2 is not None and pragma not in safe_parameterized_pragmas:
+            return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def _finance_sql_json_value(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, bytes):
+        return {"bytes_hex": value[:4096].hex(), "truncated": len(value) > 4096}
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _finance_agent_sql(payload: dict):
+    request_id = payload.get("request_id")
+    try:
+        request_id = uuid.UUID(hex=request_id).hex
+    except (ValueError, TypeError, AttributeError):
+        return {"ok": False, "command": "sql", "error": "request_id must be a UUID hex string."}
+
+    statement = payload.get("sql")
+    if not isinstance(statement, str) or not statement.strip() or len(statement) > 50000:
+        return {"ok": False, "command": "sql", "request_id": request_id, "error": "sql must be a non-empty string of at most 50000 characters."}
+    without_comments = re.sub(r"/\*.*?\*/|--[^\r\n]*", " ", statement, flags=re.DOTALL)
+    if re.match(r"\s*(BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE)\b", without_comments, re.IGNORECASE):
+        return {"ok": False, "command": "sql", "request_id": request_id, "error": "Explicit transaction-control statements are not allowed."}
+    apply = payload.get("apply", False)
+    if type(apply) is not bool:
+        return {"ok": False, "command": "sql", "request_id": request_id, "error": "apply must be a boolean."}
+
+    connection = None
+    transaction = None
+    raw_connection = None
+    try:
+        connection = engine.connect()
+        raw_connection = connection.connection.driver_connection
+        raw_connection.create_function(
+            "finance_decrypt", 1,
+            lambda value: decrypt_value(value) if value is not None else None,
+            deterministic=True,
+        )
+        raw_connection.create_function(
+            "finance_encrypt", 1,
+            lambda value: encrypt_value(str(value)) if value is not None else None,
+            deterministic=True,
+        )
+        if not apply:
+            connection.exec_driver_sql("PRAGMA query_only=ON")
+            connection.commit()
+        started_at = time.monotonic()
+        raw_connection.set_authorizer(_finance_sql_authorizer)
+        raw_connection.set_progress_handler(
+            lambda: int(time.monotonic() - started_at > FINANCE_SQL_MAX_SECONDS),
+            10000,
+        )
+        transaction = connection.begin()
+        result = connection.exec_driver_sql(statement)
+        columns = list(result.keys()) if result.returns_rows else []
+        rows = []
+        truncated = False
+        encoded_size = 0
+        if result.returns_rows:
+            for row in result.fetchmany(FINANCE_SQL_MAX_ROWS + 1):
+                if len(rows) >= FINANCE_SQL_MAX_ROWS:
+                    truncated = True
+                    break
+                serialized = [_finance_sql_json_value(value) for value in row]
+                row_size = len(json.dumps(serialized, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+                if encoded_size + row_size > FINANCE_SQL_MAX_RESULT_BYTES:
+                    truncated = True
+                    break
+                rows.append(serialized)
+                encoded_size += row_size
+        affected_rows = result.rowcount if result.rowcount >= 0 else None
+        result.close()
+        if apply:
+            transaction.commit()
+        else:
+            transaction.rollback()
+        return {
+            "ok": True,
+            "command": "sql",
+            "request_id": request_id,
+            "committed": apply,
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows) if columns else affected_rows,
+            "affected_rows": affected_rows,
+            "truncated": truncated,
+        }
+    except Exception as exc:
+        if transaction is not None and transaction.is_active:
+            transaction.rollback()
+        return {
+            "ok": False,
+            "command": "sql",
+            "request_id": request_id,
+            "committed": False,
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+        }
+    finally:
+        if raw_connection is not None:
+            try:
+                raw_connection.set_progress_handler(None, 0)
+                raw_connection.set_authorizer(None)
+            except Exception:
+                pass
+        if connection is not None:
+            if not apply:
+                try:
+                    if connection.in_transaction():
+                        connection.rollback()
+                    connection.exec_driver_sql("PRAGMA query_only=OFF")
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+            connection.close()
+
+
+def _publish_finance_sql_result(result: dict):
+    request_id = result.get("request_id")
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN", "")
+    if not supervisor_token or not request_id:
+        logger.error("Finance SQL result event unavailable (Home Assistant API permission missing).")
+        return False
+    event_type = f"finance_sql_result_{request_id}"
+    request = urllib.request.Request(
+        f"http://supervisor/core/api/events/{event_type}",
+        data=json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {supervisor_token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return 200 <= response.status < 300
+    except urllib.error.HTTPError as exc:
+        logger.error("Finance SQL result event rejected (HTTP %s).", exc.code)
+    except Exception as exc:
+        logger.error("Finance SQL result event failed (%s).", type(exc).__name__)
+    return False
+
+
+def _finance_agent_stdin_result(payload: dict):
     command = payload.get("command")
+    if pin_auth.pin_is_required() and not pin_auth.validate_session_token(payload.get("finance_session")):
+        return {"ok": False, "command": command, "request_id": payload.get("request_id"), "error": "A valid Finance PIN session is required."}
+
+    if command == "sql":
+        return _finance_agent_sql(payload)
     if command == "merchant_audit":
         offset = payload.get("offset", 0)
         limit = payload.get("limit", 50)
@@ -566,6 +739,15 @@ def _finance_agent_stdin_worker():
 
     def process_message(message: bytes):
         result = _finance_agent_stdin_message(message)
+        if result.get("command") == "sql" and result.get("request_id"):
+            delivered = _publish_finance_sql_result(result)
+            print("FINANCE_AGENT_RESULT " + json.dumps({
+                "ok": bool(result.get("ok")) and delivered,
+                "command": "sql",
+                "request_id": result.get("request_id"),
+                "result_delivered": delivered,
+            }, separators=(",", ":")), flush=True)
+            return
         print("FINANCE_AGENT_RESULT " + json.dumps(result, ensure_ascii=False, separators=(",", ":")), flush=True)
 
     while True:
