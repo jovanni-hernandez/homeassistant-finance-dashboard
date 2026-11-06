@@ -74,6 +74,12 @@ This calls the optional `finance_dashboard_updater` add-on through Home Assistan
 
 After installing the helper from the Home Assistant app store, run `./hacks/force-refresh-deploy.sh --enable-dev-mode` once to enable it for this installation. Later runs can omit that flag; it persists until disabled in the helper's Configuration tab.
 
+## Selenium controller for the deployed app
+
+`./hacks/finance-browser.sh` starts a temporary headless browser, seeds the Home Assistant frontend with the Core LLAT from `.env`, and opens the Finance panel through the normal authenticated frontend/Ingress flow. Actions come from a JSON array via `--actions-file`, with at most 20 steps. Supported actions are `wait`, `count`, `screenshot`, `click`, `fill`, `select`, and `keypress`; no arbitrary JavaScript is evaluated and output omits page text and entered values.
+
+Clicks, typing, selection changes, and keypresses require `--apply`. Without it, only `wait`, `count`, and screenshots are allowed. Review the action file before using `--apply`; it can still make real changes to categories, goals, assets, settings, or trigger sync. Screenshots are written to the test artifact directory. The browser token is injected only into a temporary profile and is never printed or saved with the screenshot.
+
 ## AI-assisted categorization
 
 The dashboard also supports AI-generated defaults through the Settings panel.
