@@ -139,7 +139,7 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         self.assertEqual(errors, {"account-a": "con.auth"})
 
-    def test_routine_cursor_advances_and_queues_only_the_failed_account(self):
+    def test_routine_cursor_advances_and_leaves_auth_failure_for_manual_retry(self):
         now = int(simplefin._utc_now().timestamp())
         day = simplefin.SYNC_WINDOW_SECONDS
         cursor = now - (4 * day)
@@ -176,11 +176,10 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         self.assertEqual(int(get_setting(simplefin.SYNC_CURSOR_SETTING_KEY)), window_end)
         self.assertTrue(result["backfill_pending"])
-        self.assertTrue(result["routine_retry_pending"])
+        self.assertFalse(result["routine_retry_pending"])
+        self.assertEqual(result["auth_failed_ranges"], 1)
         retry_ranges = simplefin._load_routine_retry_ranges()
-        self.assertEqual(len(retry_ranges), 1)
-        self.assertEqual(retry_ranges[0]["account_id"], "reauth-account")
-        self.assertEqual((retry_ranges[0]["start"], retry_ranges[0]["end"]), (cursor, window_end))
+        self.assertEqual(retry_ranges, [])
 
         db = SessionLocal()
         try:
@@ -318,7 +317,7 @@ class SimpleFinSyncTests(unittest.TestCase):
 
         self.assertEqual(request.call_args.kwargs["params"]["account"], ["account-a", "account-b"])
 
-    def test_retry_queue_logs_counts_at_info_and_account_ranges_at_debug(self):
+    def test_retry_queue_logs_progress_without_account_identifiers(self):
         now = int(simplefin._utc_now().timestamp())
         account_state = {
             "private-account-a": {
@@ -348,8 +347,9 @@ class SimpleFinSyncTests(unittest.TestCase):
         with self.assertLogs("finance_dashboard", level="DEBUG") as debug_logs:
             simplefin._log_sync_retry_queue_state("test", account_state, routine_ranges)
         debug_text = "\n".join(debug_logs.output)
-        self.assertIn("private-account-a", debug_text)
-        self.assertIn("private-account-b", debug_text)
+        self.assertNotIn("private-account", debug_text)
+        self.assertIn('routine_retry_error_counts={"con.auth": 1}', debug_text)
+        self.assertIn("account_backfill_window_days={\"90\": 1}", debug_text)
 
     def test_general_and_account_errors_keep_their_documented_scope(self):
         accounts = [
@@ -371,7 +371,7 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertEqual(global_errors, {"account-1": "gen.auth", "account-2": "gen.auth"})
         self.assertEqual(account_errors, {"account-2": "act.failed"})
 
-    def test_unmatched_connection_error_fails_closed_and_only_logs_ids_at_debug(self):
+    def test_unmatched_connection_error_fails_closed_without_logging_identifiers(self):
         payload = {
             "errlist": [{"code": "con.auth", "conn_id": "connection-private-unmatched"}],
             "accounts": [
@@ -393,9 +393,21 @@ class SimpleFinSyncTests(unittest.TestCase):
         with self.assertLogs("finance_dashboard", level="DEBUG") as debug_logs:
             simplefin._coverage_errors(payload, requested)
         debug_text = "\n".join(debug_logs.output)
-        self.assertIn("connection-private-unmatched", debug_text)
-        self.assertIn("account-private-a", debug_text)
-        self.assertIn("account-private-b", debug_text)
+        self.assertNotIn("connection-private", debug_text)
+        self.assertNotIn("account-private", debug_text)
+
+    def test_auth_errors_are_not_added_to_automatic_routine_retry_queue(self):
+        ranges = []
+        queued = simplefin._queue_routine_retry_ranges(
+            ranges,
+            {"reauth-account": "con.auth"},
+            1_700_000_000,
+            1_700_086_400,
+            {},
+        )
+
+        self.assertEqual(queued, 0)
+        self.assertEqual(ranges, [])
 
     def test_unmatched_connection_error_does_not_count_ranges_as_verified(self):
         now = int(simplefin._utc_now().timestamp())
@@ -581,6 +593,139 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertEqual(get_setting(simplefin.ACCOUNT_BACKFILL_SETTING_KEY), "{}")
         resumed_windows = [call.kwargs for call in fetch.call_args_list[1:]]
         self.assertEqual(resumed_windows[0]["start_ts"], saved_cursor)
+
+    def test_account_history_auth_failure_does_not_stall_healthy_accounts(self):
+        now = int(simplefin._utc_now().timestamp())
+        day = simplefin._ACCOUNT_BACKFILL_DAY_SECONDS
+        start = now - simplefin.ACCOUNT_BACKFILL_DAYS * day
+        end = now - simplefin.SYNC_WINDOW_SECONDS
+        window_end = min(start + simplefin.ACCOUNT_BACKFILL_WINDOW_SECONDS, end)
+        account_ids = ("healthy-account", "reauth-account")
+        db = SessionLocal()
+        try:
+            db.add_all([
+                Account(id="healthy-account", org="Test Bank", name="Healthy", balance="0", currency="USD"),
+                Account(id="reauth-account", org="Test Bank", name="Needs reauth", balance="0", currency="USD"),
+            ])
+            db.commit()
+        finally:
+            db.close()
+        set_setting(simplefin.ACCOUNT_BACKFILL_VERSION_KEY, simplefin.ACCOUNT_BACKFILL_VERSION)
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(now))
+        simplefin._save_account_backfill_state({
+            account_id: {
+                "start": start,
+                "cursor": start,
+                "end": end,
+                "window_days": simplefin.ACCOUNT_BACKFILL_WINDOW_DAYS,
+                "retry_after": 0,
+            }
+            for account_id in account_ids
+        })
+
+        def fetch_window(_access_url, start_ts, end_ts, *, on_reserved=None, account_ids=None):
+            accounts = [
+                {
+                    "id": "healthy-account",
+                    "conn_id": "MX-MBR-healthy",
+                    "org": {"name": "Test Bank"},
+                    "name": "Healthy",
+                    "balance": "0",
+                    "currency": "USD",
+                    "transactions": [],
+                },
+                {
+                    "id": "reauth-account",
+                    "conn_id": "MX-MBR-reauth",
+                    "org": {"name": "Test Bank"},
+                    "name": "Needs reauth",
+                    "balance": "0",
+                    "currency": "USD",
+                    "transactions": [],
+                },
+            ]
+            payload = {"accounts": accounts}
+            if start_ts == start:
+                payload["errlist"] = [{"code": "con.auth", "conn_id": "MBR-reauth"}]
+            return payload
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", side_effect=fetch_window), self.assertLogs(
+            "finance_dashboard", level="INFO"
+        ) as captured:
+            result = simplefin.fetch_and_sync_simplefin()
+
+        saved_state = simplefin._load_account_backfill_state()
+        self.assertNotIn("reauth-account", saved_state)
+        self.assertEqual(saved_state, {})
+        self.assertEqual(result["auth_failed_ranges"], 1)
+        self.assertFalse(result["account_backfill_pending"])
+        self.assertEqual(result["account_backfill_windows"], 5)
+        self.assertFalse(simplefin._load_routine_retry_ranges())
+        log_text = "\n".join(captured.output)
+        self.assertIn("authentication_blocked_accounts=1", log_text)
+        self.assertIn("account_history_pending=False", log_text)
+        self.assertIn("auth_failed_ranges=1", log_text)
+        self.assertNotIn("reauth-account", log_text)
+
+        db = SessionLocal()
+        try:
+            coverage = {
+                row.account_id: row.status
+                for row in db.query(AccountDataCoverage).filter_by(start_ts=start, end_ts=window_end).all()
+            }
+        finally:
+            db.close()
+        self.assertEqual(coverage, {"healthy-account": "complete", "reauth-account": "failed"})
+
+    def test_existing_routine_auth_retry_is_removed_after_auth_failure(self):
+        now = int(simplefin._utc_now().timestamp())
+        start = now - 3 * simplefin.SYNC_WINDOW_SECONDS
+        end = start + simplefin.SYNC_WINDOW_SECONDS
+        db = SessionLocal()
+        try:
+            db.add(Account(id="reauth-account", org="Test Bank", name="Needs reauth", balance="0", currency="USD"))
+            db.commit()
+        finally:
+            db.close()
+        set_setting(simplefin.ACCOUNT_BACKFILL_VERSION_KEY, simplefin.ACCOUNT_BACKFILL_VERSION)
+        set_setting(simplefin.SYNC_CURSOR_SETTING_KEY, str(now))
+        simplefin._save_routine_retry_ranges([{
+            "account_id": "reauth-account",
+            "start": start,
+            "end": end,
+            "retry_after": 0,
+            "attempts": 1,
+            "error_code": "con.auth",
+        }])
+
+        def fetch_window(_access_url, start_ts, end_ts, *, on_reserved=None, account_ids=None):
+            payload = {"accounts": [{
+                "id": "reauth-account",
+                "conn_id": "MX-MBR-reauth",
+                "org": {"name": "Test Bank"},
+                "name": "Needs reauth",
+                "balance": "0",
+                "currency": "USD",
+                "transactions": [],
+            }]}
+            if account_ids is not None:
+                payload["errlist"] = [{"code": "con.auth", "conn_id": "MBR-reauth"}]
+            return payload
+
+        with patch.object(simplefin, "_fetch_simplefin_payload", side_effect=fetch_window):
+            result = simplefin.fetch_and_sync_simplefin()
+
+        self.assertFalse(result["routine_retry_pending"])
+        self.assertEqual(result["routine_retry_ranges_pending"], 0)
+        self.assertEqual(result["auth_failed_ranges"], 1)
+        self.assertEqual(simplefin._load_routine_retry_ranges(), [])
+        db = SessionLocal()
+        try:
+            row = db.query(AccountDataCoverage).filter_by(start_ts=start, end_ts=end).one()
+        finally:
+            db.close()
+        self.assertEqual(row.status, "failed")
+        self.assertEqual(row.error_code, "con.auth")
 
     def test_missing_data_error_splits_range_and_only_verified_children_count_as_coverage(self):
         calls = 0
