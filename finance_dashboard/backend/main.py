@@ -588,6 +588,17 @@ def _finance_agent_stdin_result(payload: dict):
 
     if command == "sql":
         return _finance_agent_sql(payload)
+    if command == "audit_history":
+        if not _simplefin_sync_lock.acquire(blocking=False):
+            return {
+                "ok": False,
+                "command": command,
+                "error": "A SimpleFIN sync is already running. Retry the audit when it finishes.",
+            }
+        try:
+            return simplefin.audit_account_history()
+        finally:
+            _simplefin_sync_lock.release()
     if command == "merchant_audit":
         offset = payload.get("offset", 0)
         limit = payload.get("limit", 50)

@@ -1279,6 +1279,222 @@ def get_account_data_history():
     }
 
 
+def audit_account_history() -> dict:
+    """Refetch completed account-history windows and report aggregate data only.
+
+    This diagnostic deliberately does not write transactions or coverage rows.
+    It does reserve provider requests and update the request-budget ledger.
+    """
+    access_url = get_simplefin_token()
+    if not access_url:
+        return {"ok": False, "error": "Connect SimpleFIN before auditing account history."}
+
+    db = SessionLocal()
+    try:
+        completed_ranges = db.query(
+            AccountDataCoverage.start_ts,
+            AccountDataCoverage.end_ts,
+        ).filter_by(source="account_backfill", status="complete").all()
+    finally:
+        db.close()
+
+    if not completed_ranges:
+        return {"ok": False, "error": "No completed account-history ranges are available to audit."}
+
+    unique_ranges = {
+        (int(start_ts), int(end_ts))
+        for start_ts, end_ts in completed_ranges
+        if 0 < int(end_ts) - int(start_ts) <= ACCOUNT_BACKFILL_WINDOW_SECONDS
+    }
+    if not unique_ranges:
+        return {"ok": False, "error": "No completed ranges within the current history-window limit are available to audit."}
+
+    audit_end = max(end_ts for _, end_ts in unique_ranges)
+    audit_start = max(
+        min(start_ts for start_ts, _ in unique_ranges),
+        audit_end - ACCOUNT_BACKFILL_DAYS * _ACCOUNT_BACKFILL_DAY_SECONDS,
+    )
+    windows = sorted(
+        (start_ts, end_ts)
+        for start_ts, end_ts in unique_ranges
+        if start_ts >= audit_start and end_ts <= audit_end
+    )
+    known_account_ids = {
+        str(account.get("id"))
+        for account in get_stored_accounts()
+        if account.get("id") is not None
+    }
+    if not windows or not known_account_ids:
+        return {"ok": False, "error": "No account-history windows or linked accounts are available to audit."}
+
+    budget = _request_budget_status(access_url)
+    if budget["requests_remaining"] < len(windows):
+        logger.warning(
+            "SimpleFIN history audit deferred windows=%d requests_remaining=%d requests_last_24h=%d/%d",
+            len(windows),
+            budget["requests_remaining"],
+            budget["requests_last_24h"],
+            budget["limit_24h"],
+        )
+        return {
+            "ok": False,
+            "deferred": True,
+            "error": "Not enough requests remain in the rolling 24-hour budget for a complete audit.",
+            "windows_required": len(windows),
+            "requests_remaining": budget["requests_remaining"],
+            "requests_last_24h": budget["requests_last_24h"],
+            "request_limit_24h": budget["limit_24h"],
+        }
+
+    logger.info(
+        "SimpleFIN history audit started windows=%d requested_accounts=%d start_date=%s end_date_exclusive=%s "
+        "requests_last_24h=%d/%d transaction_and_coverage_writes=false",
+        len(windows),
+        len(known_account_ids),
+        datetime.fromtimestamp(audit_start, timezone.utc).date().isoformat(),
+        datetime.fromtimestamp(audit_end, timezone.utc).date().isoformat(),
+        budget["requests_last_24h"],
+        budget["limit_24h"],
+    )
+
+    results = []
+    total_transaction_rows = 0
+    all_error_counts = {}
+    failure = None
+    for index, (start_ts, end_ts) in enumerate(windows, start=1):
+        start_date = datetime.fromtimestamp(start_ts, timezone.utc).date().isoformat()
+        end_date = datetime.fromtimestamp(end_ts, timezone.utc).date().isoformat()
+        try:
+            payload = _fetch_simplefin_payload(access_url, start_ts, end_ts)
+        except SimpleFINDailyLimitError as exc:
+            failure = "request_budget_exhausted"
+            logger.warning(
+                "SimpleFIN history audit paused window=%d/%d start_date=%s end_date_exclusive=%s resume_at=%s",
+                index,
+                len(windows),
+                start_date,
+                end_date,
+                exc.reset_at,
+            )
+            break
+        except Exception as exc:
+            failure = type(exc).__name__
+            logger.warning(
+                "SimpleFIN history audit request failed window=%d/%d start_date=%s "
+                "end_date_exclusive=%s error_type=%s",
+                index,
+                len(windows),
+                start_date,
+                end_date,
+                failure,
+            )
+            break
+
+        returned_ids = _response_account_ids(payload)
+        errors = _coverage_errors(payload, known_account_ids)
+        error_counts = {}
+        for code in errors.values():
+            error_counts[code] = error_counts.get(code, 0) + 1
+            all_error_counts[code] = all_error_counts.get(code, 0) + 1
+
+        transaction_rows = 0
+        valid_date_count = 0
+        in_window_count = 0
+        out_of_window_count = 0
+        transaction_timestamps = []
+        for account in payload.get("accounts", []) if isinstance(payload, dict) else []:
+            if not isinstance(account, dict):
+                continue
+            transactions = account.get("transactions", [])
+            if not isinstance(transactions, list):
+                continue
+            for transaction in transactions:
+                if not isinstance(transaction, dict):
+                    continue
+                transaction_rows += 1
+                posted = transaction.get("posted") or transaction.get("date")
+                try:
+                    timestamp = int(posted)
+                except (TypeError, ValueError):
+                    continue
+                valid_date_count += 1
+                transaction_timestamps.append(timestamp)
+                if start_ts <= timestamp < end_ts:
+                    in_window_count += 1
+                else:
+                    out_of_window_count += 1
+
+        oldest_transaction_date = (
+            datetime.fromtimestamp(min(transaction_timestamps), timezone.utc).date().isoformat()
+            if transaction_timestamps
+            else "none"
+        )
+        newest_transaction_date = (
+            datetime.fromtimestamp(max(transaction_timestamps), timezone.utc).date().isoformat()
+            if transaction_timestamps
+            else "none"
+        )
+        result = {
+            "start_date": start_date,
+            "end_date_exclusive": end_date,
+            "requested_accounts": len(known_account_ids),
+            "returned_accounts": len(returned_ids),
+            "transaction_rows": transaction_rows,
+            "transactions_with_valid_dates": valid_date_count,
+            "transactions_in_requested_window": in_window_count,
+            "transactions_outside_requested_window": out_of_window_count,
+            "oldest_transaction_date": oldest_transaction_date,
+            "newest_transaction_date": newest_transaction_date,
+            "error_counts": error_counts,
+        }
+        results.append(result)
+        total_transaction_rows += transaction_rows
+        logger.info(
+            "SimpleFIN history audit window=%d/%d start_date=%s end_date_exclusive=%s "
+            "requested_accounts=%d returned_accounts=%d transaction_rows=%d valid_dates=%d "
+            "in_window=%d out_of_window=%d oldest_transaction_date=%s newest_transaction_date=%s error_counts=%s",
+            index,
+            len(windows),
+            start_date,
+            end_date,
+            len(known_account_ids),
+            len(returned_ids),
+            transaction_rows,
+            valid_date_count,
+            in_window_count,
+            out_of_window_count,
+            oldest_transaction_date,
+            newest_transaction_date,
+            json.dumps(error_counts, sort_keys=True),
+        )
+
+    final_budget = _request_budget_status(access_url)
+    complete = failure is None and len(results) == len(windows)
+    logger.info(
+        "SimpleFIN history audit completed=%s windows=%d/%d transaction_rows=%d error_counts=%s "
+        "requests_last_24h=%d/%d transaction_and_coverage_writes=false",
+        str(complete).lower(),
+        len(results),
+        len(windows),
+        total_transaction_rows,
+        json.dumps(all_error_counts, sort_keys=True),
+        final_budget["requests_last_24h"],
+        final_budget["limit_24h"],
+    )
+    return {
+        "ok": complete,
+        "command": "audit_history",
+        "windows_audited": len(results),
+        "windows_total": len(windows),
+        "transaction_rows": total_transaction_rows,
+        "error_counts": all_error_counts,
+        "requests_last_24h": final_budget["requests_last_24h"],
+        "request_limit_24h": final_budget["limit_24h"],
+        "failure": failure,
+        "windows": results,
+    }
+
+
 def queue_account_history_retry(account_id: str, start_ts: int, end_ts: int) -> dict:
     if not get_simplefin_token():
         raise ValueError("Connect SimpleFIN before retrying account history.")

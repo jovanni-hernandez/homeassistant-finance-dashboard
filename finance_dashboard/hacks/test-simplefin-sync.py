@@ -422,6 +422,134 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertIn("adaptive_window_days=45->22", log_text)
         self.assertIn('error_counts={"gen.api": 1}', log_text)
 
+    def test_history_audit_reports_window_counts_without_persisting_data_or_coverage(self):
+        now = int(simplefin._utc_now().timestamp())
+        day = simplefin._ACCOUNT_BACKFILL_DAY_SECONDS
+        start = now - 200 * day
+        first_end = start + 45 * day
+        second_end = first_end + 45 * day
+        self.seed_latest_transaction(now - simplefin.SYNC_WINDOW_SECONDS)
+        db = SessionLocal()
+        try:
+            db.add_all([
+                AccountDataCoverage(
+                    account_id="account-1",
+                    start_ts=start,
+                    end_ts=first_end,
+                    status="complete",
+                    source="account_backfill",
+                    attempts=1,
+                ),
+                AccountDataCoverage(
+                    account_id="account-1",
+                    start_ts=first_end,
+                    end_ts=second_end,
+                    status="complete",
+                    source="account_backfill",
+                    attempts=1,
+                ),
+            ])
+            db.commit()
+        finally:
+            db.close()
+
+        first_payload = self.payload([
+            {
+                "id": "inside-window",
+                "date": start + 1,
+                "amount": "-1.00",
+                "payee": "Private merchant",
+                "description": "Private description",
+            },
+            {
+                "id": "outside-window",
+                "date": first_end + 1,
+                "amount": "-2.00",
+                "payee": "Another private merchant",
+                "description": "Another private description",
+            },
+        ])
+        fetch = Mock(side_effect=[first_payload, self.payload([])])
+        budget = {
+            "requests_last_24h": 4,
+            "limit_24h": simplefin.SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
+            "requests_remaining": 20,
+            "next_request_at": None,
+        }
+
+        with patch.object(simplefin, "_request_budget_status", return_value=budget), patch.object(
+            simplefin, "_fetch_simplefin_payload", fetch
+        ), self.assertLogs("finance_dashboard", level="INFO") as captured:
+            result = simplefin.audit_account_history()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["windows_audited"], 2)
+        self.assertEqual(result["transaction_rows"], 2)
+        self.assertEqual(result["windows"][0]["transactions_in_requested_window"], 1)
+        self.assertEqual(result["windows"][0]["transactions_outside_requested_window"], 1)
+        self.assertEqual(result["windows"][1]["transaction_rows"], 0)
+        self.assertEqual(fetch.call_args_list[0].args[1], start)
+        self.assertEqual(fetch.call_args_list[1].args[1], first_end)
+        log_text = "\n".join(captured.output)
+        self.assertNotIn("Private merchant", log_text)
+        self.assertNotIn("Private description", log_text)
+
+        db = SessionLocal()
+        try:
+            self.assertEqual(db.query(Transaction).count(), 1)
+            rows = db.query(AccountDataCoverage).filter_by(source="account_backfill").all()
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row.status == "complete" and row.attempts == 1 for row in rows))
+        finally:
+            db.close()
+
+    def test_history_audit_defers_if_request_budget_cannot_cover_all_windows(self):
+        now = int(simplefin._utc_now().timestamp())
+        start = now - 200 * simplefin._ACCOUNT_BACKFILL_DAY_SECONDS
+        db = SessionLocal()
+        try:
+            db.add(AccountDataCoverage(
+                account_id="account-1",
+                start_ts=start,
+                end_ts=start + simplefin.ACCOUNT_BACKFILL_WINDOW_SECONDS,
+                status="complete",
+                source="account_backfill",
+                attempts=1,
+            ))
+            db.commit()
+        finally:
+            db.close()
+        self.seed_latest_transaction(now - simplefin.SYNC_WINDOW_SECONDS)
+        budget = {
+            "requests_last_24h": 24,
+            "limit_24h": simplefin.SIMPLEFIN_MAX_REQUESTS_PER_24_HOURS,
+            "requests_remaining": 0,
+            "next_request_at": None,
+        }
+
+        with patch.object(simplefin, "_request_budget_status", return_value=budget), patch.object(
+            simplefin, "_fetch_simplefin_payload"
+        ) as fetch:
+            result = simplefin.audit_account_history()
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["deferred"])
+        self.assertEqual(result["windows_required"], 1)
+        fetch.assert_not_called()
+
+    def test_finance_stdin_dispatches_history_audit_command(self):
+        audit_result = {
+            "ok": True,
+            "command": "audit_history",
+            "windows_audited": 1,
+            "windows_total": 1,
+        }
+        with patch.object(simplefin, "audit_account_history", return_value=audit_result) as audit:
+            result = main._finance_agent_stdin_result({"command": "audit_history"})
+
+        audit.assert_called_once_with()
+        self.assertEqual(result, audit_result)
+
     def test_general_and_account_errors_keep_their_documented_scope(self):
         accounts = [
             {"id": "account-1", "conn_id": "connection-a"},
