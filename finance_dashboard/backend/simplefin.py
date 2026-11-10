@@ -37,7 +37,7 @@ ACCOUNT_BACKFILL_SETTING_KEY = "simplefin_account_backfill_state"
 ACCOUNT_BACKFILL_VERSION_KEY = "simplefin_account_backfill_version"
 ACCOUNT_BACKFILL_VERSION = "12_months_v1"
 ACCOUNT_BACKFILL_DAYS = 365
-ACCOUNT_BACKFILL_WINDOW_DAYS = 90
+ACCOUNT_BACKFILL_WINDOW_DAYS = 45
 ACCOUNT_BACKFILL_BATCH_WINDOWS = 7
 SYNC_WINDOW_SECONDS = (SYNC_HISTORY_DAYS + SYNC_OVERLAP_DAYS) * 24 * 60 * 60
 ACCOUNT_BACKFILL_WINDOW_SECONDS = ACCOUNT_BACKFILL_WINDOW_DAYS * 24 * 60 * 60
@@ -726,6 +726,7 @@ def _load_account_backfill_state():
         return {}
 
     normalized = {}
+    clamped_window_accounts = 0
     for account_id, progress in state.items():
         if not isinstance(progress, dict):
             continue
@@ -738,13 +739,24 @@ def _load_account_backfill_state():
         except (KeyError, TypeError, ValueError):
             continue
         if 0 <= cursor < end:
+            effective_window_days = max(1, min(window_days, ACCOUNT_BACKFILL_WINDOW_DAYS))
+            if window_days > ACCOUNT_BACKFILL_WINDOW_DAYS:
+                clamped_window_accounts += 1
+                retry_after = 0
             normalized[str(account_id)] = {
                 "start": min(start, cursor),
                 "cursor": cursor,
                 "end": end,
-                "window_days": max(1, min(window_days, ACCOUNT_BACKFILL_WINDOW_DAYS)),
+                "window_days": effective_window_days,
                 "retry_after": max(0, retry_after),
             }
+    if clamped_window_accounts:
+        logger.info(
+            "SimpleFIN account-history queue migrated clamped_window_accounts=%d "
+            "window_limit_days=%d retry_after_cleared=true",
+            clamped_window_accounts,
+            ACCOUNT_BACKFILL_WINDOW_DAYS,
+        )
     return normalized
 
 
@@ -1365,6 +1377,8 @@ def fetch_and_sync_simplefin():
                 for code in sorted(set(error_codes.values())):
                     if code == "act.missingdata":
                         message = "SimpleFIN reported an incomplete transaction listing; the affected range will be narrowed and retried."
+                    elif code == "gen.api":
+                        message = "SimpleFIN rejected a history date window; the affected range will be narrowed and retried."
                     elif code == "con.auth":
                         message = (
                             "SimpleFIN authentication failed for one or more linked accounts; affected ranges "
@@ -1542,20 +1556,26 @@ def fetch_and_sync_simplefin():
                     cursor_advanced_accounts = 0
                     retry_scheduled_accounts = 0
                     auth_blocked_accounts = 0
+                    adaptive_window_retry_accounts = 0
                     for queued_account_id in group:
                         progress = account_backfill_state.get(queued_account_id)
                         if not progress:
                             continue
                         error_code = window_errors.get(queued_account_id)
-                        if error_code == "act.missingdata":
+                        if error_code in {"act.missingdata", "gen.api"}:
                             if window_days > 1:
                                 progress["window_days"] = max(1, window_days // 2)
                                 progress["retry_after"] = 0
                                 retry_scheduled_accounts += 1
+                                adaptive_window_retry_accounts += 1
                             else:
                                 progress["retry_after"] = int(_next_utc_reset().timestamp())
                                 retry_scheduled_accounts += 1
-                                message = "A one-day history range is still incomplete; it will remain flagged and retry after the daily reset."
+                                message = (
+                                    "A one-day history range is still incomplete; it will remain flagged and retry after the daily reset."
+                                    if error_code == "act.missingdata"
+                                    else "SimpleFIN rejected a one-day history window; it will remain flagged and retry after the daily reset."
+                                )
                                 if message not in simplefin_errors:
                                     simplefin_errors.append(message)
                         elif error_code:
@@ -1574,16 +1594,24 @@ def fetch_and_sync_simplefin():
                             if window_end >= progress["end"]:
                                 account_backfill_state.pop(queued_account_id, None)
                     _save_account_backfill_state(account_backfill_state)
+                    adaptive_window_days = (
+                        f"{window_days}->{max(1, window_days // 2)}"
+                        if adaptive_window_retry_accounts
+                        else "none"
+                    )
                     logger.info(
                         "SimpleFIN account-history outcome start_date=%s end_date_exclusive=%s "
                         "group_accounts=%d cursor_advanced_accounts=%d retry_scheduled_accounts=%d "
-                        "authentication_blocked_accounts=%d error_counts=%s",
+                        "authentication_blocked_accounts=%d adaptive_window_retry_accounts=%d "
+                        "adaptive_window_days=%s error_counts=%s",
                         datetime.fromtimestamp(cursor, timezone.utc).date().isoformat(),
                         datetime.fromtimestamp(window_end, timezone.utc).date().isoformat(),
                         len(group),
                         cursor_advanced_accounts,
                         retry_scheduled_accounts,
                         auth_blocked_accounts,
+                        adaptive_window_retry_accounts,
+                        adaptive_window_days,
                         json.dumps({
                             code: sum(value == code for value in window_errors.values())
                             for code in sorted(set(window_errors.values()))
