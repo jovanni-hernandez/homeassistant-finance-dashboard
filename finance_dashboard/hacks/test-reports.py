@@ -28,6 +28,7 @@ from reports import (  # noqa: E402
     build_year_end_report,
     create_excel_report,
     create_pdf_report,
+    get_available_year_end_report_years,
     group_year_end_accounts,
 )
 
@@ -153,6 +154,37 @@ class YearEndReportTests(unittest.TestCase):
 
         self.assertEqual(account["status"], "unavailable")
         self.assertIsNone(account["balance"])
+        self.assertFalse(account["history_available"])
+
+    def test_current_year_uses_latest_snapshot_without_forecasting_to_december(self):
+        self.add_account("account-a")
+        current_year = datetime.now(timezone.utc).year
+        captured_at = int(datetime.now(timezone.utc).timestamp()) - 3600
+        self.add_snapshot("account-a", "2345.67", captured_at)
+
+        report = build_year_end_report(current_year, "UTC")
+        account = report["accounts"][0]
+
+        self.assertTrue(report["current_year"])
+        self.assertIn("not projected", report["methodology"])
+        self.assertEqual(account["status"], "verified")
+        self.assertEqual(account["balance"], "2345.67")
+        self.assertIn("T", account["balance_as_of"])
+
+    def test_year_options_include_saved_but_unverified_history_and_exclude_empty_years(self):
+        self.add_account("account-a")
+        anchor = self.CUTOFF + 5 * 86400
+        self.add_snapshot("account-a", "850.00", anchor)
+        self.add_coverage("account-a", self.CUTOFF + 1, anchor - 1, status="incomplete")
+
+        historical = build_year_end_report(self.YEAR, "UTC")["accounts"][0]
+        years = get_available_year_end_report_years("UTC")["years"]
+
+        self.assertEqual(historical["status"], "unverified")
+        self.assertTrue(historical["history_available"])
+        self.assertIn(self.YEAR, years)
+        self.assertNotIn(self.YEAR - 1, years)
+        self.assertNotIn(datetime.now(timezone.utc).year, years)
 
     def test_snapshot_write_is_encrypted_and_uses_supplied_sync_time(self):
         save_simplefin_data({
@@ -205,6 +237,8 @@ class YearEndReportTests(unittest.TestCase):
     def test_exports_are_valid_pdf_and_xlsx_files(self):
         report = {
             "year": self.YEAR,
+            "current_year": False,
+            "title": "Year-end account balances",
             "timezone": "UTC",
             "as_of": f"December 31, {self.YEAR}",
             "group_accounts": True,
@@ -239,9 +273,9 @@ class YearEndReportTests(unittest.TestCase):
         self.assertEqual(workbook["Account details"]["E5"].value, 1234.56)
         self.assertTrue(create_pdf_report(report).startswith(b"%PDF-"))
 
-    def test_current_or_future_year_and_unknown_timezone_are_rejected(self):
+    def test_future_year_and_unknown_timezone_are_rejected(self):
         with self.assertRaises(ValueError):
-            build_year_end_report(datetime.now(timezone.utc).year, "UTC")
+            build_year_end_report(datetime.now(timezone.utc).year + 1, "UTC")
         with self.assertRaises(ValueError):
             build_year_end_report(self.YEAR, "Not/A_Real_Zone")
 

@@ -41,6 +41,7 @@ from reports import (
     build_year_end_report,
     create_excel_report,
     create_pdf_report,
+    get_available_year_end_report_years,
     group_year_end_accounts,
 )
 from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
@@ -944,6 +945,19 @@ def api_get_data_history():
         raise HTTPException(status_code=500, detail="Could not load account history coverage.") from exc
 
 
+@app.get("/api/reports/year-end/years", dependencies=[Depends(verify_ha_auth)])
+def api_get_available_year_end_report_years(
+    timezone_name: str = Query(default="UTC", alias="timezone", max_length=64),
+):
+    try:
+        return get_available_year_end_report_years(timezone_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Failed to list year-end report years (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not list report years.") from exc
+
+
 @app.get("/api/reports/year-end", dependencies=[Depends(verify_ha_auth)])
 def api_get_year_end_report(
     year: int = Query(ge=1900, le=9998),
@@ -979,10 +993,11 @@ def api_export_year_end_report(
         else:
             content = create_pdf_report(report)
             media_type = "application/pdf"
+        filename_prefix = "current-account-balances" if report["current_year"] else "year-end-account-balances"
         return Response(
             content=content,
             media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="year-end-account-balances-{year}.{format}"'},
+            headers={"Content-Disposition": f'attachment; filename="{filename_prefix}-{year}.{format}"'},
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

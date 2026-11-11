@@ -12,6 +12,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -137,23 +138,42 @@ def start_real_backend(frontend_file: Path):
 
 
 def seed_existing_category_match_for_ui_test():
-    """Add one old categorized merchant match to the disposable browser-test DB."""
-    from models import SessionLocal, Transaction
+    """Seed a historical match and current-year snapshot in the disposable UI-test DB."""
+    from models import Account, AccountBalanceSnapshot, SessionLocal, Transaction
 
     db = SessionLocal()
     try:
-        if db.query(Transaction).filter(Transaction.id == "test-old-coffee-match").first():
-            return
-        db.add(Transaction(
-            id="test-old-coffee-match",
-            account_id="1",
-            date=1718300000,
-            amount="-8.00",
-            payee="Coffee Shop",
-            description="Previous coffee stop",
-            category="Dining",
-            pending=False,
-        ))
+        if not db.query(Transaction).filter(Transaction.id == "test-old-coffee-match").first():
+            db.add(Transaction(
+                id="test-old-coffee-match",
+                account_id="1",
+                date=1718300000,
+                amount="-8.00",
+                payee="Coffee Shop",
+                description="Previous coffee stop",
+                category="Dining",
+                pending=False,
+            ))
+        account = db.query(Account).order_by(Account.id).first()
+        account_deadline = time.monotonic() + 10
+        while account is None and time.monotonic() < account_deadline:
+            time.sleep(0.1)
+            db.expire_all()
+            account = db.query(Account).order_by(Account.id).first()
+        if account:
+            now = datetime.now(timezone.utc)
+            year_start = datetime(now.year, 1, 1, tzinfo=timezone.utc).replace(tzinfo=None)
+            existing_snapshot = db.query(AccountBalanceSnapshot).filter(
+                AccountBalanceSnapshot.account_id == account.id,
+                AccountBalanceSnapshot.captured_at >= year_start,
+            ).first()
+            if not existing_snapshot:
+                db.add(AccountBalanceSnapshot(
+                    account_id=account.id,
+                    balance=account.balance,
+                    currency=account.currency or "USD",
+                    captured_at=now.replace(tzinfo=None),
+                ))
         db.commit()
     finally:
         db.close()
@@ -169,6 +189,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/goals",
         "api/debt-payoff",
         "api/transactions",
+        "api/reports/year-end/years?timezone=UTC",
         f"api/reports/year-end?year={time.gmtime().tm_year - 1}&timezone=UTC&group_accounts=false",
         "api/category-rules",
         "api/recurring-rules",
@@ -196,7 +217,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
 
 
 def probe_year_end_exports(base_url: str, headers: dict[str, str] | None = None) -> dict[str, bool]:
-    year = time.gmtime().tm_year - 1
+    year = time.gmtime().tm_year
     results = {}
     for export_format, signature in (("xlsx", b"PK"), ("pdf", b"%PDF-")):
         query = f"year={year}&timezone=UTC&group_accounts=true&format={export_format}"
@@ -936,12 +957,19 @@ def main():
             WebDriverWait(driver, args.timeout).until(
                 lambda current: not current.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-report-loading"]')
             )
+            report_year_select = Select(driver.find_element(By.CSS_SELECTOR, '[data-testid="year-end-report-year"]'))
+            current_browser_year = int(driver.execute_script("return new Date().getFullYear()"))
             report_controls = {
                 "year_selector": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-report-year"]')) == 1,
                 "group_toggle": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-group-toggle"]')) == 1,
                 "excel_export": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-export-xlsx"]')) == 1,
                 "pdf_export": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-export-pdf"]')) == 1,
                 "report_rows_render": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-report-row"]')) > 0,
+                "selector_contains_only_available_years": (
+                    len(report_year_select.options) > 0
+                    and all(option.get_attribute("value") != "1900" for option in report_year_select.options)
+                ),
+                "current_year_selected_when_its_snapshot_is_latest": report_year_select.first_selected_option.get_attribute("value") == str(current_browser_year),
             }
             report_group_toggle = driver.find_element(By.CSS_SELECTOR, '[data-testid="year-end-group-toggle"]')
             report_group_toggle.click()
@@ -951,9 +979,10 @@ def main():
             report_controls["group_toggle_updates_report"] = report_group_toggle.is_selected()
             report_text = report_view.text
             report_controls["report_title_and_disclaimer"] = (
-                "Year-end account balances" in report_text
+                ("Year-end account balances" in report_text or "Current account balances" in report_text)
                 and "not a bank statement or certified filing" in report_text
             )
+            report_controls["current_year_is_not_forecast"] = "not a year-end forecast" in report_text
             report_overflow = driver.execute_script(
                 "return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1"
             )

@@ -666,8 +666,8 @@
                     <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                             <div class="min-w-0">
-                                <h2 class="text-xl font-semibold text-slate-800">Year-end account balances</h2>
-                                <p class="mt-1 max-w-2xl text-sm leading-5 text-slate-500">Review each linked account’s balance at December 31. Currencies stay separate, and balances without verified history are clearly marked.</p>
+                                <h2 class="text-xl font-semibold text-slate-800">{{ yearEndReport?.current_year ? 'Current account balances' : 'Year-end account balances' }}</h2>
+                                <p class="mt-1 max-w-2xl text-sm leading-5 text-slate-500">Completed years show December 31 balances. The current year shows the latest saved balances, not a year-end forecast. Currencies stay separate, and unverified history is clearly marked.</p>
                             </div>
                             <div class="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
                                 <button type="button" data-testid="year-end-export-xlsx" @click="downloadYearEndReport('xlsx')" :disabled="!yearEndReport || !!reportExporting || reportLoading" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
@@ -682,7 +682,7 @@
                         <div class="mt-5 grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr] sm:items-end">
                             <label class="block text-sm font-medium text-slate-700">
                                 Calendar year
-                                <select data-testid="year-end-report-year" v-model.number="reportYear" @change="fetchYearEndReport" class="mt-1.5 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100">
+                                <select data-testid="year-end-report-year" v-model.number="reportYear" @change="fetchYearEndReport" :disabled="reportYearsLoading || !reportYears.length" class="mt-1.5 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:bg-slate-100">
                                     <option v-for="year in reportYears" :key="year" :value="year">{{ year }}</option>
                                 </select>
                             </label>
@@ -693,7 +693,10 @@
                         </div>
 
                         <div v-if="reportError" data-testid="year-end-report-error" role="alert" class="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ reportError }}</div>
+                        <div v-if="reportYearsLoading" data-testid="year-end-report-years-loading" role="status" class="mt-5 py-8 text-center text-sm text-slate-500">Finding years with saved account history…</div>
                         <div v-if="reportLoading" data-testid="year-end-report-loading" role="status" class="mt-5 py-8 text-center text-sm text-slate-500">Preparing report…</div>
+
+                        <div v-if="!reportYearsLoading && !reportYears.length && !reportError" data-testid="year-end-report-no-years" class="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">No calendar years with saved account history are available yet. A successful SimpleFIN sync will save balance snapshots for reporting.</div>
 
                         <template v-else-if="yearEndReport">
                             <div class="mt-4 rounded-lg border border-sky-100 bg-sky-50 px-3 py-3 text-xs leading-5 text-sky-950 sm:px-4">
@@ -716,20 +719,21 @@
                                                 <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" :class="row.status === 'verified' ? 'bg-emerald-50 text-emerald-800' : row.status === 'unverified' ? 'bg-amber-50 text-amber-800' : 'bg-slate-100 text-slate-700'">{{ row.status }}</span>
                                             </div>
                                         </div>
-                                        <p class="mt-2 text-xs leading-5 text-slate-500">{{ row.status_note }}</p>
-                                        <details v-if="reportGrouped && row.member_accounts.length > 1" class="mt-2 text-xs text-slate-600">
-                                            <summary class="cursor-pointer font-medium underline underline-offset-2">{{ row.member_accounts.length }} included accounts</summary>
-                                            <ul class="mt-1 list-inside list-disc space-y-1">
-                                                <li v-for="(member, memberIndex) in row.member_accounts" :key="memberIndex">{{ member.account_name }} — {{ member.status === 'verified' ? formatCurrency(member.balance, member.currency) : 'Not available' }}</li>
-                                            </ul>
-                                        </details>
+                                                <p v-if="row.balance_as_of" class="mt-2 text-xs text-slate-500">Balance as of {{ formatReportBalanceAsOf(row) }}</p>
+                                                <p class="mt-1 text-xs leading-5 text-slate-500">{{ row.status_note }}</p>
+                                                <details v-if="reportGrouped && row.member_accounts.length > 1" class="mt-2 text-xs text-slate-600">
+                                                    <summary class="cursor-pointer font-medium underline underline-offset-2">{{ row.member_accounts.length }} included accounts</summary>
+                                                    <ul class="mt-1 list-inside list-disc space-y-1">
+                                                <li v-for="(member, memberIndex) in row.member_accounts" :key="memberIndex">{{ member.account_name }} — {{ member.status === 'verified' ? formatCurrency(member.balance, member.currency) : 'Not available' }}<span v-if="member.balance_as_of"> · {{ formatReportBalanceAsOf(member) }}</span></li>
+                                                    </ul>
+                                                </details>
                                     </article>
                                 </div>
 
                                 <div class="hidden overflow-x-auto rounded-xl border border-slate-200 md:block">
                                     <table data-testid="year-end-report-table" class="min-w-full divide-y divide-slate-200 text-sm">
                                         <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                            <tr><th scope="col" class="px-3 py-3">Provider</th><th scope="col" class="px-3 py-3">Account / group</th><th scope="col" class="px-3 py-3">Type</th><th scope="col" class="px-3 py-3">Currency</th><th scope="col" class="px-3 py-3 text-right">Balance</th><th scope="col" class="px-3 py-3">Status</th><th scope="col" class="px-3 py-3">Included accounts</th></tr>
+                                            <tr><th scope="col" class="px-3 py-3">Provider</th><th scope="col" class="px-3 py-3">Account / group</th><th scope="col" class="px-3 py-3">Type</th><th scope="col" class="px-3 py-3">Currency</th><th scope="col" class="px-3 py-3 text-right">Balance</th><th scope="col" class="px-3 py-3">Balance as of</th><th scope="col" class="px-3 py-3">Status</th><th scope="col" class="px-3 py-3">Included accounts</th></tr>
                                         </thead>
                                         <tbody class="divide-y divide-slate-100 bg-white">
                                             <tr v-for="(row, rowIndex) in yearEndReport.rows" :key="rowIndex" data-testid="year-end-report-row">
@@ -738,6 +742,7 @@
                                                 <td class="px-3 py-3 text-slate-600">{{ row.account_type_label }}</td>
                                                 <td class="px-3 py-3 text-slate-600">{{ row.currency }}</td>
                                                 <td class="whitespace-nowrap px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{{ row.status === 'verified' ? formatCurrency(row.balance, row.currency) : 'Not available' }}</td>
+                                                <td class="whitespace-nowrap px-3 py-3 text-xs text-slate-600">{{ formatReportBalanceAsOf(row) }}</td>
                                                 <td class="px-3 py-3"><span class="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" :class="row.status === 'verified' ? 'bg-emerald-50 text-emerald-800' : row.status === 'unverified' ? 'bg-amber-50 text-amber-800' : 'bg-slate-100 text-slate-700'">{{ row.status }}</span><div class="mt-1 max-w-56 text-xs leading-4 text-slate-500">{{ row.status_note }}</div></td>
                                                 <td class="max-w-64 px-3 py-3 text-xs leading-5 text-slate-600">{{ row.member_accounts.length > 1 ? row.member_accounts.map((member) => member.account_name).join(', ') : '—' }}</td>
                                             </tr>
@@ -2084,10 +2089,8 @@
                 const currentYear = new Date().getFullYear();
                 const accounts = ref([]);
                 const reportYear = ref(currentYear - 1);
-                const reportYears = computed(() => Array.from(
-                    { length: Math.max(1, currentYear - 1900) },
-                    (_, index) => currentYear - index - 1,
-                ));
+                const reportYears = ref([]);
+                const reportYearsLoading = ref(false);
                 const reportGrouped = ref(false);
                 const yearEndReport = ref(null);
                 const reportLoading = ref(false);
@@ -4141,17 +4144,52 @@
 
                 const getApiUrl = (endpoint) => window.location.pathname.replace(/\/$/, '') + endpoint;
 
+                const reportTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
                 const yearEndReportQuery = (includeFormat = '') => {
                     const params = new URLSearchParams({
                         year: String(reportYear.value),
-                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+                        timezone: reportTimezone(),
                         group_accounts: String(reportGrouped.value),
                     });
                     if (includeFormat) params.set('format', includeFormat);
                     return params.toString();
                 };
 
+                const fetchYearEndReportYears = async () => {
+                    reportYearsLoading.value = true;
+                    reportError.value = '';
+                    yearEndReport.value = null;
+                    reportYears.value = [];
+                    try {
+                        const params = new URLSearchParams({ timezone: reportTimezone() });
+                        const response = await apiFetch(`/api/reports/year-end/years?${params.toString()}`);
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || `Could not load report years (${response.status})`);
+                        reportYears.value = Array.isArray(data.years)
+                            ? data.years.map(Number).filter((year) => Number.isInteger(year))
+                            : [];
+                        if (!reportYears.value.length) {
+                            reportLoading.value = false;
+                            return;
+                        }
+                        if (!reportYears.value.includes(reportYear.value)) {
+                            reportYear.value = reportYears.value.includes(currentYear - 1)
+                                ? currentYear - 1
+                                : reportYears.value[0];
+                        }
+                    } catch (err) {
+                        reportError.value = err.message || 'Could not load available report years.';
+                        reportLoading.value = false;
+                        return;
+                    } finally {
+                        reportYearsLoading.value = false;
+                    }
+                    await fetchYearEndReport();
+                };
+
                 const fetchYearEndReport = async () => {
+                    if (!reportYears.value.includes(Number(reportYear.value))) return;
                     const requestId = ++reportRequestId;
                     reportLoading.value = true;
                     reportError.value = '';
@@ -4182,7 +4220,8 @@
                         const url = URL.createObjectURL(blob);
                         const link = document.createElement('a');
                         link.href = url;
-                        link.download = `year-end-account-balances-${reportYear.value}.${format}`;
+                        const prefix = yearEndReport.value?.current_year ? 'current-account-balances' : 'year-end-account-balances';
+                        link.download = `${prefix}-${reportYear.value}.${format}`;
                         document.body.appendChild(link);
                         link.click();
                         link.remove();
@@ -4199,7 +4238,7 @@
                     drawerOpen.value = false;
                     if (nextView === 'assets' || nextView === 'goals' || nextView === 'reports' || nextView.startsWith('settings-')) window.scrollTo(0, 0);
                     if (nextView === 'settings-data-history') fetchDataHistory();
-                    if (nextView === 'reports') fetchYearEndReport();
+                    if (nextView === 'reports') fetchYearEndReportYears();
                 };
 
                 const fetchStatus = async ({ background = false } = {}) => {
@@ -5353,6 +5392,16 @@
 
                 const formatCurrency = (value, currency = 'USD') => new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(parseFloat(value || 0));
                 const formatDate = (timestamp) => timestamp ? new Date(timestamp * 1000).toLocaleDateString() : '';
+                const formatReportBalanceAsOf = (row) => {
+                    const value = row?.balance_as_of;
+                    if (!value) return '—';
+                    if (value === 'Multiple snapshot times') return value;
+                    if (yearEndReport.value?.current_year) return formatDateTime(value);
+                    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                    if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+                        .toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+                    return formatDateTime(value);
+                };
                 const formatDateTime = (value) => {
                     if (!value) return 'Not yet';
                     const date = new Date(value);
@@ -5468,6 +5517,7 @@
                     accounts,
                     reportYear,
                     reportYears,
+                    reportYearsLoading,
                     reportGrouped,
                     yearEndReport,
                     reportLoading,
@@ -5664,6 +5714,7 @@
                     transactionAccountName,
                     clearSankeyDetails,
                     setView,
+                    fetchYearEndReportYears,
                     fetchYearEndReport,
                     downloadYearEndReport,
                     syncData,
@@ -5744,6 +5795,7 @@
                     showMoreTransactions,
                     renderSankey,
                     formatCurrency,
+                    formatReportBalanceAsOf,
                     formatDate,
                     formatDateTime,
                     providerErrorSummary,
