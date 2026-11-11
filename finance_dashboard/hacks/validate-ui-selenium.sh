@@ -36,7 +36,7 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
 fi
 
 "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-"$VENV_DIR/bin/pip" install selenium pillow fastapi uvicorn requests sqlalchemy cryptography websocket-client >/dev/null
+"$VENV_DIR/bin/pip" install selenium pillow fastapi uvicorn requests sqlalchemy cryptography websocket-client openpyxl reportlab >/dev/null
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-recurring-analysis.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-api-validation.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-admin-stdin.py"
@@ -46,6 +46,7 @@ fi
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-finance-browser.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-finance-browser.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-simplefin-sync.py"
+"$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-reports.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-account-types.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-manual-assets.py"
 "$VENV_DIR/bin/python" "$ROOT_DIR/hacks/test-manual-category-rule.py"

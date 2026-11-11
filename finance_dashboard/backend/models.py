@@ -221,3 +221,22 @@ class AccountDataCoverage(Base):
     last_attempt_at = Column(DateTime, nullable=True)
     last_success_at = Column(DateTime, nullable=True)
     retry_after = Column(DateTime, nullable=True)
+
+
+class AccountBalanceSnapshot(Base):
+    """Encrypted point-in-time balance captured from a successful account sync."""
+    __tablename__ = "account_balance_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(String, ForeignKey("accounts.id"), index=True, nullable=False)
+    _balance = Column("balance", String, nullable=False)
+    currency = Column(String, default="USD", nullable=False)
+    captured_at = Column(DateTime, index=True, nullable=False)
+
+    @property
+    def balance(self):
+        return decrypt_value(self._balance)
+
+    @balance.setter
+    def balance(self, value):
+        self._balance = encrypt_value(value)

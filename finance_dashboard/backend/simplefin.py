@@ -1612,7 +1612,7 @@ def fetch_and_sync_simplefin():
                 phase = next_phase
                 _set_sync_progress(sync_id, state, phase, message, warning)
 
-            def save_normalized_payload(normalized):
+            def save_normalized_payload(normalized, *, snapshot_account_ids=None):
                 discovered_new_account = False
                 account_backfill_end = max(0, now_timestamp - SYNC_WINDOW_SECONDS)
                 account_backfill_start = max(0, now_timestamp - ACCOUNT_BACKFILL_DAYS * _ACCOUNT_BACKFILL_DAY_SECONDS)
@@ -1637,7 +1637,11 @@ def fetch_and_sync_simplefin():
                 for account in normalized.get("accounts", []):
                     for transaction in account.get("transactions", []):
                         incoming_transactions_by_id[str(transaction.get("id"))] = transaction
-                save_simplefin_data(normalized)
+                save_simplefin_data(
+                    normalized,
+                    snapshot_account_ids=snapshot_account_ids,
+                    snapshot_at=now_timestamp if snapshot_account_ids else None,
+                )
 
             while cursor < backfill_limit and backfill_windows < SYNC_MAX_BACKFILL_WINDOWS_PER_RUN:
                 window_end = min(cursor + SYNC_WINDOW_SECONDS, backfill_limit)
@@ -1705,7 +1709,10 @@ def fetch_and_sync_simplefin():
                 if payload.get(key):
                     note_coverage_errors(rolling_errors)
             normalized = _normalize_simplefin_payload(payload, rules)
-            save_normalized_payload(normalized)
+            save_normalized_payload(
+                normalized,
+                snapshot_account_ids=set(map(str, returned_ids)) - set(map(str, rolling_errors)),
+            )
             _coverage_result(coverage_ids, rolling_start, now_timestamp, returned_ids=returned_ids, error_codes=rolling_errors, source="routine")
             note_coverage_errors(rolling_errors)
             auth_failed_ranges += sum(code == "con.auth" for code in rolling_errors.values())

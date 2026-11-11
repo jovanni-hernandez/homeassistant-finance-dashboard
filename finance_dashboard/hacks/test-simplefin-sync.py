@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -27,7 +28,7 @@ os.chdir(BACKEND)
 import main  # noqa: E402
 import simplefin  # noqa: E402
 from database import get_setting, init_db, set_setting  # noqa: E402
-from models import Account, AccountDataCoverage, SessionLocal, Setting, Transaction  # noqa: E402
+from models import Account, AccountBalanceSnapshot, AccountDataCoverage, SessionLocal, Setting, Transaction  # noqa: E402
 
 init_db()
 
@@ -36,6 +37,7 @@ class SimpleFinSyncTests(unittest.TestCase):
     def setUp(self):
         db = SessionLocal()
         try:
+            db.query(AccountBalanceSnapshot).delete()
             db.query(Transaction).delete()
             db.query(AccountDataCoverage).delete()
             db.query(Account).delete()
@@ -695,6 +697,13 @@ class SimpleFinSyncTests(unittest.TestCase):
         start_timestamp = fetch.call_args.kwargs["start_ts"]
         end_timestamp = fetch.call_args.kwargs["end_ts"]
         self.assertEqual(end_timestamp - start_timestamp, 24 * 60 * 60)
+        db = SessionLocal()
+        try:
+            snapshots = db.query(AccountBalanceSnapshot).filter_by(account_id="account-1").all()
+            self.assertEqual(len(snapshots), 1)
+            self.assertEqual(Decimal(snapshots[0].balance), Decimal("0.00"))
+        finally:
+            db.close()
 
     def test_new_accounts_get_12_months_in_45_day_windows(self):
         day = simplefin.SYNC_WINDOW_SECONDS

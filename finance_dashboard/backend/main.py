@@ -12,7 +12,7 @@ import urllib.request
 import uuid
 from collections import Counter, defaultdict
 from typing import Literal
-from fastapi import FastAPI, Header, HTTPException, Depends, Query
+from fastapi import FastAPI, Header, HTTPException, Depends, Query, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import simplefin
@@ -37,6 +37,12 @@ from ai_logging import redact_api_keys
 from ai_prompts import AIPromptValidationError, get_ai_prompt_settings, save_ai_system_prompt
 from category_analysis import generate_category_analysis
 from recurring_analysis import generate_recurring_analysis
+from reports import (
+    build_year_end_report,
+    create_excel_report,
+    create_pdf_report,
+    group_year_end_accounts,
+)
 from goals import GoalValidationError, create_goal, delete_goal, get_goals, update_goal
 from debt_payoff import (
     DebtPayoffEstimateError,
@@ -936,6 +942,53 @@ def api_get_data_history():
     except Exception as exc:
         logger.error("Failed to read account data-history coverage (%s).", type(exc).__name__)
         raise HTTPException(status_code=500, detail="Could not load account history coverage.") from exc
+
+
+@app.get("/api/reports/year-end", dependencies=[Depends(verify_ha_auth)])
+def api_get_year_end_report(
+    year: int = Query(ge=1900, le=9998),
+    timezone_name: str = Query(default="UTC", alias="timezone", max_length=64),
+    group_accounts: bool = Query(default=False),
+):
+    try:
+        report = build_year_end_report(year, timezone_name)
+        report["group_accounts"] = group_accounts
+        report["rows"] = group_year_end_accounts(report["accounts"], group_accounts)
+        return report
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Failed to build a year-end report (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not build the year-end report.") from exc
+
+
+@app.get("/api/reports/year-end/export", dependencies=[Depends(verify_ha_auth)])
+def api_export_year_end_report(
+    year: int = Query(ge=1900, le=9998),
+    format: Literal["xlsx", "pdf"] = Query(...),
+    timezone_name: str = Query(default="UTC", alias="timezone", max_length=64),
+    group_accounts: bool = Query(default=False),
+):
+    try:
+        report = build_year_end_report(year, timezone_name)
+        report["group_accounts"] = group_accounts
+        report["rows"] = group_year_end_accounts(report["accounts"], group_accounts)
+        if format == "xlsx":
+            content = create_excel_report(report)
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        else:
+            content = create_pdf_report(report)
+            media_type = "application/pdf"
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="year-end-account-balances-{year}.{format}"'},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Failed to export a year-end report (%s).", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Could not export the year-end report.") from exc
 
 
 @app.post("/api/data-history/retry", dependencies=[Depends(verify_ha_auth)])

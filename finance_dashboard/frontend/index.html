@@ -213,6 +213,17 @@
                         </svg>
                         <span class="font-medium">Assets</span>
                     </button>
+                    <button
+                        data-testid="reports-nav"
+                        @click="setView('reports')"
+                        class="flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition"
+                        :class="view === 'reports' ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-100'"
+                    >
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M7 3h7l5 5v13H7a2 2 0 01-2-2V5a2 2 0 012-2zM14 3v6h6M9 13h6M9 17h6" />
+                        </svg>
+                        <span class="font-medium">Reports</span>
+                    </button>
                     <div class="border-t border-slate-200 pt-3">
                         <div class="px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">Settings</div>
                     <button
@@ -649,6 +660,94 @@
                             </button>
                         </div>
                     </section>
+                </section>
+
+                <section v-else-if="view === 'reports'" data-testid="year-end-reports-view" class="space-y-4">
+                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                            <div class="min-w-0">
+                                <h2 class="text-xl font-semibold text-slate-800">Year-end account balances</h2>
+                                <p class="mt-1 max-w-2xl text-sm leading-5 text-slate-500">Review each linked account’s balance at December 31. Currencies stay separate, and balances without verified history are clearly marked.</p>
+                            </div>
+                            <div class="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
+                                <button type="button" data-testid="year-end-export-xlsx" @click="downloadYearEndReport('xlsx')" :disabled="!yearEndReport || !!reportExporting || reportLoading" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                    {{ reportExporting === 'xlsx' ? 'Preparing…' : 'Export Excel' }}
+                                </button>
+                                <button type="button" data-testid="year-end-export-pdf" @click="downloadYearEndReport('pdf')" :disabled="!yearEndReport || !!reportExporting || reportLoading" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                    {{ reportExporting === 'pdf' ? 'Preparing…' : 'Export PDF' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="mt-5 grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr] sm:items-end">
+                            <label class="block text-sm font-medium text-slate-700">
+                                Calendar year
+                                <select data-testid="year-end-report-year" v-model.number="reportYear" @change="fetchYearEndReport" class="mt-1.5 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100">
+                                    <option v-for="year in reportYears" :key="year" :value="year">{{ year }}</option>
+                                </select>
+                            </label>
+                            <label class="flex min-h-11 items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                <input data-testid="year-end-group-toggle" type="checkbox" v-model="reportGrouped" @change="fetchYearEndReport" class="h-4 w-4 shrink-0 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
+                                <span><span class="font-semibold">Group like accounts</span><span class="mt-0.5 block text-xs leading-4 text-slate-500">Same provider, account type, and currency</span></span>
+                            </label>
+                        </div>
+
+                        <div v-if="reportError" data-testid="year-end-report-error" role="alert" class="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ reportError }}</div>
+                        <div v-if="reportLoading" data-testid="year-end-report-loading" role="status" class="mt-5 py-8 text-center text-sm text-slate-500">Preparing report…</div>
+
+                        <template v-else-if="yearEndReport">
+                            <div class="mt-4 rounded-lg border border-sky-100 bg-sky-50 px-3 py-3 text-xs leading-5 text-sky-950 sm:px-4">
+                                <div class="font-semibold">As of {{ yearEndReport.as_of }} · {{ yearEndReport.timezone }}</div>
+                                <p class="mt-1">{{ yearEndReport.methodology }}</p>
+                                <p class="mt-1 font-medium">{{ yearEndReport.report_note }}</p>
+                            </div>
+
+                            <div v-if="yearEndReport.rows.length" class="mt-4">
+                                <div class="space-y-3 md:hidden">
+                                    <article v-for="(row, rowIndex) in yearEndReport.rows" :key="rowIndex" data-testid="year-end-report-row" class="rounded-xl border border-slate-200 bg-white p-4">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <div class="min-w-0">
+                                                <div class="truncate text-xs font-semibold uppercase tracking-wide text-slate-500">{{ row.provider }}</div>
+                                                <h3 class="mt-1 break-words text-sm font-semibold text-slate-900">{{ row.account_name }}</h3>
+                                                <div class="mt-1 text-xs text-slate-500">{{ row.account_type_label }} · {{ row.currency }}</div>
+                                            </div>
+                                            <div class="shrink-0 text-right">
+                                                <div class="text-sm font-bold tabular-nums text-slate-900">{{ row.status === 'verified' ? formatCurrency(row.balance, row.currency) : 'Not available' }}</div>
+                                                <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" :class="row.status === 'verified' ? 'bg-emerald-50 text-emerald-800' : row.status === 'unverified' ? 'bg-amber-50 text-amber-800' : 'bg-slate-100 text-slate-700'">{{ row.status }}</span>
+                                            </div>
+                                        </div>
+                                        <p class="mt-2 text-xs leading-5 text-slate-500">{{ row.status_note }}</p>
+                                        <details v-if="reportGrouped && row.member_accounts.length > 1" class="mt-2 text-xs text-slate-600">
+                                            <summary class="cursor-pointer font-medium underline underline-offset-2">{{ row.member_accounts.length }} included accounts</summary>
+                                            <ul class="mt-1 list-inside list-disc space-y-1">
+                                                <li v-for="(member, memberIndex) in row.member_accounts" :key="memberIndex">{{ member.account_name }} — {{ member.status === 'verified' ? formatCurrency(member.balance, member.currency) : 'Not available' }}</li>
+                                            </ul>
+                                        </details>
+                                    </article>
+                                </div>
+
+                                <div class="hidden overflow-x-auto rounded-xl border border-slate-200 md:block">
+                                    <table data-testid="year-end-report-table" class="min-w-full divide-y divide-slate-200 text-sm">
+                                        <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                            <tr><th scope="col" class="px-3 py-3">Provider</th><th scope="col" class="px-3 py-3">Account / group</th><th scope="col" class="px-3 py-3">Type</th><th scope="col" class="px-3 py-3">Currency</th><th scope="col" class="px-3 py-3 text-right">Balance</th><th scope="col" class="px-3 py-3">Status</th><th scope="col" class="px-3 py-3">Included accounts</th></tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-slate-100 bg-white">
+                                            <tr v-for="(row, rowIndex) in yearEndReport.rows" :key="rowIndex" data-testid="year-end-report-row">
+                                                <td class="max-w-48 px-3 py-3 text-slate-600">{{ row.provider }}</td>
+                                                <td class="max-w-56 px-3 py-3 font-medium text-slate-900">{{ row.account_name }}</td>
+                                                <td class="px-3 py-3 text-slate-600">{{ row.account_type_label }}</td>
+                                                <td class="px-3 py-3 text-slate-600">{{ row.currency }}</td>
+                                                <td class="whitespace-nowrap px-3 py-3 text-right font-semibold tabular-nums text-slate-900">{{ row.status === 'verified' ? formatCurrency(row.balance, row.currency) : 'Not available' }}</td>
+                                                <td class="px-3 py-3"><span class="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" :class="row.status === 'verified' ? 'bg-emerald-50 text-emerald-800' : row.status === 'unverified' ? 'bg-amber-50 text-amber-800' : 'bg-slate-100 text-slate-700'">{{ row.status }}</span><div class="mt-1 max-w-56 text-xs leading-4 text-slate-500">{{ row.status_note }}</div></td>
+                                                <td class="max-w-64 px-3 py-3 text-xs leading-5 text-slate-600">{{ row.member_accounts.length > 1 ? row.member_accounts.map((member) => member.account_name).join(', ') : '—' }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div v-else data-testid="year-end-report-empty" class="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">No linked accounts are available for this report.</div>
+                        </template>
+                    </div>
                 </section>
 
                 <section v-else-if="view === 'recurring'" class="space-y-6">
@@ -1984,6 +2083,17 @@
                 const nowTick = ref(Date.now());
                 const currentYear = new Date().getFullYear();
                 const accounts = ref([]);
+                const reportYear = ref(currentYear - 1);
+                const reportYears = computed(() => Array.from(
+                    { length: Math.max(1, currentYear - 1900) },
+                    (_, index) => currentYear - index - 1,
+                ));
+                const reportGrouped = ref(false);
+                const yearEndReport = ref(null);
+                const reportLoading = ref(false);
+                const reportError = ref('');
+                const reportExporting = ref('');
+                let reportRequestId = 0;
                 const dataHistory = ref({ accounts: [], overall_coverage_percent: 0, target_days: 365 });
                 const dataHistoryLoading = ref(false);
                 const dataHistoryMessage = ref('');
@@ -4031,11 +4141,65 @@
 
                 const getApiUrl = (endpoint) => window.location.pathname.replace(/\/$/, '') + endpoint;
 
+                const yearEndReportQuery = (includeFormat = '') => {
+                    const params = new URLSearchParams({
+                        year: String(reportYear.value),
+                        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+                        group_accounts: String(reportGrouped.value),
+                    });
+                    if (includeFormat) params.set('format', includeFormat);
+                    return params.toString();
+                };
+
+                const fetchYearEndReport = async () => {
+                    const requestId = ++reportRequestId;
+                    reportLoading.value = true;
+                    reportError.value = '';
+                    yearEndReport.value = null;
+                    try {
+                        const response = await apiFetch(`/api/reports/year-end?${yearEndReportQuery()}`);
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok) throw new Error(data.detail || `Could not load report (${response.status})`);
+                        if (requestId === reportRequestId) yearEndReport.value = data;
+                    } catch (err) {
+                        if (requestId === reportRequestId) reportError.value = err.message || 'Could not load the year-end report.';
+                    } finally {
+                        if (requestId === reportRequestId) reportLoading.value = false;
+                    }
+                };
+
+                const downloadYearEndReport = async (format) => {
+                    if (!['xlsx', 'pdf'].includes(format)) return;
+                    reportExporting.value = format;
+                    reportError.value = '';
+                    try {
+                        const response = await apiFetch(`/api/reports/year-end/export?${yearEndReportQuery(format)}`);
+                        if (!response.ok) {
+                            const data = await response.json().catch(() => ({}));
+                            throw new Error(data.detail || `Could not export report (${response.status})`);
+                        }
+                        const blob = await response.blob();
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `year-end-account-balances-${reportYear.value}.${format}`;
+                        document.body.appendChild(link);
+                        link.click();
+                        link.remove();
+                        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    } catch (err) {
+                        reportError.value = err.message || 'Could not export the year-end report.';
+                    } finally {
+                        reportExporting.value = '';
+                    }
+                };
+
                 const setView = (nextView) => {
                     view.value = nextView;
                     drawerOpen.value = false;
-                    if (nextView === 'assets' || nextView === 'goals' || nextView.startsWith('settings-')) window.scrollTo(0, 0);
+                    if (nextView === 'assets' || nextView === 'goals' || nextView === 'reports' || nextView.startsWith('settings-')) window.scrollTo(0, 0);
                     if (nextView === 'settings-data-history') fetchDataHistory();
+                    if (nextView === 'reports') fetchYearEndReport();
                 };
 
                 const fetchStatus = async ({ background = false } = {}) => {
@@ -5302,6 +5466,13 @@
                     drawerOpen,
                     currentYear,
                     accounts,
+                    reportYear,
+                    reportYears,
+                    reportGrouped,
+                    yearEndReport,
+                    reportLoading,
+                    reportError,
+                    reportExporting,
                     transactions,
                     manualAssets,
                     dataHistory,
@@ -5493,6 +5664,8 @@
                     transactionAccountName,
                     clearSankeyDetails,
                     setView,
+                    fetchYearEndReport,
+                    downloadYearEndReport,
                     syncData,
                     fetchDataHistory,
                     debtPayoffPlan,

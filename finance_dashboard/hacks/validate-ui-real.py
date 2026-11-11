@@ -169,6 +169,7 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
         "api/goals",
         "api/debt-payoff",
         "api/transactions",
+        f"api/reports/year-end?year={time.gmtime().tm_year - 1}&timezone=UTC&group_accounts=false",
         "api/category-rules",
         "api/recurring-rules",
         "api/recurring-payments",
@@ -192,6 +193,20 @@ def probe_api(base_url: str, headers: dict[str, str] | None = None) -> dict[str,
             statuses[endpoint] = exc.code
             raise RuntimeError(f"{endpoint} returned HTTP {exc.code}") from exc
     return statuses
+
+
+def probe_year_end_exports(base_url: str, headers: dict[str, str] | None = None) -> dict[str, bool]:
+    year = time.gmtime().tm_year - 1
+    results = {}
+    for export_format, signature in (("xlsx", b"PK"), ("pdf", b"%PDF-")):
+        query = f"year={year}&timezone=UTC&group_accounts=true&format={export_format}"
+        request = urllib.request.Request(
+            f"{base_url}api/reports/year-end/export?{query}",
+            headers={"Accept": "application/octet-stream", **(headers or {})},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            results[export_format] = response.status == 200 and response.read(len(signature)) == signature
+    return results
 
 
 def probe_index_cache_policy(base_url: str, headers: dict[str, str] | None = None) -> bool:
@@ -401,6 +416,7 @@ def main():
         if app_session:
             request_headers["X-Finance-Session"] = app_session
         api_statuses = probe_api(base_url, request_headers)
+        year_end_export_statuses = probe_year_end_exports(base_url, request_headers)
         index_html_no_store_cache = probe_index_cache_policy(base_url, request_headers)
         options = Options()
         options.binary_location = "/usr/bin/chromium"
@@ -914,6 +930,38 @@ def main():
             )
 
             driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
+            reports_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '[data-testid="reports-nav"]')))
+            reports_button.click()
+            report_view = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, '[data-testid="year-end-reports-view"]')))
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: not current.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-report-loading"]')
+            )
+            report_controls = {
+                "year_selector": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-report-year"]')) == 1,
+                "group_toggle": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-group-toggle"]')) == 1,
+                "excel_export": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-export-xlsx"]')) == 1,
+                "pdf_export": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-export-pdf"]')) == 1,
+                "report_rows_render": len(driver.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-report-row"]')) > 0,
+            }
+            report_group_toggle = driver.find_element(By.CSS_SELECTOR, '[data-testid="year-end-group-toggle"]')
+            report_group_toggle.click()
+            WebDriverWait(driver, args.timeout).until(
+                lambda current: not current.find_elements(By.CSS_SELECTOR, '[data-testid="year-end-report-loading"]')
+            )
+            report_controls["group_toggle_updates_report"] = report_group_toggle.is_selected()
+            report_text = report_view.text
+            report_controls["report_title_and_disclaimer"] = (
+                "Year-end account balances" in report_text
+                and "not a bank statement or certified filing" in report_text
+            )
+            report_overflow = driver.execute_script(
+                "return document.documentElement.scrollWidth > document.documentElement.clientWidth + 1"
+            )
+            report_screenshot = screenshot.with_name(screenshot.stem + "-year-end-report" + screenshot.suffix)
+            driver.save_screenshot(str(report_screenshot))
+            report_ratio = screenshot_content_ratio(report_screenshot)
+
+            driver.find_element(By.CSS_SELECTOR, 'button[aria-label="Open menu"]').click()
             driver.find_element(By.XPATH, "//button[.//span[text()='Dashboard']]").click()
             WebDriverWait(driver, args.timeout).until(lambda current: "Recent transactions" in current.find_element(By.TAG_NAME, "body").text)
             period_select = Select(driver.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
@@ -938,8 +986,10 @@ def main():
                 return `${nextMonth.getUTCFullYear()}-${String(nextMonth.getUTCMonth() + 1).padStart(2, '0')}`;
             """)
             WebDriverWait(driver, args.timeout).until(
-                lambda current: Select(current.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
-                .first_selected_option.get_attribute("value") == next_month_key
+                lambda current: current.execute_script(
+                    "return document.querySelector('[data-testid=\"transaction-month-filter\"]')?.value === arguments[0]",
+                    next_month_key,
+                )
             )
             period_select = Select(driver.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
             next_month_rows = driver.find_elements(By.CSS_SELECTOR, '[data-testid="transaction-row"]')
@@ -951,8 +1001,10 @@ def main():
             )
             driver.execute_script("window.__financeRestoreDateNow();")
             WebDriverWait(driver, args.timeout).until(
-                lambda current: Select(current.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
-                .first_selected_option.get_attribute("value") == current_month_key
+                lambda current: current.execute_script(
+                    "return document.querySelector('[data-testid=\"transaction-month-filter\"]')?.value === arguments[0]",
+                    current_month_key,
+                )
             )
             period_select = Select(driver.find_element(By.CSS_SELECTOR, 'select[data-testid="transaction-month-filter"]'))
             period_select.select_by_value("all")
@@ -2402,6 +2454,10 @@ def main():
                 "sync_progress": sync_progress_checks,
                 "recurring_sections": {item: item in recurring_text for item in recurring_sections},
                 "api_statuses": api_statuses,
+                "year_end_export_signatures": year_end_export_statuses,
+                "year_end_report_controls": report_controls,
+                "year_end_report_screenshot_content": report_ratio >= 0.003,
+                "year_end_report_no_horizontal_overflow": not report_overflow,
                 "index_html_no_store_cache": index_html_no_store_cache,
                 "boot_screen_removed": not boot_screen_visible,
                 "dashboard_screenshot_content": dashboard_ratio >= 0.003,
@@ -2443,6 +2499,10 @@ def main():
                 and all(sync_progress_checks.values())
                 and all(checks["recurring_sections"].values())
                 and all(status == 200 for status in api_statuses.values())
+                and all(year_end_export_statuses.values())
+                and all(report_controls.values())
+                and checks["year_end_report_screenshot_content"]
+                and checks["year_end_report_no_horizontal_overflow"]
                 and index_html_no_store_cache
                 and checks["boot_screen_removed"]
                 and checks["dashboard_screenshot_content"]

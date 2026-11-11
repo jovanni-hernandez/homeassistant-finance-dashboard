@@ -1,6 +1,7 @@
 import logging
 import json
 import re
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 from sqlalchemy import inspect, text
@@ -13,6 +14,7 @@ from models import (
     SessionLocal,
     Base,
     Account,
+    AccountBalanceSnapshot,
     AccountDataCoverage,
     ManualAsset,
     Transaction,
@@ -63,9 +65,15 @@ def _ensure_account_type_columns():
             logger.info("Added accounts.nickname.")
 
 
-def save_simplefin_data(data):
+def save_simplefin_data(data, *, snapshot_account_ids=None, snapshot_at=None):
     """Save normalized SimpleFIN accounts and transactions into SQLite via SQLAlchemy."""
     db = SessionLocal()
+    snapshot_ids = set(map(str, snapshot_account_ids or []))
+    snapshot_time = (
+        datetime.fromtimestamp(int(snapshot_at), timezone.utc).replace(tzinfo=None)
+        if snapshot_at is not None
+        else datetime.now(timezone.utc).replace(tzinfo=None)
+    )
     try:
         accounts = data.get("accounts", [])
         for acc in accounts:
@@ -103,6 +111,14 @@ def save_simplefin_data(data):
                 if db_account.account_type_source != ACCOUNT_TYPE_SOURCE_MANUAL:
                     db_account.account_type = suggestion
                     db_account.account_type_source = ACCOUNT_TYPE_SOURCE_AUTO
+
+            if acc_id in snapshot_ids:
+                db.add(AccountBalanceSnapshot(
+                    account_id=acc_id,
+                    balance=balance,
+                    currency=currency,
+                    captured_at=snapshot_time,
+                ))
 
             transactions = acc.get("transactions", [])
             for tx in transactions:
