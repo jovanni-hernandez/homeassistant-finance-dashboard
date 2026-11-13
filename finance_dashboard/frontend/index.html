@@ -1484,6 +1484,9 @@
                         <div class="text-sm text-slate-600">Coverage means SimpleFIN successfully returned that account for the requested date range without an incomplete-data error. An empty range may simply have no transactions; it is not itself a gap. This verifies the response, not that an institution exposed every older record.</div>
                             <button type="button" data-testid="data-history-refresh" @click="fetchDataHistory" :disabled="dataHistoryLoading" class="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">{{ dataHistoryLoading ? 'Refreshing…' : 'Refresh status' }}</button>
                         </div>
+                        <div v-if="dataHistory.history_availability?.status === 'limited'" data-testid="data-history-limited-status" role="status" class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                            Limited history: oldest transaction on file is {{ dataHistory.history_availability.oldest_transaction_date }}.
+                        </div>
                         <div data-testid="data-history-request-budget" class="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
                             SimpleFIN requests in the last 24 hours: {{ status.simplefin_request_budget?.requests_last_24h ?? 0 }}/{{ status.simplefin_request_budget?.limit_24h ?? 24 }} · minimum 10 seconds between requests.
                             <span v-if="status.simplefin_request_budget?.unknown_usage"> Previous usage was not tracked; sync is held until the prior request window expires.</span>
@@ -2097,7 +2100,7 @@
                 const reportError = ref('');
                 const reportExporting = ref('');
                 let reportRequestId = 0;
-                const dataHistory = ref({ accounts: [], overall_coverage_percent: 0, target_days: 365 });
+                const dataHistory = ref({ accounts: [], overall_coverage_percent: 0, target_days: 365, history_availability: null });
                 const dataHistoryLoading = ref(false);
                 const dataHistoryMessage = ref('');
                 const dataHistoryError = ref(false);
@@ -2699,7 +2702,7 @@
                         inflation_synced_at: null,
                         inflation_latest_yoy_percent: null,
                     };
-                    dataHistory.value = { accounts: [], overall_coverage_percent: 0, target_days: 365 };
+                    dataHistory.value = { accounts: [], overall_coverage_percent: 0, target_days: 365, history_availability: null };
                     dataHistoryMessage.value = '';
                     dataHistoryError.value = false;
                     accounts.value = [];

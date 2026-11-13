@@ -10,6 +10,7 @@ from uuid import uuid4
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
+from sqlalchemy import func
 
 from database import (
     get_account_count,
@@ -21,7 +22,7 @@ from database import (
     save_simplefin_data,
     set_setting,
 )
-from models import ACCOUNT_TYPE_UNCLASSIFIED, ACCOUNT_TYPE_VALUES, AccountDataCoverage, SessionLocal
+from models import ACCOUNT_TYPE_UNCLASSIFIED, ACCOUNT_TYPE_VALUES, AccountDataCoverage, SessionLocal, Transaction
 
 logger = logging.getLogger("finance_dashboard")
 
@@ -1182,6 +1183,16 @@ def get_account_data_history():
     db = SessionLocal()
     try:
         rows = db.query(AccountDataCoverage).all()
+        transaction_floors = {
+            str(account_id): int(timestamp)
+            for account_id, timestamp in db.query(
+                Transaction.account_id,
+                func.min(Transaction.date),
+            ).filter(
+                Transaction.date.isnot(None),
+            ).group_by(Transaction.account_id).all()
+            if account_id is not None and timestamp is not None
+        }
         by_account = {}
         for row in rows:
             by_account.setdefault(str(row.account_id), []).append(row)
@@ -1192,6 +1203,7 @@ def get_account_data_history():
     result = []
     total_target_days = 0
     total_covered_days = 0
+    limited_transaction_floors = []
     for account in accounts:
         account_id = str(account.get("id"))
         account_rows = by_account.get(account_id, [])
@@ -1209,6 +1221,13 @@ def get_account_data_history():
         target_days = max(1, (account_target_end - account_target_start + _ACCOUNT_BACKFILL_DAY_SECONDS - 1) // _ACCOUNT_BACKFILL_DAY_SECONDS)
         total_target_days += target_days
         total_covered_days += covered_days
+        oldest_transaction_timestamp = transaction_floors.get(account_id)
+        if (
+            oldest_transaction_timestamp is not None
+            and covered_seconds >= account_target_end - account_target_start
+            and oldest_transaction_timestamp > account_target_start
+        ):
+            limited_transaction_floors.append(oldest_transaction_timestamp)
 
         gaps = []
         cursor = account_target_start
@@ -1275,6 +1294,17 @@ def get_account_data_history():
         "overall_coverage_percent": round(total_covered_days * 100 / total_target_days, 1) if total_target_days else 100.0,
         "covered_days": round(total_covered_days, 1),
         "target_days_total": total_target_days,
+        "history_availability": {
+            "status": "limited" if limited_transaction_floors else "not_inferred",
+            "oldest_transaction_timestamp": min(limited_transaction_floors) if limited_transaction_floors else None,
+            "oldest_transaction_date": (
+                datetime.fromtimestamp(min(limited_transaction_floors), timezone.utc).date().isoformat()
+                if limited_transaction_floors
+                else None
+            ),
+            "limited_account_count": len(limited_transaction_floors),
+            "inferred_from_stored_transaction_dates": True,
+        },
         "verified_means_provider_returned_account_without_a_data_completeness_error": True,
     }
 

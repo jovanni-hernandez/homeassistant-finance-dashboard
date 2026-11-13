@@ -544,6 +544,13 @@ def main():
                             overall_coverage_percent: 0,
                             covered_days: 0,
                             target_days_total: 365,
+                            history_availability: {
+                              status: "limited",
+                              oldest_transaction_timestamp: 1778112000,
+                              oldest_transaction_date: "2026-05-07",
+                              limited_account_count: 1,
+                              inferred_from_stored_transaction_dates: true
+                            },
                             verified_means_provider_returned_account_without_a_data_completeness_error: true,
                           }), {status: 200, headers: {"Content-Type": "application/json"}});
                         }
@@ -1674,6 +1681,7 @@ def main():
                 "categories_page_has_category_panel_only": False,
                 "ai_page_has_ai_panel_only": False,
                 "data_history_page_has_coverage_and_retry": False,
+                "data_history_limited_status_is_concise": False,
                 "provider_errors_show_friendly_description_and_id": False,
                 "settings_menu_has_four_entries": False,
                 "log_level_defaults_to_info": False,
@@ -1846,6 +1854,12 @@ def main():
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="account-stale-warning"]'))
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-gap"]'))
                 and bool(history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="data-history-retry"]'))
+            )
+            limited_status = history_panel.find_element(By.CSS_SELECTOR, '[data-testid="data-history-limited-status"]')
+            settings_navigation_checks["data_history_limited_status_is_concise"] = (
+                limited_status.is_displayed()
+                and limited_status.text.startswith("Limited history: oldest transaction on file is ")
+                and "2026" in limited_status.text
             )
             provider_error_texts = [
                 element.text for element in history_panel.find_elements(By.CSS_SELECTOR, '[data-testid="provider-error-status"]')

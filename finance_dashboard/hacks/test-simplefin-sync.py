@@ -643,6 +643,58 @@ class SimpleFinSyncTests(unittest.TestCase):
         self.assertTrue(all(item["coverage_percent"] == 0 for item in history))
         self.assertTrue(all(item["latest_error_code"] == "connection_error_unmatched" for item in history))
 
+    def test_history_availability_marks_limited_data_without_changing_coverage(self):
+        now = int(simplefin._utc_now().timestamp())
+        start = now - simplefin.ACCOUNT_BACKFILL_DAYS * simplefin._ACCOUNT_BACKFILL_DAY_SECONDS
+        self.seed_latest_transaction(now - 180 * simplefin._ACCOUNT_BACKFILL_DAY_SECONDS)
+        db = SessionLocal()
+        try:
+            db.add(Account(id="reauth-account", org="Test Bank", name="Needs reauth", balance="0", currency="USD"))
+            db.add(Transaction(
+                id="older-unverified-transaction",
+                account_id="reauth-account",
+                date=start + 10 * simplefin._ACCOUNT_BACKFILL_DAY_SECONDS,
+                amount="-1.00",
+                payee="Private merchant",
+                description="Private description",
+                category="Other",
+                pending=False,
+            ))
+            db.add_all([
+                AccountDataCoverage(
+                    account_id="account-1",
+                    start_ts=start,
+                    end_ts=now,
+                    status="complete",
+                    source="account_backfill",
+                    attempts=1,
+                ),
+                AccountDataCoverage(
+                    account_id="reauth-account",
+                    start_ts=start,
+                    end_ts=now,
+                    status="failed",
+                    source="account_backfill",
+                    error_code="con.auth",
+                    attempts=1,
+                ),
+            ])
+            db.commit()
+        finally:
+            db.close()
+
+        history = simplefin.get_account_data_history()
+
+        self.assertEqual(history["history_availability"]["status"], "limited")
+        self.assertEqual(history["history_availability"]["oldest_transaction_timestamp"], now - 180 * 86400)
+        self.assertEqual(history["history_availability"]["limited_account_count"], 1)
+        self.assertTrue(history["history_availability"]["inferred_from_stored_transaction_dates"])
+        account = next(item for item in history["accounts"] if item["account_id"] == "account-1")
+        self.assertEqual(account["coverage_percent"], 100.0)
+        reauth = next(item for item in history["accounts"] if item["account_id"] == "reauth-account")
+        self.assertEqual(reauth["coverage_percent"], 0.0)
+        self.assertEqual(reauth["latest_error_code"], "con.auth")
+
     def test_sync_reports_no_newer_date_when_provider_returns_stale_data(self):
         previous_timestamp = 1_700_000_000
         self.seed_latest_transaction(previous_timestamp)
